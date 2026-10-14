@@ -290,7 +290,13 @@ export function UpdateScheduleContent() {
           </HelpHint>
         </div>
         <div className="space-y-2">
-          <Label htmlFor="scan-interval">Scan Interval</Label>
+          <div className="flex items-center gap-1.5">
+            <Label htmlFor="scan-interval">Scan Interval</Label>
+            <HelpHint label="Scan interval" topic="updates.schedule">
+              <p>A scan only looks for newer images. Auto-update is a separate switch that applies what a scan finds.</p>
+              <p>Applying an update recreates containers, so expect a brief interruption.</p>
+            </HelpHint>
+          </div>
           <Select value={effectivePreset} onValueChange={handlePresetChange}>
             <SelectTrigger id="scan-interval" className="w-full max-w-xs" aria-label="Scan Interval">
               <SelectValue />

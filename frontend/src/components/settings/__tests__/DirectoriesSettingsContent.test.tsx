@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { DirectoriesSettingsContent } from '../DirectoriesSettingsContent'
 import { toast } from 'sonner'
+import { expectHintOpensHelp } from '@/test/helpHint'
 
 /**
  * SettingsPage.test.tsx:46 replaces this panel with an empty div, so nothing
@@ -485,5 +486,19 @@ describe('DirectoriesSettingsContent — the default directory is a boot-time se
       ),
     ).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Save Default Directory' })).not.toBeInTheDocument()
+  })
+})
+
+describe('DirectoriesSettingsContent — field help (agent-os-pkq9)', () => {
+  it('directories.scan-depth: the directory recursion depth hint opens help at its topic', async () => {
+    const user = userEvent.setup()
+    renderPanel()
+    await expectHintOpensHelp(user, 'Directory recursion depth', 'directories.scan-depth')
+  })
+
+  it('directories.default-dir: the default directory hint opens help at its topic', async () => {
+    const user = userEvent.setup()
+    renderPanel()
+    await expectHintOpensHelp(user, 'Default directory for new stacks', 'directories.default-dir')
   })
 })

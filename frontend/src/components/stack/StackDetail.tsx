@@ -142,7 +142,7 @@ function OverviewTabContent({
               <HelpHint
                 label="Backup"
                 title="Backup"
-                href="https://github.com/thinkbig1979/capstan/blob/main/docs/how-to/configure-backups.md"
+                topic="stack.backup"
               >
                 <p>Adds this stack to scheduled backups. The backup covers the stack directory (compose file, .env and files inside it). Named Docker volumes are not included.</p>
                 <p>Set up the repository and schedule under Settings, Backup.</p>

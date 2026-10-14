@@ -53,7 +53,7 @@ export function CloudSection({
           label="Cloud sync"
           title="Cloud sync"
           side="right"
-          href="https://github.com/thinkbig1979/capstan/blob/main/docs/how-to/configure-backups.md#cloud-sync-optional"
+          topic="backup.cloud"
         >
           <p>rclone copies the restic repository to off-site storage like S3 or Backblaze.</p>
           <p>
@@ -91,7 +91,13 @@ export function CloudSection({
       </div>
 
       <div className="space-y-2">
-        <Label htmlFor="backup-rclone-transfers">Parallel transfers</Label>
+        <div className="flex items-center gap-1.5">
+          <Label htmlFor="backup-rclone-transfers">Parallel transfers</Label>
+          <HelpHint label="Parallel transfers" topic="backup.transfers">
+            <p>How many files rclone copies at once during a sync, from 1 to 32.</p>
+            <p>More is not always faster: providers rate-limit and busy links slow other traffic.</p>
+          </HelpHint>
+        </div>
         <NumericField
           id="backup-rclone-transfers"
           min={1}

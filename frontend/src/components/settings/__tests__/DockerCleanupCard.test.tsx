@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { expectHintOpensHelp } from '@/test/helpHint'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { queryKeys } from '@/lib/query-keys'
@@ -679,5 +681,20 @@ describe('DockerCleanupCard — a cleared numeric field is empty, not 0 (agent-o
       await waitFor(() => expect(toast.error).toHaveBeenCalled())
       expect(toast.success).not.toHaveBeenCalled()
     })
+  })
+})
+
+describe('DockerCleanupCard — field help (agent-os-pkq9)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockGetCleanupPolicy.mockResolvedValue(POLICY)
+    mockPreviewCleanup.mockResolvedValue(previewOf([]))
+    mockGetCleanupHistory.mockResolvedValue({ runs: [], limit: 20 })
+  })
+
+  it('docker-cleanup.min-age: the age floor hint opens help at its topic', async () => {
+    const user = userEvent.setup()
+    renderCard()
+    await expectHintOpensHelp(user, 'Age floor', 'docker-cleanup.min-age')
   })
 })

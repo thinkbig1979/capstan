@@ -5,6 +5,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/u
 import { Lock, CheckCircle2, XCircle, CircleDashed, AlertTriangle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
+import { HelpHint } from '@/components/ui/help-hint'
 import { useToggleBackup, useBackupPolicies, useBackupStatus } from '@/hooks/useBackup'
 import { presentError } from '@/lib/error-handler'
 import type { BackupPolicy, BackupRun } from '@/types'
@@ -265,6 +266,16 @@ export function BackupToggle({ stackId, showLastRunStatus = true }: BackupToggle
             </SelectItem>
           </SelectContent>
         </Select>
+      )}
+
+      {optimisticEnabled && (
+        <HelpHint label="Backup stop policy" topic="stack.backup-stop-policy">
+          <p>
+            Stop during backup gives a consistent copy at the cost of brief downtime. Back up
+            live avoids downtime, but a database written mid-copy may be inconsistent.
+          </p>
+          <p>This choice appears once Backup is on for the stack.</p>
+        </HelpHint>
       )}
 
       {indicator && (

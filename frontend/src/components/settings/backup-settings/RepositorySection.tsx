@@ -178,7 +178,7 @@ export function RepositorySection({
           label="restic repository"
           title="restic repository"
           side="right"
-          href="https://github.com/thinkbig1979/capstan/blob/main/docs/how-to/configure-backups.md#configuration"
+          topic="backup.repository"
         >
           <p>
             Backups run through restic, which stores them deduplicated and encrypted in a
@@ -247,6 +247,13 @@ export function RepositorySection({
               </span>
             )}
           </Label>
+          <HelpHint label="Restic password" topic="backup.password">
+            <p>
+              Without this password the repository cannot be read, so keep a copy somewhere
+              safe.
+            </p>
+            <p>Leave the field blank to keep the current password.</p>
+          </HelpHint>
           <SourceBadge source={settings.passwordSource} />
         </div>
         <div className="flex items-center gap-2 max-w-md">
