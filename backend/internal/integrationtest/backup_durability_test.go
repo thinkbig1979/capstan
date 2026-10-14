@@ -199,8 +199,8 @@ func lastRunStatus(t *testing.T, db *database.DB, runID string) string {
 // ─────────────────────────────────────────────────────────────────────────────
 
 // successResticFactory returns a fake restic manager that responds to all
-// restic commands with success. Backup emits a JSON summary; ListSnapshots
-// returns one snapshot tagged with the stackID argument.
+// restic commands with success. Backup emits a JSON summary (through Run);
+// ListSnapshots returns one snapshot tagged with the stackID argument.
 func successResticFactory(bc services.BackupConfig) *services.ResticManager {
 	return services.NewResticManagerForTest(bc, &successResticRunner{}, nil)
 }
@@ -227,20 +227,22 @@ func (r *successResticRunner) Run(
 ) error {
 	if out != nil {
 		out <- services.StreamLine{Type: "info", Line: "fake restic: " + name + " ok"}
+		// Backup runs through Run, not Output, and reads the snapshot id
+		// from the summary line of `restic backup --json` (agent-os-wdlf).
+		if len(args) > 0 && args[0] == "backup" {
+			out <- services.StreamLine{Type: "data", Line: resticBackupSummaryJSON}
+		}
 	}
 	return nil
 }
 
+const resticBackupSummaryJSON = `{"message_type":"summary","files_new":1,"files_changed":0,"files_unmodified":0,"data_blobs":1,"tree_blobs":1,"data_added":1024,"total_files_processed":1,"total_bytes_processed":1024,"total_duration":0.1,"snapshot_id":"abc12345"}`
+
 func (r *successResticRunner) Output(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
-	// Return a minimal restic snapshots JSON for ListSnapshots calls, and a
-	// minimal backup summary for Backup JSON parsing.
+	// Return a minimal restic snapshots JSON for ListSnapshots calls.
 	for _, arg := range args {
 		if arg == "snapshots" {
 			return []byte(`[{"id":"abc1234567890","short_id":"abc12345","time":"2026-01-01T00:00:00Z","hostname":"test","tags":["test-stack"],"paths":["/tmp/stacks/test-stack"]}]`), nil
-		}
-		if arg == "backup" {
-			// restic backup --json produces a stream; the last line is the summary.
-			return []byte(`{"message_type":"summary","files_new":1,"files_changed":0,"files_unmodified":0,"data_blobs":1,"tree_blobs":1,"data_added":1024,"total_files_processed":1,"total_bytes_processed":1024,"total_duration":0.1,"snapshot_id":"abc12345"}`), nil
 		}
 		if arg == "stats" {
 			return []byte(`{"total_size":1024,"total_file_count":1}`), nil
