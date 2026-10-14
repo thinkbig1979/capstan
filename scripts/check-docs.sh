@@ -39,7 +39,10 @@ docs/how-to/upgrade-and-roll-back.md
 docs/reference/configuration.md
 docs/reference/api.md
 docs/explanation/security-model.md
-docs/explanation/architecture.md"
+docs/explanation/architecture.md
+docs/help/dashboard.md
+docs/help/stack-page.md
+docs/help/settings.md"
 
 # Headings that belong to CONTRIBUTING.md / docs/ once the restructure lands,
 # and must no longer appear in README.md.
