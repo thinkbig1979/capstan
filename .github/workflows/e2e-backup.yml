@@ -220,6 +220,18 @@ jobs:
               restart: unless-stopped
           EOF
 
+      # Authenticated ECR Public pulls (agent-os-rcbn, D102): anonymous pulls
+      # share a per-IP data cap that GitHub-hosted runners exhaust
+      # (`toomanyrequests: Data limit exceeded`). Skips, and the job pulls
+      # anonymously as before, when the secrets are absent (fork PRs). Must
+      # precede the first pull or build; scripts/check-dockerhub-pulls.sh
+      # enforces that.
+      - name: Log in to ECR Public
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ECR_PUBLIC_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_ECR_PUBLIC_SECRET_ACCESS_KEY }}
+        run: bash scripts/ecr-public-login.sh
+
       # The test-app image, from the ECR Public mirror (not Docker Hub, whose
       # anonymous limit GitHub's shared runner IPs exhaust; agent-os-an6d),
       # pulled with a bounded retry for the mirror's one-pull-per-second

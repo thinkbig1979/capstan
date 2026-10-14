@@ -417,6 +417,18 @@ jobs:
       - name: Route Docker Hub pulls through mirror.gcr.io
         run: bash scripts/docker-registry-mirror.sh
 
+      # Authenticated ECR Public pulls (agent-os-rcbn, D102): anonymous pulls
+      # share a per-IP data cap that GitHub-hosted runners exhaust
+      # (`toomanyrequests: Data limit exceeded`). Skips, and the job pulls
+      # anonymously as before, when the secrets are absent (fork PRs). Must
+      # precede the first pull or build; scripts/check-dockerhub-pulls.sh
+      # enforces that.
+      - name: Log in to ECR Public
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ECR_PUBLIC_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_ECR_PUBLIC_SECRET_ACCESS_KEY }}
+        run: bash scripts/ecr-public-login.sh
+
       # Registry pulls in this job get ONE bounded retry each (agent-os-an6d).
       # Setting up the builder pulls the BuildKit image, and the build pulls
       # the Dockerfile's base images from the ECR Public mirror, which allows

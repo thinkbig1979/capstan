@@ -28,6 +28,23 @@
 #         scripts/docker-registry-mirror.sh, so the daemon fetches it from
 #         mirror.gcr.io under its verified docker.io name (D58).
 #
+#   3. Every job that pulls from that mirror is logged in first (rule 2e,
+#      agent-os-rcbn, D102): anonymous ECR Public pulls share a per-IP data cap
+#      that GitHub-hosted runners exhaust (`toomanyrequests: Data limit
+#      exceeded`, 2026-10-14). A job with a pulling step (docker/build-push-
+#      action, scripts/pull-with-retry.sh naming a public.ecr.aws ref, a run of
+#      `-tags integration`, `docker pull|run` of a public.ecr.aws ref) needs a
+#      step running scripts/ecr-public-login.sh on an EARLIER line of the job
+#      (a login in a comment does not count). The script skips, and the job
+#      goes on anonymously, when the secrets are absent, so the rule is about
+#      the step existing in the right place, not about credentials.
+#      BLIND SPOT: a job-level `services:` or `container:` image is pulled
+#      before step one, so no step can precede it and this rule cannot ask for
+#      one. None exists today; a new one would pull anonymously unnoticed, and
+#      its image: line is still seen by rule 2b only as a name to pre-pull.
+#      The rule also assumes every build-push-action builds a Dockerfile with
+#      public.ecr.aws bases (true of docker/Dockerfile, the only one built).
+#
 # WHAT IS A REFERENCE (producer arms):
 #   docker/Dockerfile*      FROM <ref> (not a stage name, not scratch) and
 #                           COPY --from=<ref> (not a stage, not a number)
@@ -98,6 +115,7 @@ function emit(ref, ln) {
   if (ref == "") return
   print "REF\t" cur "\t" ln "\t" ref "\t" job
 }
+function note_pull(ln) { if (pf == 0 || ln < pf) pf = ln }
 function step_end(   a, i, base, want, found) {
   if (s_uses == "") { s_reset(); return }
   base = s_uses; sub(/@.*/, "", base)
@@ -107,6 +125,7 @@ function step_end(   a, i, base, want, found) {
   } else if (base == "docker/setup-qemu-action") {
     if (s_image != "") emit(s_image, s_line); else emit("tonistiigi/binfmt:latest", s_line)
   } else if (base != "docker/build-push-action") { s_reset(); return }
+  if (base == "docker/build-push-action") note_pull(s_line)
   ns++
   st_base[ns] = base; st_id[ns] = s_id; st_coe[ns] = s_coe; st_if[ns] = s_if; st_line[ns] = s_line
   st_bk[ns] = implicit_bk; implicit_bk = 0
@@ -134,7 +153,10 @@ function job_end(   i, j, ok, pat) {
     }
     if (!ok) print "BAD\t" cur "\t" st_line[i] "\t" st_base[i] " step id " st_id[i] " has no retry step (same action, if: steps." st_id[i] ".outcome == 'failure')"
   }
-  ns = 0; mirror_line = 0
+  # Rule 2e: a pulling step needs an earlier ecr-public-login.sh step.
+  if (pf > 0 && !(login_line > 0 && login_line < pf))
+    print "BAD\t" cur "\t" pf "\tjob " job " pulls from public.ecr.aws here with no earlier scripts/ecr-public-login.sh step in the job (anonymous pulls hit ECR Public's per-IP data cap; agent-os-rcbn)"
+  ns = 0; mirror_line = 0; pf = 0; login_line = 0
 }
 FNR == 1 {
   if (prev != "" && kind(prev) == "yaml") job_end()
@@ -198,6 +220,7 @@ FNR == 1 {
   if (t ~ /^uses:/) { u = t; sub(/^uses:[[:space:]]*/, "", u); sub(/[[:space:]].*/, "", u); s_uses = u
     if (u ~ /^docker:\/\//) { sub(/^docker:\/\//, "", u); emit(u, ln) } }
   if (t ~ /docker-registry-mirror\.sh/ && !mirror_line) mirror_line = ln
+  if (injobs && t ~ /ecr-public-login\.sh/ && !login_line) login_line = ln
   if (t ~ /^id:/) { v = t; sub(/^id:[[:space:]]*/, "", v); sub(/[[:space:]].*/, "", v); s_id = v }
   if (t ~ /^continue-on-error:[[:space:]]*true/) s_coe = 1
   if (t ~ /^if:/) s_if = t
@@ -208,7 +231,7 @@ FNR == 1 {
     if (s_uses ~ /^docker\/setup-qemu-action/) s_image = v
     else emit(v, ln)
   }
-  if (t ~ /-tags[= ]integration/) print "INTEG\t" cur "\t" job
+  if (t ~ /-tags[= ]integration/) { print "INTEG\t" cur "\t" job; if (injobs) note_pull(ln) }
   r = t
   while (match(r, /docker[[:space:]]+(pull|run)[[:space:]]+[^|;&]*/)) {
     m = substr(r, RSTART, RLENGTH); r = substr(r, RSTART + RLENGTH)
@@ -217,13 +240,17 @@ FNR == 1 {
     for (i = 1; i <= n; i++) {
       if (w[i] ~ /^-/) { if (w[i] !~ /=/ && w[i] ~ /^(--name|--network|--entrypoint|-e|--env|-v|--volume|-p|--publish|--platform|-u|--user|-w|--workdir|--mount|--label|-l)$/) i++; continue }
       if (w[i] !~ /^["']?\$/) emit(w[i], ln)
+      if (injobs && w[i] ~ /^public\.ecr\.aws\//) note_pull(ln)
       break
     }
   }
   if (t ~ /pull-with-retry\.sh/) {
     m = t; sub(/.*pull-with-retry\.sh[[:space:]]*/, "", m)
     n = split(m, w, /[[:space:]]+/)
-    for (i = 1; i <= n; i++) if (w[i] != "") print "PRE\t" cur "\t" job "\t" w[i]
+    for (i = 1; i <= n; i++) if (w[i] != "") {
+      print "PRE\t" cur "\t" job "\t" w[i]
+      if (injobs && w[i] ~ /^public\.ecr\.aws\//) note_pull(ln)
+    }
   }
 }
 END { if (prev != "" && kind(prev) == "yaml") job_end() }
@@ -325,7 +352,8 @@ check_dir() {
     fi
   done < <(command grep -E '^REF'$'\t''\.github/workflows/' <<<"$recs")
 
-  # Rule 2c: guarded BuildKit / setup-action steps.
+  # Rules 2c and 2e: guarded BuildKit / setup-action steps, and the ECR
+  # Public login before the first pull.
   while IFS=$'\t' read -r _ file line msg; do
     echo "$file:$line: $msg"
     viol=$((viol + 1))
@@ -374,6 +402,7 @@ jobs:
   it:
     runs-on: ubuntu-latest
     steps:
+      - run: bash scripts/ecr-public-login.sh
       - uses: docker/setup-buildx-action@v4
         with:
           driver: docker
@@ -386,6 +415,7 @@ jobs:
   e2e:
     runs-on: ubuntu-latest
     steps:
+      - run: bash scripts/ecr-public-login.sh
       - run: |
           cat > compose.yaml <<'X'
           services:
@@ -396,6 +426,7 @@ jobs:
   scan:
     runs-on: ubuntu-latest
     steps:
+      - run: bash scripts/ecr-public-login.sh
       - name: Build
         id: build
         continue-on-error: true
@@ -448,14 +479,14 @@ selftest() {
   d=$(fresh); echo 'COPY --from=docker:29-cli /usr/local/bin/docker /usr/bin/' >> "$d/docker/Dockerfile"
   selftest_case "COPY --from image" 1 "Docker Hub image docker:29-cli" "$d"
   d=$(fresh); sed -i 's|image: public.ecr.aws/docker/library/nginx:1$|image: nginx:1.25-alpine|' "$d/.github/workflows/ci.yml"
-  selftest_case "workflow image:" 1 "ci.yml:22: Docker Hub image nginx:1.25-alpine" "$d"
+  selftest_case "workflow image:" 1 "ci.yml:24: Docker Hub image nginx:1.25-alpine" "$d"
   d=$(fresh); printf '      - run: docker run --rm -e A=1 busybox:1 true\n' >> "$d/.github/workflows/ci.yml"
   selftest_case "docker run" 1 "Docker Hub image busybox:1" "$d"
   d=$(fresh); printf '      - uses: docker://alpine:3\n' >> "$d/.github/workflows/ci.yml"
   selftest_case "uses docker://" 1 "Docker Hub image alpine:3" "$d"
   d=$(fresh); sed -i 's|          driver: docker|          install: true|' "$d/.github/workflows/ci.yml"
   selftest_case "implicit buildkit" 1 "Docker Hub image moby/buildkit:buildx-stable-1" "$d"
-  selftest_case "implicit buildkit, no registry-mirror step" 1 "ci.yml:6: docker/setup-buildx-action pulls docker.io/moby/buildkit with no earlier scripts/docker-registry-mirror.sh" "$d"
+  selftest_case "implicit buildkit, no registry-mirror step" 1 "ci.yml:7: docker/setup-buildx-action pulls docker.io/moby/buildkit with no earlier scripts/docker-registry-mirror.sh" "$d"
   d=$(fresh); sed -i 's|public.ecr.aws/docker/library/alpine:3.21"|alpine:3.21"|' "$d/backend/it/a_test.go"
   selftest_case "Go literal" 1 "a_test.go:6: Docker Hub image alpine:3.21" "$d"
   d=$(fresh); sed -i 's|image: public.ecr.aws/docker/library/nginx:1\\n|image: docker.io/library/nginx:1\\n|' "$d/backend/it/a_test.go"
@@ -500,6 +531,31 @@ EOF
   selftest_case "build step not guarded, last job of a file" 1 "ci.yml:[0-9]+: docker/build-push-action step has no id" "$d"
   d=$(fresh); sed -i '/name: Build (retry)/,$d' "$d/.github/workflows/ci.yml"
   selftest_case "build step has no retry" 1 "ci.yml:[0-9]+: docker/build-push-action step id build has no retry step" "$d"
+
+  # RED, rule 2e: a pulling job needs scripts/ecr-public-login.sh EARLIER in
+  # the job. One case per pulling-step arm, plus the ways a login can be
+  # present but useless. The clean base tree above is the other side.
+  d=$(fresh); sed -i '/^  scan:/,/uses: docker\/build-push-action/{/ecr-public-login/d}' "$d/.github/workflows/ci.yml"
+  selftest_case "build job without login" 1 "ci.yml:[0-9]+: job scan pulls from public.ecr.aws here with no earlier scripts/ecr-public-login.sh" "$d"
+  d=$(fresh); sed -i '/^  e2e:/,/pull-with-retry/{/ecr-public-login/d}' "$d/.github/workflows/ci.yml"
+  selftest_case "pre-pull job without login" 1 "ci.yml:[0-9]+: job e2e pulls from public.ecr.aws here with no earlier" "$d"
+  d=$(fresh); sed -i '/^  it:/,/^  e2e:/{/ecr-public-login/d}' "$d/.github/workflows/ci.yml"
+  selftest_case "integration job without login" 1 "ci.yml:[0-9]+: job it pulls from public.ecr.aws here with no earlier" "$d"
+  d=$(fresh); sed -i '/^  it:/,/^  e2e:/{/ecr-public-login/d}' "$d/.github/workflows/ci.yml"
+  sed -i 's|      - run: go test -tags=integration ./...|      - run: go test -tags=integration ./...\n      - run: bash scripts/ecr-public-login.sh|' "$d/.github/workflows/ci.yml"
+  selftest_case "login after the pull" 1 "ci.yml:[0-9]+: job it pulls from public.ecr.aws here with no earlier" "$d"
+  d=$(fresh); sed -i '/^  scan:/,/uses: docker\/build-push-action/s|      - run: bash scripts/ecr-public-login.sh|      # bash scripts/ecr-public-login.sh|' "$d/.github/workflows/ci.yml"
+  selftest_case "login only in a comment" 1 "ci.yml:[0-9]+: job scan pulls from public.ecr.aws here with no earlier" "$d"
+  d=$(fresh); sed -i '/^  scan:/,/uses: docker\/build-push-action/{/ecr-public-login/d}' "$d/.github/workflows/ci.yml"
+  sed -i 's|^  z:|  z:|' "$d/.github/workflows/z.yml"
+  printf '  other:\n    runs-on: ubuntu-latest\n    steps:\n      - run: bash scripts/ecr-public-login.sh\n' >> "$d/.github/workflows/z.yml"
+  selftest_case "a login in ANOTHER job does not cover this one" 1 "ci.yml:[0-9]+: job scan pulls from public.ecr.aws here" "$d"
+  d=$(fresh); sed -i 's|      - run: go test -tags=integration ./...|      - run: go test -tags=integration ./...\n      - run: bash scripts/ecr-public-login.sh|' "$d/.github/workflows/ci.yml"
+  selftest_case "a second login after the pull does not hide the first before it" 0 "0 violations" "$d"
+  d=$(fresh); printf '  dr:\n    runs-on: ubuntu-latest\n    steps:\n      - run: docker run --rm public.ecr.aws/docker/library/alpine:3.21 true\n' >> "$d/.github/workflows/ci.yml"
+  selftest_case "docker run of a mirror ref without login" 1 "ci.yml:[0-9]+: job dr pulls from public.ecr.aws here" "$d"
+  d=$(fresh); printf '  dr:\n    runs-on: ubuntu-latest\n    steps:\n      - run: bash scripts/ecr-public-login.sh\n      - run: bash scripts/pull-with-retry.sh public.ecr.aws/docker/library/alpine:3.21\n      - run: docker run --rm public.ecr.aws/docker/library/alpine:3.21 true\n' >> "$d/.github/workflows/ci.yml"
+  selftest_case "docker run of a mirror ref after login and pre-pull, clean arm" 0 "0 violations" "$d"
 
   # Blind extractor must not read as clean.
   d=$(mktemp -d "$ST_TMP/case.XXXXXX"); mkdir -p "$d/docker"; echo 'RUN true' > "$d/docker/Dockerfile"
