@@ -3,7 +3,6 @@ package services
 import (
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strconv"
 
@@ -24,6 +23,15 @@ const (
 	DefaultScheduleTime = "02:00"
 	// DefaultScheduleDays is every weekday, in Go's 0=Sunday numbering.
 	DefaultScheduleDays = "0,1,2,3,4,5,6"
+
+	// DefaultBackupHostname is the restic host recorded on snapshots when no
+	// backup_hostname setting or BACKUP_HOSTNAME is set. It used to be
+	// os.Hostname(), which in a container is the container id: it changed on
+	// every redeploy, so each deploy started a new restic host group, the
+	// first backup after it found no parent and rescanned everything, and
+	// `snapshots --latest 1` put an earlier deploy's snapshot first
+	// (agent-os-wdlf; prod went bf0d6d0d915c -> 4ddf23a207a9 on 2026-10-14).
+	DefaultBackupHostname = "capstan"
 )
 
 // BackupConfig holds the effective backup configuration resolved from DB
@@ -76,8 +84,8 @@ type BackupConfig struct {
 	RclonePath      string
 	RcloneTransfers int
 
-	// BackupHostname is passed as `--hostname` to restic backup/forget.
-	// Default: system hostname.
+	// BackupHostname is passed as `--host` to restic backup. Default:
+	// DefaultBackupHostname.
 	BackupHostname string
 }
 
@@ -166,8 +174,9 @@ func readSetting(db *database.DB, key string) (string, error) {
 // are written, the password what they are encrypted with, the retention keys
 // reach `restic forget --prune` (backup_restic.go:442-464), the rclone keys
 // decide where a sync goes and where a DR restore is read FROM, and the
-// hostname decides which snapshots a forget policy covers, because restic
-// groups forget by host. No key here is log-and-default (agent-os-l42o).
+// hostname decides which earlier snapshot restic picks as a backup's parent,
+// because restic groups that choice by host and path. No key here is
+// log-and-default (agent-os-l42o).
 //
 // restic_password is decrypted transparently by db.GetSetting (the DB layer
 // uses TokenEncryptor for sensitive keys). The plaintext password is held only
@@ -279,7 +288,7 @@ func resolveBackupConfig(db *database.DB, cfg *config.Config) (BackupConfig, err
 		return BackupConfig{}, err
 	}
 
-	// --- backup_hostname (default: system hostname) ---
+	// --- backup_hostname (default: DefaultBackupHostname) ---
 	hostname, err := readSetting(db, "backup_hostname")
 	if err != nil {
 		return BackupConfig{}, err
@@ -288,10 +297,7 @@ func resolveBackupConfig(db *database.DB, cfg *config.Config) (BackupConfig, err
 		hostname = cfg.BackupHostname
 	}
 	if hostname == "" {
-		// os.Hostname's error stays discarded: it is not a database fault, and
-		// the empty string it leaves behind means "let restic pick the host",
-		// which is the historical behaviour.
-		hostname, _ = os.Hostname() //nolint:errcheck // The empty string it leaves behind means "let restic pick the host", which is the historical behaviour; see the comment above.
+		hostname = DefaultBackupHostname
 	}
 	bc.BackupHostname = hostname
 

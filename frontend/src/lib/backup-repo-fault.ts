@@ -184,6 +184,14 @@ export function repoFaultFrom(error: unknown): RepoFault | null {
         hint: 'The repository answered and your snapshots are not missing; the credential is what is wrong. Correct the restic password in Backup settings — do not initialise a new repository over this one.',
         detail,
       }
+    case 'locked':
+      // restic exit 11 (agent-os-zg60): the repository answered, so the
+      // unreachable hint would send the operator to a remote that works.
+      return {
+        title: 'The backup repository is locked.',
+        hint: 'Your snapshots are not missing. Another restic operation holds the repository lock; if none is running, the lock is stale and the next backup clears it.',
+        detail,
+      }
     case 'unreachable':
       return {
         title: 'The backup repository could not be reached.',

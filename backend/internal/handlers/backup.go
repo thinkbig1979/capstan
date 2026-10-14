@@ -931,7 +931,8 @@ func repoCouldNotBeRead(av services.BackupAvailability) bool {
 	return av.RepoState == services.RepoStateUnreachable ||
 		av.RepoState == services.RepoStateSettingsUnreadable ||
 		av.RepoState == services.RepoStatePasswordMissing ||
-		av.RepoState == services.RepoStateWrongPassword
+		av.RepoState == services.RepoStateWrongPassword ||
+		av.RepoState == services.RepoStateLocked
 }
 
 // repoUninitialized builds the 409 a repository that does not exist yet earns.

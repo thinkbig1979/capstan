@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -117,21 +116,17 @@ func TestWithRunNotes_PrimaryReasonComesFirst(t *testing.T) {
 // rest succeed. Only calls for the stack under test (tagged uwfuStack) fail:
 // the database snapshot shares "restic backup" and must keep succeeding.
 type uwfuRunner struct {
-	mu sync.Mutex
-
-	failBackup    bool // restic backup --tag uwfuStack
-	failLs        bool // restic ls (Verify)
-	failForget    bool // restic forget (retention)
-	failSync      bool // restic snapshots --quiet: the sync's repository preflight
-	failDB        bool // restic backup --tag DatabaseBackupTag: the database snapshot
-	failSnapsFrom int  // fail the Nth and later `restic snapshots --tag uwfuStack` (1-based); 0 = never
-
-	snapCalls int
+	failBackup bool // restic backup --tag uwfuStack
+	failLs     bool // restic ls (Verify)
+	failForget bool // restic forget (retention)
+	failSync   bool // restic snapshots --quiet: the sync's repository preflight
+	failDB     bool // restic backup --tag DatabaseBackupTag: the database snapshot
+	noSummary  bool // restic backup --tag uwfuStack prints no summary, so no snapshot id
 }
 
 const uwfuStack = "uwfu-app"
 
-func (r *uwfuRunner) Run(_ context.Context, name string, args []string, _ []string, _ chan<- StreamLine) error {
+func (r *uwfuRunner) Run(_ context.Context, name string, args []string, _ []string, out chan<- StreamLine) error {
 	if len(args) == 0 {
 		return errors.New("uwfu runner: empty argv")
 	}
@@ -148,22 +143,16 @@ func (r *uwfuRunner) Run(_ context.Context, name string, args []string, _ []stri
 		return errors.New("repository locked")
 	case args[0] == "ls" && r.failLs:
 		return errors.New("pack file missing")
-	case args[0] == "forget" && r.failForget:
+	case args[0] == "forget" && forStack && r.failForget:
 		return errors.New("forget refused")
+	case args[0] == "backup" && forStack && r.noSummary:
+		return nil
 	}
+	emitBackupSummary(name, args, out)
 	return nil
 }
 
-func (r *uwfuRunner) Output(_ context.Context, _ string, args []string, _ []string) ([]byte, error) {
-	if len(args) > 0 && args[0] == "snapshots" && slices.Contains(args, uwfuStack) {
-		r.mu.Lock()
-		r.snapCalls++
-		n := r.snapCalls
-		r.mu.Unlock()
-		if r.failSnapsFrom > 0 && n >= r.failSnapsFrom {
-			return nil, errors.New("snapshots listing timed out")
-		}
-	}
+func (r *uwfuRunner) Output(_ context.Context, _ string, _ []string, _ []string) ([]byte, error) {
 	return snapshotJSON("abc123", "abc", uwfuStack), nil
 }
 
@@ -208,9 +197,12 @@ func TestRunBackup_StackReasonsAreDurable(t *testing.T) {
 			runner:         &uwfuRunner{failLs: true},
 			docker:         &fakeDocker{statusStr: "running"},
 			wantItemStatus: "success",
-			wantItemMsg:    "verify warning: pack file missing",
-			wantRunStatus:  "success",
-			wantOK:         1,
+			wantItemMsg:    "verify warning: verify snapshot fa4e5a9f: pack file missing",
+			// agent-os-3st7: the snapshot exists, so the item stays success,
+			// but it was not verified and the run says so.
+			wantRunStatus: "partial",
+			wantRunMsg:    "snapshot not verified for stack(s) " + uwfuStack + ": verify failed (see per-stack details)",
+			wantOK:        1,
 		},
 		{
 			name:           "retention warning",
@@ -225,13 +217,16 @@ func TestRunBackup_StackReasonsAreDurable(t *testing.T) {
 			wantOK:        1,
 		},
 		{
-			// Call 1 is Verify's own listing, call 2 the snapshot-id read-back.
-			name:           "snapshot id unavailable",
-			runner:         &uwfuRunner{failSnapsFrom: 2},
+			// agent-os-wdlf: the id comes from restic's backup summary, not a
+			// re-listing; without one the snapshot cannot be verified
+			// (agent-os-3st7).
+			name:           "no snapshot id",
+			runner:         &uwfuRunner{noSummary: true},
 			docker:         &fakeDocker{statusStr: "running"},
 			wantItemStatus: "success",
-			wantItemMsg:    "snapshot id unavailable: list snapshots: snapshots listing timed out",
-			wantRunStatus:  "success",
+			wantItemMsg:    "snapshot not verified: restic reported no snapshot id for this backup",
+			wantRunStatus:  "partial",
+			wantRunMsg:     "snapshot not verified for stack(s) " + uwfuStack + ": verify failed (see per-stack details)",
 			wantOK:         1,
 		},
 		{
@@ -266,8 +261,8 @@ func TestRunBackup_StackReasonsAreDurable(t *testing.T) {
 				// All stacks failed: the run names the first failure, as before.
 				assert.Equal(t, tc.wantItemMsg, stored.ErrorMessage)
 			} else {
-				// Warnings stay on the item; only a retention failure also
-				// reaches the run (agent-os-zp01).
+				// Warnings stay on the item; a retention (agent-os-zp01) or
+				// verify (agent-os-3st7) failure also reaches the run.
 				assert.Equal(t, tc.wantRunMsg, stored.ErrorMessage)
 			}
 		})

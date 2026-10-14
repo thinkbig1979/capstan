@@ -77,6 +77,12 @@ var lockOps = []struct {
 		_, err := m.Backup(context.Background(), "/srv/app", []string{"app"}, out)
 		return err
 	}},
+	// restore takes a non-exclusive lock, which a stale exclusive one refuses
+	// with exit 11 (OBSERVED, restic 0.18.0); runRestore holds the global lock
+	// (agent-os-hxuz).
+	{"restore", func(m *ResticManager) error {
+		return m.Restore(context.Background(), "abc123", "/srv/app", "/srv/app", nil, nil)
+	}},
 }
 
 // TestResticLockOps_StaleLockIsUnlockedAndRetriedOnce pins agent-os-zp01: a
@@ -162,12 +168,12 @@ func TestResticLockOps_UnlockIsBoundedAndItsFailureReported(t *testing.T) {
 // lockingSubcommands are the restic subcommands that fail with exit 11 on a
 // stale lock while the global backup lock is held, so their calls must go
 // through runLocking.
-var lockingSubcommands = map[string]bool{"forget": true, "prune": true, "check": true, "backup": true}
+var lockingSubcommands = map[string]bool{"forget": true, "prune": true, "check": true, "backup": true, "restore": true}
 
 // TestResticLockingCallsGoThroughRunLocking keeps every restic call that
-// builds a forget/prune/check/backup argv on runLocking (agent-os-zp01): a
-// function that builds one must call runLocking and must not call the runner
-// directly. Read through go:embed (packageSources), so a `go test -overlay`
+// builds a forget/prune/check/backup/restore argv on runLocking (agent-os-zp01,
+// agent-os-hxuz): a function that builds one must call runLocking and must not
+// call the runner directly. Read through go:embed (packageSources), so a `go test -overlay`
 // mutant of backup_restic.go is what this sees.
 func TestResticLockingCallsGoThroughRunLocking(t *testing.T) {
 	entries, err := packageSources.ReadDir(".")
@@ -222,7 +228,7 @@ func TestResticLockingCallsGoThroughRunLocking(t *testing.T) {
 			}
 			found[fn.Name.Name] = true
 			if !callsRunLocking {
-				t.Errorf("%s: %s builds a restic forget/prune/check/backup argv but does not call runLocking (agent-os-zp01)",
+				t.Errorf("%s: %s builds a restic forget/prune/check/backup/restore argv but does not call runLocking (agent-os-zp01)",
 					fset.Position(fn.Pos()), fn.Name.Name)
 			}
 			for _, pos := range directRuns {
@@ -232,9 +238,9 @@ func TestResticLockingCallsGoThroughRunLocking(t *testing.T) {
 		}
 	}
 
-	// Positive control: the guard must see the four known sites, or a zero
+	// Positive control: the guard must see the five known sites, or a zero
 	// above means it matched nothing.
-	for _, want := range []string{"ApplyRetention", "Prune", "VerifyRepositoryData", "Backup"} {
+	for _, want := range []string{"ApplyRetention", "Prune", "VerifyRepositoryData", "Backup", "Restore"} {
 		assert.True(t, found[want], "guard did not see %s: its argv detection is blind", want)
 	}
 }

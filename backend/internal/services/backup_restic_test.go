@@ -43,7 +43,24 @@ func (f *fakeRunner) Run(ctx context.Context, name string, args []string, env []
 	if f.onRun != nil {
 		f.onRun(name, args, out)
 	}
+	if f.runErr == nil && f.onRun == nil {
+		emitBackupSummary(name, args, out)
+	}
 	return f.runErr
+}
+
+// fakeSnapshotID is the snapshot id the fake runners report for a successful
+// `restic backup`.
+const fakeSnapshotID = "fa4e5a9f0000000000000000000000000000000000000000000000000000000"
+
+// emitBackupSummary writes the summary line a successful `restic backup
+// --json` ends with. backupStack records and verifies the snapshot by the id
+// in it (agent-os-wdlf), so a fake backup without one reads as unverified.
+func emitBackupSummary(name string, args []string, out chan<- StreamLine) {
+	if name != "restic" || len(args) == 0 || args[0] != "backup" || out == nil {
+		return
+	}
+	out <- StreamLine{Type: "data", Line: `{"message_type":"summary","snapshot_id":"` + fakeSnapshotID + `"}`}
 }
 
 func (f *fakeRunner) Output(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
@@ -242,7 +259,9 @@ func TestResticManager_Backup_Hostname(t *testing.T) {
 	close(out)
 
 	call := runner.lastCall()
-	assert.True(t, argPairContains(call.Args, "--hostname", cfg.BackupHostname))
+	assert.True(t, argPairContains(call.Args, "--host", cfg.BackupHostname), "argv %v", call.Args)
+	// restic 0.18.0: "Flag --hostname has been deprecated, use --host".
+	assert.False(t, argContains(call.Args, "--hostname"), "argv %v", call.Args)
 }
 
 // --- ApplyRetention argv tests ---

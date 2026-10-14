@@ -649,16 +649,17 @@ func TestRunBackup_PerStackFailureIsolation_Partial(t *testing.T) {
 		responses: []multiCallResponse{
 			// database snapshot → success
 			{binary: "restic", argPrefix: "backup", err: nil},
+			// database retention (agent-os-wdlf) → success. Without this
+			// entry the database forget would match stack-b's forget below
+			// and skip the script past stack-a's injected failure.
+			{binary: "restic", argPrefix: "forget", err: nil},
 			// stack-a backup call → error
 			{binary: "restic", argPrefix: "backup", err: errors.New("disk full")},
-			// stack-b backup call → success
+			// stack-b backup call → success; its verify `ls` matches no
+			// entry and succeeds.
 			{binary: "restic", argPrefix: "backup", err: nil},
-			// stack-b verify call → success (snapshots output)
-			{binary: "restic", argPrefix: "snapshots", output: snapshotJSON("abc", "ab1", "stack-b")},
 			// stack-b forget → success
 			{binary: "restic", argPrefix: "forget", err: nil},
-			// stack-b ListSnapshots → return snapshot for run item
-			{binary: "restic", argPrefix: "snapshots", output: snapshotJSON("abc", "ab1", "stack-b")},
 		},
 	}
 	_ = runner
@@ -2453,6 +2454,9 @@ func (m *multiCallRunner) Run(ctx context.Context, name string, args []string, e
 		firstArg = args[0]
 	}
 	resp := m.next(name, firstArg)
+	if resp.err == nil {
+		emitBackupSummary(name, args, out)
+	}
 	return resp.err
 }
 
@@ -2676,10 +2680,11 @@ func TestDatabaseSnapshotPath_IsUnderDataDir(t *testing.T) {
 // TestCheckRepository_DiscriminatesRepositoryStates pins acceptance criterion 4
 // of agent-os-81vr, extended by agent-os-l04z: the failure states are told
 // apart at the SERVICE boundary, not guessed at by a caller reading prose.
-// There are five of them now — uninitialized, wrong_password, unreachable,
-// password_missing and settings_unreadable — and the last two have their own
-// sub-tests below because each needs a fixture the table cannot express: one
-// must show restic was never invoked, the other needs a database that refuses.
+// There are six of them now — uninitialized, wrong_password, locked
+// (agent-os-zg60), unreachable, password_missing and settings_unreadable — and
+// the last two have their own sub-tests below because each needs a fixture
+// the table cannot express: one must show restic was never invoked, the other
+// needs a database that refuses.
 //
 // Before this, "no repository exists" and "a repository exists but could not be
 // read" were one branch producing one message, which is what let repoInit
@@ -2760,6 +2765,21 @@ func TestCheckRepository_DiscriminatesRepositoryStates(t *testing.T) {
 					"the credential must be named as the cause")
 			},
 		},
+		{
+			// agent-os-zg60. Exit 11 is "repository is already locked"
+			// (MEASURED, restic 0.18.0: `snapshots --quiet` exits 11 under a
+			// live or a stale exclusive lock). The repository answered; the
+			// network and the credentials are fine.
+			name:          "locked",
+			runErr:        fakeExitError{code: 11},
+			wantState:     RepoStateLocked,
+			wantReachable: false,
+			wantMessage: func(t *testing.T, message string) {
+				assert.NotContains(t, message, "not reachable",
+					"a locked repository answered; calling it unreachable points at the network")
+				assert.Contains(t, message, "locked")
+			},
+		},
 	}
 
 	for _, tc := range cases {
@@ -2774,6 +2794,10 @@ func TestCheckRepository_DiscriminatesRepositoryStates(t *testing.T) {
 			av := svc.CheckRepository(context.Background())
 
 			assert.Equal(t, tc.wantState, av.RepoState)
+			for _, c := range runner.calls {
+				assert.NotContains(t, c.Args, "unlock",
+					"the probe runs outside the global backup lock, so it must never remove a lock (agent-os-zg60)")
+			}
 			assert.Equal(t, tc.wantReachable, av.RepoReachable,
 				"RepoReachable must keep meaning exactly 'the probe answered', so the change stays additive")
 			tc.wantMessage(t, av.Message)

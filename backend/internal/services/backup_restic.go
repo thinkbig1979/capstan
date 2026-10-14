@@ -161,6 +161,10 @@ type ResticManager struct {
 	cfg    BackupConfig
 	runner commandRunner
 	logger *slog.Logger
+
+	// testDeadlineCap, when non-zero, shortens forget's and prune's operation
+	// deadlines so a test can watch one expire. Production never sets it.
+	testDeadlineCap time.Duration
 }
 
 // NewResticManager creates a ResticManager using the real exec-based runner.
@@ -253,8 +257,9 @@ const unlockTimeout = 2 * time.Minute
 
 // runLocking runs a restic command that takes a repository lock while
 // Capstan's global backup lock is held: forget, prune and check, which need
-// the exclusive lock, and backup, which a stale exclusive lock refuses. On
-// exit 11 it runs `restic unlock` and retries once (agent-os-zp01).
+// the exclusive lock, and backup and restore, which a stale exclusive lock
+// refuses. On exit 11 it runs `restic unlock` and retries once (agent-os-zp01,
+// agent-os-hxuz).
 //
 // restic never clears a stale lock by itself. OBSERVED with restic 0.18.0: a
 // lock left by a SIGKILLed `restic backup` still made `restic forget` exit 11;
@@ -478,7 +483,9 @@ func (m *ResticManager) Backup(ctx context.Context, stackDir string, tags []stri
 	args = append(args, "--tag", dateTag)
 
 	if m.cfg.BackupHostname != "" {
-		args = append(args, "--hostname", m.cfg.BackupHostname)
+		// --host, not --hostname: restic 0.18.0 prints "Flag --hostname has
+		// been deprecated, use --host".
+		args = append(args, "--host", m.cfg.BackupHostname)
 	}
 
 	args = append(args, stackDir)
@@ -492,17 +499,22 @@ func (m *ResticManager) Backup(ctx context.Context, stackDir string, tags []stri
 	go func() {
 		defer close(translateDone)
 		for sl := range raw {
-			if sl.Type != "data" {
-				out <- sl
-				continue
-			}
-			if line, handled := resticJSONToLine(sl.Line, summary); handled {
-				if line != "" {
-					out <- StreamLine{Type: "data", Line: line}
+			if sl.Type == "data" {
+				line, handled := resticJSONToLine(sl.Line, summary)
+				switch {
+				case !handled:
+					// Non-JSON line (e.g. a stderr warning) — forward verbatim.
+				case line == "":
+					continue
+				default:
+					sl = StreamLine{Type: "data", Line: line}
 				}
-			} else {
-				// Non-JSON line (e.g. a stderr warning) — forward verbatim.
-				out <- StreamLine{Type: "data", Line: sl.Line}
+			}
+			// A nil out means nobody is listening, as for stream(): a send
+			// on it would block forever, and the summary still has to be
+			// read.
+			if out != nil {
+				out <- sl
 			}
 		}
 	}()
@@ -533,10 +545,7 @@ func resticJSONToLine(raw string, summary *ResticBackupSummary) (line string, ha
 		summary.FilesNew = msg.FilesNew
 		summary.FilesChanged = msg.FilesChanged
 
-		short := msg.SnapshotID
-		if len(short) > 8 {
-			short = short[:8]
-		}
+		short := shortSnapshotID(msg.SnapshotID)
 		if msg.DataAdded == 0 {
 			return fmt.Sprintf("No change: nothing new to back up; snapshot %s saved", short), true
 		}
@@ -569,28 +578,90 @@ func humanizeBytes(n int64) string {
 	return fmt.Sprintf("%.3f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
-// Verify confirms the most recent snapshot for tag is readable by running
-// `restic ls` on it. For a deeper check pass tag and rely on restic check.
-func (m *ResticManager) Verify(ctx context.Context, tag string, out chan<- StreamLine) error {
-	snapshots, err := m.ListSnapshots(ctx, tag, 1)
-	if err != nil {
-		return fmt.Errorf("verify: list snapshots: %w", err)
+// shortSnapshotID is restic's short form of a snapshot id: its first 8
+// characters, what `restic snapshots` prints as short_id.
+func shortSnapshotID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
 	}
-	if len(snapshots) == 0 {
-		return fmt.Errorf("verify: no snapshots found for tag %q", tag)
-	}
+	return id
+}
 
+// snapshotVerifyTimeout bounds the post-backup `restic ls` of one snapshot.
+const snapshotVerifyTimeout = 10 * time.Minute
+
+// Verify confirms the snapshot snapshotID is readable by running `restic ls`
+// on it, and returns how many entries it listed.
+//
+// The caller passes the id restic printed for the backup it just took
+// (agent-os-wdlf). It used to look the snapshot up with `snapshots --tag X
+// --latest 1`, which returns the latest snapshot PER host and path: once the
+// host changed, element [0] was an earlier host's snapshot, and that is what
+// got verified.
+//
+// The listing is counted, never forwarded: it is every file name in the
+// snapshot, and the run output it used to reach is logged line by line (1476
+// lines in one production run). Only the last line that is not a path is
+// kept, so a failure still says what restic reported.
+func (m *ResticManager) Verify(ctx context.Context, snapshotID string) (entries int, err error) {
 	pwFile, cleanup, err := m.withPasswordFile()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer cleanup()
 
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	ctx, cancel := withCommandDeadline(ctx, snapshotVerifyTimeout)
 	defer cancel()
 
-	args := []string{"ls", snapshots[0].ShortID}
-	return m.runner.Run(ctx, "restic", args, m.resticEnv(pwFile), out)
+	lines := make(chan StreamLine, 32)
+	counted := make(chan struct{})
+	var lastNote string
+	go func() {
+		defer close(counted)
+		for l := range lines {
+			// restic ls prints each entry as an absolute path; any other
+			// line is its header or a message.
+			if l.Line != "" && l.Line[0] == '/' {
+				entries++
+			} else {
+				lastNote = l.Line
+			}
+		}
+	}()
+	// "--" stops flag parsing, as in RestorePreview.
+	runErr := m.runner.Run(ctx, "restic", []string{"ls", "--", snapshotID}, m.resticEnv(pwFile), lines)
+	close(lines)
+	<-counted
+
+	if runErr != nil {
+		runErr = timeoutError(ctx, runErr, "restic ls")
+		if lastNote != "" {
+			return entries, fmt.Errorf("verify snapshot %s: %w (restic: %s)", shortSnapshotID(snapshotID), runErr, lastNote)
+		}
+		return entries, fmt.Errorf("verify snapshot %s: %w", shortSnapshotID(snapshotID), runErr)
+	}
+	return entries, nil
+}
+
+// retentionTimeout bounds a plain `restic forget`, which only rewrites
+// snapshot metadata. pruneTimeout bounds `restic prune` and `forget --prune`,
+// which repack data and are legitimately long on a large repository; it
+// matches verifyTimeout, the bound already chosen for reading pack data. Both
+// run while Capstan's global backup lock is held, so a hung one would
+// otherwise block every later backup, sync, restore and check until the server
+// restarts (agent-os-j6ob, safe-defaults rule 1).
+const (
+	retentionTimeout = 10 * time.Minute
+	pruneTimeout     = 4 * time.Hour
+)
+
+// opDeadline returns timeout, or testDeadlineCap when a test set a shorter
+// one.
+func (m *ResticManager) opDeadline(timeout time.Duration) time.Duration {
+	if m.testDeadlineCap > 0 && m.testDeadlineCap < timeout {
+		return m.testDeadlineCap
+	}
+	return timeout
 }
 
 // ApplyRetention runs `restic forget` with the configured keep-* flags and
@@ -602,12 +673,17 @@ func (m *ResticManager) ApplyRetention(ctx context.Context, tag string, out chan
 	}
 	defer cleanup()
 
-	args := []string{"forget", "--verbose"}
+	// Grouped by path only, with no host filter (agent-os-wdlf). restic
+	// groups forget by host and path by default, and the host used to be the
+	// container id, which changes on every redeploy: each deploy's snapshots
+	// became a group of their own that a `--hostname <current>` filter never
+	// reached again. Not grouped by tags either: every snapshot carries a
+	// date tag (Backup), so grouping by tags makes one group per day and
+	// keeps every snapshot (OBSERVED, restic 0.18.0 dry-run). The tag filter
+	// keeps the policy to this stack's snapshots.
+	args := []string{"forget", "--verbose", "--group-by", "paths"}
 	if tag != "" {
 		args = append(args, "--tag", tag)
-	}
-	if m.cfg.BackupHostname != "" {
-		args = append(args, "--hostname", m.cfg.BackupHostname)
 	}
 
 	hasRetention := false
@@ -633,11 +709,16 @@ func (m *ResticManager) ApplyRetention(ctx context.Context, tag string, out chan
 		return nil
 	}
 
+	timeout := retentionTimeout
 	if m.cfg.AutoPrune {
 		args = append(args, "--prune")
+		timeout = pruneTimeout
 	}
 
-	return m.runLocking(ctx, args, m.resticEnv(pwFile), out)
+	// The deadline covers the attempt, the stale-lock unlock and the retry.
+	ctx, cancel := withCommandDeadline(ctx, m.opDeadline(timeout))
+	defer cancel()
+	return timeoutError(ctx, m.runLocking(ctx, args, m.resticEnv(pwFile), out), "restic forget")
 }
 
 // Prune runs `restic prune` (optionally with --dry-run). It streams output to out.
@@ -653,7 +734,9 @@ func (m *ResticManager) Prune(ctx context.Context, dryRun bool, out chan<- Strea
 		args = append(args, "--dry-run")
 	}
 
-	return m.runLocking(ctx, args, m.resticEnv(pwFile), out)
+	ctx, cancel := withCommandDeadline(ctx, m.opDeadline(pruneTimeout))
+	defer cancel()
+	return timeoutError(ctx, m.runLocking(ctx, args, m.resticEnv(pwFile), out), "restic prune")
 }
 
 // resticSnapshot is the JSON shape returned by `restic snapshots --json`.
@@ -818,7 +901,11 @@ func (m *ResticManager) Restore(ctx context.Context, snapshotID, sourcePath, tar
 	for _, rel := range excludes {
 		args = append(args, "--exclude", restoreExcludePattern(rel))
 	}
-	return m.runner.Run(ctx, "restic", args, m.resticEnv(pwFile), out)
+	// runLocking: a stale exclusive lock refuses restore with exit 11 before
+	// anything is written (OBSERVED, restic 0.18.0), so unlocking and retrying
+	// once is safe. The caller, runRestore, holds the global backup lock
+	// (agent-os-hxuz).
+	return m.runLocking(ctx, args, m.resticEnv(pwFile), out)
 }
 
 // cacheDirTagSignature is the header a CACHEDIR.TAG file must start with for

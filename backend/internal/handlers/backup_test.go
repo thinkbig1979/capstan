@@ -3230,6 +3230,25 @@ func TestBackupRepoCredentialStatesAreNamed(t *testing.T) {
 		}
 	})
 
+	// agent-os-zg60: a locked repository (exit 11) is a named 503 on both
+	// endpoints. repoCouldNotBeRead is a positive whitelist, so a state missing
+	// from it lets both run restic and answer 500.
+	t.Run("locked repository", func(t *testing.T) {
+		for _, endpoint := range endpoints {
+			t.Run(endpoint, func(t *testing.T) {
+				r, _ := backupProbeRouter(t, 11)
+
+				w := httptest.NewRecorder()
+				r.ServeHTTP(w, jsonReq(t, http.MethodGet, endpoint, nil))
+
+				require.Equal(t, http.StatusServiceUnavailable, w.Code)
+				body := decodeBody(t, w)
+				assert.Equal(t, "BACKUP_REPO_UNREACHABLE", body["code"])
+				assert.Equal(t, "locked", repoStateOf(t, body))
+			})
+		}
+	})
+
 	// The control arm. Exit 1 is a genuine I/O failure and must be untouched by
 	// this change — this is the assertion that a reclassifying implementation
 	// fails.
@@ -3340,6 +3359,18 @@ func TestRepoInit_CreatesOnlyWhenUninitialised(t *testing.T) {
 			"a repository that exists but could not be read must NOT be created over")
 	})
 
+	t.Run("locked refuses to create", func(t *testing.T) {
+		r, runner := backupProbeRouter(t, 11)
+
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, jsonReq(t, http.MethodPost, "/api/backups/repo/init", map[string]interface{}{}))
+
+		require.Equal(t, http.StatusServiceUnavailable, w.Code)
+		assert.Equal(t, "locked", repoStateOf(t, decodeBody(t, w)))
+		_, ok := runner.repoFor("init")
+		assert.False(t, ok, "a locked repository exists and must NOT be created over (agent-os-zg60)")
+	})
+
 	t.Run("already initialised does not re-create", func(t *testing.T) {
 		r, runner := backupProbeRouter(t, 0)
 
@@ -3377,6 +3408,7 @@ func TestRepoStateDiscriminatesRepositoryStatesOnTheWire(t *testing.T) {
 		{"reachable", func(t *testing.T) *gin.Engine { r, _ := backupProbeRouter(t, 0); return r }, "ok"},
 		{"never initialised", func(t *testing.T) *gin.Engine { r, _ := backupProbeRouter(t, 10); return r }, "uninitialized"},
 		{"exists but unreadable", func(t *testing.T) *gin.Engine { r, _ := backupProbeRouter(t, 1); return r }, "unreachable"},
+		{"locked", func(t *testing.T) *gin.Engine { r, _ := backupProbeRouter(t, 11); return r }, "locked"},
 		{"restic absent", backupNoResticRouter, ""},
 	}
 
