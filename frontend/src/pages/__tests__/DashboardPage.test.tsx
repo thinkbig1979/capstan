@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { BrowserRouter } from 'react-router'
+import { BrowserRouter, Routes, Route } from 'react-router'
 import type { ConfiguredDir, Stack } from '@/types'
 
 // Page-level test: pins DashboardPage's own contract (which tab renders for a
@@ -171,6 +171,25 @@ function makeDir(overrides: Partial<ConfiguredDir>): ConfiguredDir {
   } as ConfiguredDir
 }
 
+// For the legacy-URL redirect: real routes, so the redirect lands on a page
+// that is not the dashboard, as in App().
+function renderRoutedPage(route: string) {
+  window.history.pushState({}, 'Test page', route)
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
+  })
+  return render(
+    <BrowserRouter>
+      <QueryClientProvider client={queryClient}>
+        <Routes>
+          <Route path="/" element={<DashboardPage />} />
+          <Route path="/host/:view" element={<div data-testid="host-route" />} />
+        </Routes>
+      </QueryClientProvider>
+    </BrowserRouter>,
+  )
+}
+
 function renderPage(route = '/') {
   // BrowserRouter (matching main.tsx's actual router) rather than MemoryRouter,
   // so assertions against window.location reflect real navigation the same way
@@ -250,6 +269,36 @@ describe('DashboardPage', () => {
       await waitFor(() => expect(screen.getByTestId('tab-overview')).toBeInTheDocument())
       expect(screen.queryByTestId('tab-stacks')).not.toBeInTheDocument()
       expect(window.location.search).toBe('?tab=overview')
+    })
+  })
+
+  // agent-os-8y80: the five host views moved to /host/<view>. Old bookmarks
+  // land there with replace, so Back does not bounce through the redirect.
+  describe('legacy host-view URLs', () => {
+    it.each(['containers', 'images', 'volumes', 'networks', 'build-cache'])(
+      'redirects /?tab=%s to /host/<view> with replace',
+      async (view) => {
+        const lengthBefore = window.history.length
+        renderRoutedPage(`/?tab=${view}`)
+        // pushState in renderPage adds one entry; a push-redirect would add a second.
+        const expectedLength = window.history.length
+
+        await waitFor(() => expect(window.location.pathname).toBe(`/host/${view}`))
+        expect(window.location.search).toBe('')
+        expect(screen.getByTestId('host-route')).toBeInTheDocument()
+        expect(window.history.length).toBe(expectedLength)
+        expect(expectedLength).toBe(lengthBefore + 1)
+        // The redirect happens before the dashboard mounts its queries.
+        expect(listStacks).not.toHaveBeenCalled()
+        expect(listDirectories).not.toHaveBeenCalled()
+      },
+    )
+
+    it('keeps /?tab=updates on the dashboard (positive side)', async () => {
+      renderPage('/?tab=updates')
+      await waitFor(() => expect(screen.getByTestId('tab-updates')).toBeInTheDocument())
+      expect(window.location.pathname).toBe('/')
+      expect(window.location.search).toBe('?tab=updates')
     })
   })
 

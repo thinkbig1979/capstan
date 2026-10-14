@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, Suspense, lazy, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useSearchParams } from 'react-router'
+import { Navigate, useNavigate, useSearchParams } from 'react-router'
 import { directoriesApi, stacksApi, dashboardApi, settingsApi } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -12,17 +12,13 @@ import { useStackStatusAnimation } from '@/hooks/useStackStatusAnimation'
 import { useUpdateScanStore } from '@/stores/updateScanStore'
 import { useDashboardMetricsContext } from '@/hooks/DashboardMetricsContext'
 import { DashboardMetricsTab } from '@/components/dashboard/DashboardMetricsTab'
-import { ContainersOverviewTab } from '@/components/dashboard/ContainersOverviewTab'
-import { ImagesTab } from '@/components/dashboard/ImagesTab'
-import { VolumesTab } from '@/components/dashboard/VolumesTab'
-import { NetworksTab } from '@/components/dashboard/NetworksTab'
-import { BuildCacheTab } from '@/components/dashboard/BuildCacheTab'
 import { UpdatesTab } from '@/components/dashboard/UpdatesTab'
 import { BackupHistoryTab } from '@/components/dashboard/BackupHistoryTab'
 import { DashboardHeader } from '@/components/dashboard/DashboardHeader'
 import { AttentionStrip } from '@/components/dashboard/AttentionStrip'
 import { HostStrip } from '@/components/dashboard/HostStrip'
 import { DASHBOARD_TABS, type DashboardTab, type HostView } from '@/lib/app-views'
+import { isHostView } from '@/components/host/host-views'
 import { StacksTab } from '@/components/dashboard/StacksTab'
 import { DirectoriesTab } from '@/components/dashboard/DirectoriesTab'
 import { classifyError, presentError } from '@/lib/error-handler'
@@ -54,8 +50,23 @@ function sortDirectories(items: ConfiguredDir[] | undefined) {
   return sorted.sort((a, b) => a.name.localeCompare(b.name))
 }
 
+/**
+ * agent-os-8y80: the five Docker host views moved to /host/<view>. An old
+ * /?tab=<view> bookmark is redirected here, before the dashboard body mounts,
+ * so the redirect starts none of the dashboard's queries.
+ */
 export function DashboardPage() {
+  const [searchParams] = useSearchParams()
+  const tab = searchParams.get('tab')
+  if (isHostView(tab)) {
+    return <Navigate to={`/host/${tab}`} replace />
+  }
+  return <DashboardContent />
+}
+
+function DashboardContent() {
   const [searchParams, setSearchParams] = useSearchParams()
+  const navigate = useNavigate()
   // The fleet (stacks) view is the landing tab; Metrics keeps its historical
   // 'overview' URL value so old ?tab=overview links still work.
   const activeTab = searchParams.get('tab') || 'stacks'
@@ -88,7 +99,7 @@ export function DashboardPage() {
   )
   const [isRefreshing, setIsRefreshing] = useState(false)
 
-  const { containers: metricsContainers, aggregates, latestMetrics, isConnected: metricsConnected, ws: metricsWs } = useDashboardMetricsContext()
+  const { containers: metricsContainers, aggregates, isConnected: metricsConnected } = useDashboardMetricsContext()
 
   useEffect(() => {
     localStorage.setItem('dashboard-sort', sortBy)
@@ -394,21 +405,11 @@ export function DashboardPage() {
             />
             <HostStrip
               stats={dashboardStats}
-              onNavigate={(view: HostView) => setActiveTab(view)}
+              onNavigate={(view: HostView) => navigate(`/host/${view}`)}
             />
           </ErrorBoundary>
         </TabsContent>
 
-        <TabsContent value="containers" className="mt-4 space-y-4">
-          <ErrorBoundary>
-            <HostStrip
-              stats={dashboardStats}
-              activeView="containers"
-              onNavigate={(view: HostView) => setActiveTab(view)}
-            />
-            <ContainersOverviewTab stats={dashboardStats} latestMetrics={latestMetrics} metricsStatus={metricsWs.status} />
-          </ErrorBoundary>
-        </TabsContent>
 
         <TabsContent value="directories" className="mt-4">
           <ErrorBoundary>
@@ -432,50 +433,6 @@ export function DashboardPage() {
         <TabsContent value="backups" className="mt-4">
           <ErrorBoundary>
             <BackupHistoryTab />
-          </ErrorBoundary>
-        </TabsContent>
-
-        <TabsContent value="images" className="mt-4 space-y-4">
-          <ErrorBoundary>
-            <HostStrip
-              stats={dashboardStats}
-              activeView="images"
-              onNavigate={(view: HostView) => setActiveTab(view)}
-            />
-            <ImagesTab />
-          </ErrorBoundary>
-        </TabsContent>
-
-        <TabsContent value="volumes" className="mt-4 space-y-4">
-          <ErrorBoundary>
-            <HostStrip
-              stats={dashboardStats}
-              activeView="volumes"
-              onNavigate={(view: HostView) => setActiveTab(view)}
-            />
-            <VolumesTab />
-          </ErrorBoundary>
-        </TabsContent>
-
-        <TabsContent value="networks" className="mt-4 space-y-4">
-          <ErrorBoundary>
-            <HostStrip
-              stats={dashboardStats}
-              activeView="networks"
-              onNavigate={(view: HostView) => setActiveTab(view)}
-            />
-            <NetworksTab />
-          </ErrorBoundary>
-        </TabsContent>
-
-        <TabsContent value="build-cache" className="mt-4 space-y-4">
-          <ErrorBoundary>
-            <HostStrip
-              stats={dashboardStats}
-              activeView="build-cache"
-              onNavigate={(view: HostView) => setActiveTab(view)}
-            />
-            <BuildCacheTab />
           </ErrorBoundary>
         </TabsContent>
       </Tabs>

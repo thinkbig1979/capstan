@@ -47,6 +47,7 @@ import type {
   DockerCleanupHistory,
   DockerCleanupRun,
 } from '@/types'
+import type { HostSummary } from '@/types/generated-services'
 
 /**
  * LifecycleResult is the wire type for stack start/stop/restart/pull responses.
@@ -796,6 +797,11 @@ export const resourcesApi = {
   },
   pruneBuildCache: async (opts?: PruneOptions) => {
     const response = await apiClient.post<PruneResult>(`/resources/build-cache/prune${pruneQuery(opts)}`)
+    return response.data
+  },
+
+  hostSummary: async () => {
+    const response = await apiClient.get<HostSummary>('/resources/host/summary')
     return response.data
   },
 
