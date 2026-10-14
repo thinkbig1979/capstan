@@ -162,7 +162,7 @@ type ResticManager struct {
 	runner commandRunner
 	logger *slog.Logger
 
-	// testDeadlineCap, when non-zero, shortens forget's and prune's operation
+	// testDeadlineCap, when non-zero, shortens every restic operation
 	// deadlines so a test can watch one expire. Production never sets it.
 	testDeadlineCap time.Duration
 }
@@ -302,6 +302,21 @@ func (m *ResticManager) unlockStale(ctx context.Context, env []string, out chan<
 	return timeoutError(ctx, m.runner.Run(ctx, "restic", []string{"unlock"}, env, out), "restic unlock")
 }
 
+// UnlockStale removes the stale locks in the repository (`restic unlock`,
+// never --remove-all: see runLocking). The caller holds Capstan's global
+// backup lock, so no Capstan-owned restic can be holding one of them.
+func (m *ResticManager) UnlockStale(ctx context.Context) error {
+	pwFile, cleanup, err := m.withPasswordFile()
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	ctx, cancel := withCommandDeadline(ctx, m.opDeadline(unlockTimeout))
+	defer cancel()
+	return timeoutError(ctx, runDrained(ctx, m.runner, "restic", []string{"unlock"}, m.resticEnv(pwFile)), "restic unlock")
+}
+
 // CheckRepository runs `restic snapshots --quiet` to verify the repository
 // is accessible. Returns nil on success.
 func (m *ResticManager) CheckRepository(ctx context.Context) error {
@@ -311,11 +326,11 @@ func (m *ResticManager) CheckRepository(ctx context.Context) error {
 	}
 	defer cleanup()
 
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := withCommandDeadline(ctx, m.opDeadline(checkRepoTimeout))
 	defer cancel()
 
 	if err := runDrained(ctx, m.runner, "restic", []string{"snapshots", "--quiet"}, m.resticEnv(pwFile)); err != nil {
-		return fmt.Errorf("cannot access restic repository: %w", err)
+		return fmt.Errorf("cannot access restic repository: %w", timeoutError(ctx, err, "restic snapshots"))
 	}
 	return nil
 }
@@ -407,10 +422,19 @@ func (m *ResticManager) VerifyRepositoryData(ctx context.Context, subset string,
 }
 
 // EnsureRepository initialises the repository if it has not been initialised
-// yet. It first calls CheckRepository; if that fails it runs `restic init`.
+// yet. It first calls CheckRepository, and runs `restic init` only when that
+// reports exit 10, "repository does not exist". Any other failure means a
+// repository may exist (locked, wrong password, or unreadable), so it is
+// returned instead of initialising over it (agent-os-joz7).
 func (m *ResticManager) EnsureRepository(ctx context.Context) error {
-	if err := m.CheckRepository(ctx); err == nil {
+	checkErr := m.CheckRepository(ctx)
+	switch {
+	case checkErr == nil:
 		return nil // already initialised
+	case isExitCode(checkErr, resticExitRepoLocked):
+		return fmt.Errorf("not initialising: the repository exists and is locked by another restic process: %w", checkErr)
+	case !isExitCode(checkErr, resticExitRepoDoesNotExist):
+		return fmt.Errorf("not initialising: the repository check failed for a reason other than a missing repository: %w", checkErr)
 	}
 
 	m.logger.Info("Initialising restic repository", "path", RedactURLUserinfo(m.cfg.ResticRepository))
@@ -421,11 +445,11 @@ func (m *ResticManager) EnsureRepository(ctx context.Context) error {
 	}
 	defer cleanup()
 
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	ctx, cancel := withCommandDeadline(ctx, m.opDeadline(initRepoTimeout))
 	defer cancel()
 
 	if err := runDrained(ctx, m.runner, "restic", []string{"init"}, m.resticEnv(pwFile)); err != nil {
-		return fmt.Errorf("restic init failed: %w", err)
+		return fmt.Errorf("restic init failed: %w", timeoutError(ctx, err, "restic init"))
 	}
 	return nil
 }
@@ -519,7 +543,9 @@ func (m *ResticManager) Backup(ctx context.Context, stackDir string, tags []stri
 		}
 	}()
 
-	runErr := m.runLocking(ctx, args, m.resticEnv(pwFile), raw)
+	ctx, cancel := withCommandDeadline(ctx, m.opDeadline(backupTimeout))
+	defer cancel()
+	runErr := timeoutError(ctx, m.runLocking(ctx, args, m.resticEnv(pwFile), raw), "restic backup")
 	close(raw)
 	<-translateDone
 
@@ -655,6 +681,26 @@ const (
 	pruneTimeout     = 4 * time.Hour
 )
 
+// backupTimeout and restoreTimeout bound one `restic backup` and one `restic
+// restore`. Both run while the global backup lock is held, so a hung one
+// would block every later backup until the server restarts (agent-os-7284).
+// They match pruneTimeout: a large first backup writes to the local
+// repository at disk speed, and a scheduled cycle is already capped tighter
+// by backupCycleTimeout, so only a manual run can reach this bound.
+const (
+	backupTimeout  = 4 * time.Hour
+	restoreTimeout = 4 * time.Hour
+)
+
+// Bounds for the short restic calls: probes, listings and init.
+const (
+	checkRepoTimeout      = 30 * time.Second
+	initRepoTimeout       = 60 * time.Second
+	listSnapshotsTimeout  = 60 * time.Second
+	restorePreviewTimeout = 5 * time.Minute
+	statsTimeout          = 60 * time.Second
+)
+
 // opDeadline returns timeout, or testDeadlineCap when a test set a shorter
 // one.
 func (m *ResticManager) opDeadline(timeout time.Duration) time.Duration {
@@ -773,7 +819,7 @@ func (m *ResticManager) ListSnapshots(ctx context.Context, tag string, limit int
 	}
 	defer cleanup()
 
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	ctx, cancel := withCommandDeadline(ctx, m.opDeadline(listSnapshotsTimeout))
 	defer cancel()
 
 	args := []string{"snapshots", "--json"}
@@ -786,7 +832,7 @@ func (m *ResticManager) ListSnapshots(ctx context.Context, tag string, limit int
 
 	raw, err := m.runner.Output(ctx, "restic", args, m.resticEnv(pwFile))
 	if err != nil {
-		return nil, fmt.Errorf("list snapshots: %w", err)
+		return nil, fmt.Errorf("list snapshots: %w", timeoutError(ctx, err, "restic snapshots"))
 	}
 
 	// restic may return "null" on an empty repo.
@@ -834,12 +880,12 @@ func (m *ResticManager) RestorePreview(ctx context.Context, snapshotID string, o
 	}
 	defer cleanup()
 
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	ctx, cancel := withCommandDeadline(ctx, m.opDeadline(restorePreviewTimeout))
 	defer cancel()
 
 	// "--" stops flag parsing so a snapshot ID beginning with "-" cannot be
 	// interpreted as a restic flag (M5; the handler also validates the format).
-	return m.runner.Run(ctx, "restic", []string{"ls", "--", snapshotID}, m.resticEnv(pwFile), out)
+	return timeoutError(ctx, m.runner.Run(ctx, "restic", []string{"ls", "--", snapshotID}, m.resticEnv(pwFile), out), "restic ls")
 }
 
 // resticStatsOutput is the JSON shape returned by `restic stats --json`.
@@ -858,13 +904,13 @@ func (m *ResticManager) Stats(ctx context.Context) (int64, error) {
 	}
 	defer cleanup()
 
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	ctx, cancel := withCommandDeadline(ctx, m.opDeadline(statsTimeout))
 	defer cancel()
 
 	args := []string{"stats", "--mode", "raw-data", "--json"}
 	raw, err := m.runner.Output(ctx, "restic", args, m.resticEnv(pwFile))
 	if err != nil {
-		return 0, fmt.Errorf("restic stats: %w", err)
+		return 0, fmt.Errorf("restic stats: %w", timeoutError(ctx, err, "restic stats"))
 	}
 
 	var out resticStatsOutput
@@ -904,8 +950,10 @@ func (m *ResticManager) Restore(ctx context.Context, snapshotID, sourcePath, tar
 	// runLocking: a stale exclusive lock refuses restore with exit 11 before
 	// anything is written (OBSERVED, restic 0.18.0), so unlocking and retrying
 	// once is safe. The caller, runRestore, holds the global backup lock
-	// (agent-os-hxuz).
-	return m.runLocking(ctx, args, m.resticEnv(pwFile), out)
+	// (agent-os-hxuz), so it runs under an operation deadline (agent-os-7284).
+	ctx, cancel := withCommandDeadline(ctx, m.opDeadline(restoreTimeout))
+	defer cancel()
+	return timeoutError(ctx, m.runLocking(ctx, args, m.resticEnv(pwFile), out), "restic restore")
 }
 
 // cacheDirTagSignature is the header a CACHEDIR.TAG file must start with for

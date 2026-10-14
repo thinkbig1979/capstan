@@ -110,6 +110,20 @@ const (
 	RepoStateLocked RepoState = "locked"
 )
 
+// AllRepoStates lists every RepoState, so a consumer can be checked against
+// all of them: handlers' repoCouldNotBeRead must disposition each one, or a
+// new state makes the snapshot routes answer 500 (agent-os-rgug). A guard
+// test keeps this list equal to the constants declared above.
+var AllRepoStates = []RepoState{
+	RepoStateOK,
+	RepoStateUninitialized,
+	RepoStateUnreachable,
+	RepoStateSettingsUnreadable,
+	RepoStatePasswordMissing,
+	RepoStateWrongPassword,
+	RepoStateLocked,
+}
+
 // BackupAvailability describes which parts of the engine are functional.
 //
 // RepoState is empty on any value that did not probe the repository —
@@ -1514,12 +1528,14 @@ func (s *BackupService) runSyncInternal(ctx context.Context, bc BackupConfig, al
 	if err := restic.CheckRepository(ctx); err != nil {
 		// CheckRepository's own wrapping (see ResticManager.CheckRepository)
 		// discards the real restic stderr text (Run only streams it to a
-		// throwaway channel), so a stale exclusive lock left by an
-		// interrupted prune surfaces here as a generic "exited: exit status
-		// 1" with no hint of the actual cause. Name the likely fix
-		// explicitly rather than let the operator chase "repository is not
-		// accessible" against a repository that is, in fact, fine.
-		return fmt.Errorf("refusing rclone sync: local repository is not accessible (if this is a stale lock from an interrupted operation, run `restic unlock`): %w", err)
+		// throwaway channel), so only the exit code tells the faults apart.
+		// A lock, stale or live, is exit 11 (resticExitRepoLocked), and the
+		// repository behind it is fine: name it rather than let the operator
+		// chase "not accessible" (agent-os-joz7).
+		if isExitCode(err, resticExitRepoLocked) {
+			return fmt.Errorf("refusing rclone sync: the local repository is locked by another restic process (if it is a stale lock from an interrupted operation, run `restic unlock`): %w", err)
+		}
+		return fmt.Errorf("refusing rclone sync: local repository is not accessible: %w", err)
 	}
 
 	localSnaps, err := restic.ListSnapshots(ctx, "", 1)
@@ -1808,7 +1824,27 @@ func (s *BackupService) RunDRRestore(ctx context.Context, out chan<- StreamLine)
 	// that does not open, discovered later from an unrelated operation with
 	// no pointer back to what happened.
 	stream(out, "info", "Verifying restored repository")
-	if err := s.newResticMgr(bc).CheckRepository(ctx); err != nil {
+	restic := s.newResticMgr(bc)
+	err = restic.CheckRepository(ctx)
+	if isExitCode(err, resticExitRepoLocked) {
+		// The sync copies the remote's lock files too, so the assembled
+		// repository can carry a stale lock (exit 11). This holds the global
+		// backup lock, so clear stale locks and probe once more, as runLocking
+		// does (agent-os-joz7). A lock that survives belongs to a live process.
+		stream(out, "info", "Restored repository is locked; removing stale locks and checking again")
+		if unlockErr := restic.UnlockStale(ctx); unlockErr != nil {
+			return fmt.Errorf("DR restore assembled a locked repository and removing stale locks failed: %w; %w -- "+
+				"any local-only files displaced by the sync were preserved in %s",
+				err, unlockErr, backupDir)
+		}
+		err = restic.CheckRepository(ctx)
+		if isExitCode(err, resticExitRepoLocked) {
+			return fmt.Errorf("DR restore assembled a repository that is locked by another restic process: %w -- "+
+				"any local-only files displaced by the sync were preserved in %s",
+				err, backupDir)
+		}
+	}
+	if err != nil {
 		return fmt.Errorf(
 			"DR restore assembled a repository that does not open (wrong password, or a corrupt/incomplete/foreign source): %w -- "+
 				"any local-only files displaced by the sync were preserved in %s",

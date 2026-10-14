@@ -143,7 +143,7 @@ function OverviewTabContent({
                 title="Backup"
                 href="https://github.com/thinkbig1979/capstan/blob/main/docs/how-to/configure-backups.md"
               >
-                <p>Adds this stack to scheduled backups, covering its volumes and compose files.</p>
+                <p>Adds this stack to scheduled backups. The backup covers the stack directory (compose file, .env and files inside it). Named Docker volumes are not included.</p>
                 <p>Set up the repository and schedule under Settings, Backup.</p>
               </HelpHint>
             </div>

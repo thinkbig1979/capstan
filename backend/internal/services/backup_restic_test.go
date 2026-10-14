@@ -541,7 +541,9 @@ func TestResticManager_EnsureRepository_InitsWhenCheckFails(t *testing.T) {
 		onRun: func(ctx context.Context, name string, args []string, env []string, out chan<- StreamLine) error {
 			if firstCall {
 				firstCall = false
-				return fmt.Errorf("repository not initialized")
+				// Exit 10, "repository does not exist": the one probe result
+				// that may be initialised over (agent-os-joz7).
+				return fmt.Errorf("restic exited: %w", fakeExitError{code: resticExitRepoDoesNotExist})
 			}
 			return nil
 		},
