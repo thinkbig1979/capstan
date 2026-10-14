@@ -17,7 +17,6 @@ import (
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 
 	"github.com/thinkbig1979/capstan/backend/internal/config"
@@ -674,24 +673,6 @@ func (s *DockerService) logUnmanagedProjects(unmanaged map[string]string) {
 		slog.Info("Compose projects are running without a Capstan stack; to manage one, mount its directory into Capstan, add it to EXTRA_STACKS_DIRS and restart",
 			"projects", entries)
 	}
-}
-
-func (s *DockerService) GetImageDiskUsage(ctx context.Context) (int64, error) {
-	if s == nil {
-		return 0, ErrDockerUnavailable
-	}
-
-	images, err := s.client.ImageList(ctx, image.ListOptions{})
-	if err != nil {
-		return 0, err
-	}
-
-	var total int64
-	for _, img := range images {
-		total += img.Size
-	}
-
-	return total, nil
 }
 
 func (s *DockerService) GetDiskUsage(ctx context.Context) (*DiskUsageBreakdown, error) {

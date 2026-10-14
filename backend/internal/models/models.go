@@ -220,20 +220,27 @@ type DockerVolume struct {
 	Size       int64  `json:"size"`
 	SizeKnown  bool   `json:"sizeKnown"`
 	InUse      bool   `json:"inUse"`
+	// InUseKnown is false when Docker did not count the volume's references
+	// (disk-usage read failed, or RefCount -1); InUse is then false and means
+	// nothing, so the volume must not be offered as safe to delete.
+	InUseKnown bool   `json:"inUseKnown"`
 	Created    string `json:"created"`
 	Stack      string `json:"stack"`
 }
 
 type DockerNetwork struct {
-	ID         string   `json:"id"`
-	Name       string   `json:"name"`
-	Driver     string   `json:"driver"`
-	Scope      string   `json:"scope"`
-	Internal   bool     `json:"internal"`
-	Containers int      `json:"containers"`
-	Labels     []string `json:"labels"`
-	Created    string   `json:"created"`
-	Stack      string   `json:"stack"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Driver     string `json:"driver"`
+	Scope      string `json:"scope"`
+	Internal   bool   `json:"internal"`
+	Containers int    `json:"containers"`
+	// ContainersKnown is false when inspecting the network failed; Containers is
+	// then 0 and means nothing, so the network must not read as unused.
+	ContainersKnown bool     `json:"containersKnown"`
+	Labels          []string `json:"labels"`
+	Created         string   `json:"created"`
+	Stack           string   `json:"stack"`
 }
 
 type ContainerUpdateInfo struct {

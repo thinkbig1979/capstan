@@ -704,6 +704,12 @@ export interface DockerVolume {
   size: number /* int64 */;
   sizeKnown: boolean;
   inUse: boolean;
+  /**
+   * InUseKnown is false when Docker did not count the volume's references
+   * (disk-usage read failed, or RefCount -1); InUse is then false and means
+   * nothing, so the volume must not be offered as safe to delete.
+   */
+  inUseKnown: boolean;
   created: string;
   stack: string;
 }
@@ -714,6 +720,11 @@ export interface DockerNetwork {
   scope: string;
   internal: boolean;
   containers: number /* int */;
+  /**
+   * ContainersKnown is false when inspecting the network failed; Containers is
+   * then 0 and means nothing, so the network must not read as unused.
+   */
+  containersKnown: boolean;
   labels: string[];
   created: string;
   stack: string;

@@ -35,6 +35,8 @@ const NET_SEARCH_FIELDS = [
 const SYSTEM_NETWORKS = new Set(['bridge', 'host', 'none'])
 function networkDeleteBlock(net: DockerNetwork): string | null {
   if (SYSTEM_NETWORKS.has(net.name)) return "System network can't be removed"
+  // A failed inspect sends containers 0 with containersKnown false: unknown, not unused.
+  if (!net.containersKnown) return "Attached containers unknown, can't confirm this network is unused"
   if (net.containers > 0) {
     return `In use by ${net.containers} container${net.containers === 1 ? '' : 's'}`
   }
@@ -76,7 +78,10 @@ export function NetworksTab() {
       case 'stack':
         return sorted.sort((a, b) => (a.stack || '').localeCompare(b.stack || ''))
       case 'containers':
-        return sorted.sort((a, b) => b.containers - a.containers)
+        // An unknown count is not 0: it goes after every known count.
+        return sorted.sort(
+          (a, b) => Number(b.containersKnown) - Number(a.containersKnown) || b.containers - a.containers,
+        )
       default:
         return sorted
     }
@@ -211,7 +216,9 @@ export function NetworksTab() {
                   )}
                 </TableCell>
                 <TableCell className="text-center">
-                  {net.containers > 0 ? (
+                  {!net.containersKnown ? (
+                    <span className="text-sm text-muted-foreground" title="Docker could not inspect this network">unknown</span>
+                  ) : net.containers > 0 ? (
                     <Badge variant="outline">{net.containers}</Badge>
                   ) : (
                     <span className="text-sm text-muted-foreground">0</span>

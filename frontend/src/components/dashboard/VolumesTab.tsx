@@ -66,7 +66,8 @@ export function VolumesTab() {
       case 'driver':
         return sorted.sort((a, b) => a.driver.localeCompare(b.driver))
       case 'size':
-        return sorted.sort((a, b) => b.size - a.size)
+        // An unknown size is not 0: it goes after every known size.
+        return sorted.sort((a, b) => Number(b.sizeKnown) - Number(a.sizeKnown) || b.size - a.size)
       case 'stack':
         return sorted.sort((a, b) => (a.stack || '').localeCompare(b.stack || ''))
       default:
@@ -177,7 +178,7 @@ export function VolumesTab() {
                   {vol.sizeKnown ? (
                     <span className="text-sm">{formatBytes(vol.size)}</span>
                   ) : (
-                    <span className="text-sm text-muted-foreground" title="Size not calculated">—</span>
+                    <span className="text-sm text-muted-foreground" title="Docker did not calculate this volume's size">size unknown</span>
                   )}
                 </TableCell>
                 <TableCell>
@@ -193,17 +194,21 @@ export function VolumesTab() {
                   </span>
                 </TableCell>
                 <TableCell className="sticky right-0 bg-background shadow-[-8px_0_8px_-8px_rgba(0,0,0,0.25)]">
-                  {vol.inUse ? (
+                  {vol.inUse || !vol.inUseKnown ? (
                     <TooltipProvider>
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <span tabIndex={0} className="inline-flex">
-                            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground" disabled aria-label={`Remove volume ${vol.name} (in use, cannot be removed)`}>
+                            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground" disabled aria-label={`Remove volume ${vol.name} (${vol.inUse ? 'in use' : 'in-use state unknown'}, cannot be removed)`}>
                               <Trash2 className="h-3.5 w-3.5" />
                             </Button>
                           </span>
                         </TooltipTrigger>
-                        <TooltipContent>In use by a container, stop it first to remove this volume</TooltipContent>
+                        <TooltipContent>
+                          {vol.inUse
+                            ? 'In use by a container, stop it first to remove this volume'
+                            : "In-use state unknown, can't confirm this volume is unused"}
+                        </TooltipContent>
                       </Tooltip>
                     </TooltipProvider>
                   ) : (
