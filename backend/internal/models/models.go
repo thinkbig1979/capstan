@@ -208,6 +208,9 @@ type DockerImage struct {
 	Size       int64    `json:"size"`
 	Created    int64    `json:"created"`
 	Containers int      `json:"containers"`
+	// ContainersKnown is false when Docker's disk-usage read failed or had no
+	// count for this image; Containers is then 0 and means nothing.
+	ContainersKnown bool `json:"containersKnown"`
 }
 
 type DockerVolume struct {

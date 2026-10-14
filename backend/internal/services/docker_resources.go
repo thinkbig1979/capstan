@@ -39,6 +39,35 @@ func (s *DockerService) ListImages(ctx context.Context) ([]models.DockerImage, e
 		return nil, fmt.Errorf("listing images: %w", err)
 	}
 
+	// ImageList always reports Containers as -1: the client has no parameter
+	// that asks for the count. DiskUsage (docker system df) computes it, keyed
+	// by ID, as ListVolumes does for sizes. A failure degrades to "unknown".
+	var usage *dockertypes.DiskUsage
+	if du, duErr := s.client.DiskUsage(ctx, dockertypes.DiskUsageOptions{
+		Types: []dockertypes.DiskUsageObject{dockertypes.ImageObject},
+	}); duErr == nil {
+		usage = &du
+	} else {
+		slog.Warn("Failed to compute image container counts; counts unavailable", "error", duErr)
+	}
+
+	return toDockerImages(images, usage), nil
+}
+
+// toDockerImages builds the served image list, taking each image's container
+// count from usage. A nil usage (the read failed), an image missing from it
+// (created between the two calls) or a negative count leaves ContainersKnown
+// false and Containers 0, never a count the UI could read as "unused".
+func toDockerImages(images []image.Summary, usage *dockertypes.DiskUsage) []models.DockerImage {
+	counts := make(map[string]int64)
+	if usage != nil {
+		for _, img := range usage.Images {
+			if img != nil && img.Containers >= 0 {
+				counts[img.ID] = img.Containers
+			}
+		}
+	}
+
 	result := make([]models.DockerImage, 0, len(images))
 	for _, img := range images {
 		repoTags := img.RepoTags
@@ -46,16 +75,18 @@ func (s *DockerService) ListImages(ctx context.Context) ([]models.DockerImage, e
 			repoTags = []string{"<none>"}
 		}
 
+		count, known := counts[img.ID]
 		result = append(result, models.DockerImage{
-			ID:         img.ID,
-			RepoTags:   repoTags,
-			Size:       img.Size,
-			Created:    img.Created,
-			Containers: int(img.Containers),
+			ID:              img.ID,
+			RepoTags:        repoTags,
+			Size:            img.Size,
+			Created:         img.Created,
+			Containers:      int(count),
+			ContainersKnown: known,
 		})
 	}
 
-	return result, nil
+	return result
 }
 
 func (s *DockerService) DeleteImage(ctx context.Context, imageID string, force bool) ([]image.DeleteResponse, error) {

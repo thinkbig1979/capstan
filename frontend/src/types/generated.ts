@@ -691,6 +691,11 @@ export interface DockerImage {
   size: number /* int64 */;
   created: number /* int64 */;
   containers: number /* int */;
+  /**
+   * ContainersKnown is false when Docker's disk-usage read failed or had no
+   * count for this image; Containers is then 0 and means nothing.
+   */
+  containersKnown: boolean;
 }
 export interface DockerVolume {
   name: string;

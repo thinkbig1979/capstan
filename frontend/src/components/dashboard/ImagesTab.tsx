@@ -17,6 +17,7 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
 import { ImageIcon, Trash2 } from 'lucide-react'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
 import { HelpHint } from '@/components/ui/help-hint'
 import { PruneButton } from '@/components/dashboard/PruneButton'
@@ -59,6 +60,10 @@ function scheduledCleanupSentence(preview: DockerCleanupPreview): string {
       } created more than ${preview.minAgeHours} hours ago.`
 }
 
+function containerCount(n: number): string {
+  return `${n} container${n === 1 ? '' : 's'}`
+}
+
 export function ImagesTab() {
   const { confirm, ConfirmComponent } = useConfirm()
   const { data: images, isPending, isError, refetch } = useImages()
@@ -69,20 +74,20 @@ export function ImagesTab() {
   const cleanupPreview = useScheduledCleanupPreview()
   const cleanupPolicy = useDockerCleanupPolicy()
 
+  // Never forced (agent-os-qczn): an in-use image has its Delete disabled, and
+  // for an unknown count Docker itself refuses to remove an image a container
+  // still uses, so the unforced request is the safe one either way.
   const handleDelete = async (image: DockerImage) => {
     const tag = image.repoTags[0] || image.id.substring(0, 19)
-    const hasContainers = image.containers > 0
     const confirmed = await confirm(
       `Remove Image "${tag}"?`,
-      hasContainers
-        ? 'This image is used by containers and will be force-removed. This cannot be undone.'
-        : 'This image will be removed. This cannot be undone.',
+      'This image will be removed. This cannot be undone.',
       { confirmText: 'Remove', isDangerous: true },
     )
     if (confirmed) {
       setDeletingId(image.id)
       deleteMutation.mutate(
-        { id: image.id, force: hasContainers },
+        { id: image.id, force: false },
         { onSettled: () => setDeletingId(null) },
       )
     }
@@ -257,16 +262,33 @@ export function ImagesTab() {
                   <span className="text-sm text-muted-foreground">{formatDate(image.created)}</span>
                 </TableCell>
                 <TableCell className="text-center">
-                  {image.containers > 0 ? (
+                  {!image.containersKnown ? (
+                    <span className="text-sm text-muted-foreground">unknown</span>
+                  ) : image.containers > 0 ? (
                     <Badge variant="outline">{image.containers}</Badge>
                   ) : (
                     <span className="text-sm text-muted-foreground">0</span>
                   )}
                 </TableCell>
                 <TableCell className="sticky right-0 bg-background shadow-[-8px_0_8px_-8px_rgba(0,0,0,0.25)]">
-                  <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" onClick={() => handleDelete(image)} disabled={deletingId === image.id || deleteMutation.isPending} title="Remove image" aria-label={`Remove image ${image.repoTags?.[0] ?? image.id}`}>
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
+                  {image.containersKnown && image.containers > 0 ? (
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span tabIndex={0} className="inline-flex">
+                            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground" disabled aria-label={`Remove image ${image.repoTags?.[0] ?? image.id} (used by ${containerCount(image.containers)}, cannot be removed)`}>
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent>Used by {containerCount(image.containers)}</TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  ) : (
+                    <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" onClick={() => handleDelete(image)} disabled={deletingId === image.id || deleteMutation.isPending} title="Remove image" aria-label={`Remove image ${image.repoTags?.[0] ?? image.id}`}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
                 </TableCell>
               </TableRow>
             ))}
