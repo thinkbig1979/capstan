@@ -29,22 +29,29 @@ torn or missing recent commits.
 A run that saves every stack but fails to capture the database is reported as
 **partial**, never success.
 
-Backups can be triggered manually (Settings, Backup tab) or run on a schedule.
+Named Docker volumes are not part of a backup. The snapshot of a stack is its
+directory only: the compose file, `.env`, and files inside the directory.
+Backups skip anything mounted from another filesystem inside the stack
+directory (`--one-file-system`) and directories marked with a `CACHEDIR.TAG`
+file. Back up volume data separately.
+
+Backups can be triggered manually (Settings, Backup, **Back up now**) or run
+on a schedule.
 
 ## Checking that backups can be restored
 
 A backup that completes is not proof the repository can restore it: pack files
 can go missing or rot on the storage underneath. **Check backups** on the
-dashboard's backup card reads 5% of the backup data and confirms it is intact.
+Backup Status card (Settings, Backup) reads 5% of the backup data and confirms it is intact.
 It cannot run while a backup, sync, restore or prune is running, because the
 check locks the repository.
 
 The same check also runs once a week, after a scheduled backup, unless you turn
 off **Check the repository weekly** in Settings, Backup. It only runs when
-scheduled backups are on. A failed check shows a red warning on the dashboard;
-backups keep running either way. A scheduled backup that falls due while the
+scheduled backups are on. A failed check shows a red "Repository integrity check failed" banner on the
+Backup Status card in Settings, Backup; backups keep running either way. A scheduled backup that falls due while the
 check is still running is skipped and shows as **Skipped** in the backup
-history.
+history (Dashboard, Backups).
 
 > **`STORAGE_KEY` is not in the backup, and that is deliberate.** The secrets
 > inside `capstan.db` are encrypted with a key derived from it, so a stolen
@@ -109,7 +116,7 @@ and `docker-compose.yaml` use a bind mount by default.
 ## Running a backup
 
 ```bash
-# Via the UI: Settings → Backup → Run Backup Now
+# Via the UI: Settings → Backup → Back up now
 # Via the API:
 curl -X POST http://localhost:5001/api/v1/backups/run
 ```

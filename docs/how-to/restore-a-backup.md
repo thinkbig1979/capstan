@@ -9,7 +9,7 @@ where the restic repository lives.
 # List snapshots for a stack:
 curl http://localhost:5001/api/v1/backups/snapshots?stackId=<id>
 
-# Restore a snapshot via UI: Settings → Backup → Snapshots → Restore
+# Restore a snapshot via UI: open the stack, then Activity → Backups → Restore
 # Or via API:
 curl -X POST http://localhost:5001/api/v1/backups/restore \
   -H 'Content-Type: application/json' \
@@ -111,8 +111,9 @@ capstan-tools 'rclone sync <remote>:<path> /app/data/restic-repo --stats-one-lin
 ```
 
 `<remote>:<path>` are exactly the values shown in Settings → Backup. This is
-what the UI's DR Restore does; doing it by hand keeps step 1's "container
-stopped" rule intact.
+what the API's `POST /api/v1/backups/dr-restore` endpoint does (the UI has no
+button for it); doing it by hand keeps step 1's "container stopped" rule
+intact.
 
 If the remote is a local-filesystem one, add its bind mount to the alias too —
 the path is resolved inside the container.
@@ -169,7 +170,7 @@ Check all four, in this order. Each one fails differently:
 3. **A git-backed stack can pull.** This is the `STORAGE_KEY` test — the token
    is decrypted to run it. An authentication failure here with the right
    password means the key differs from the one that encrypted it.
-4. **Settings → Backup → History** lists runs from before the incident, and your
+4. **Dashboard → Backups** lists runs from before the incident, and your
    backup policies are still enabled.
 
 ### 6. If `STORAGE_KEY` was lost
@@ -183,7 +184,8 @@ key.
 ### 7. Restore the stacks
 
 Only now, with a working Capstan that knows about them, restore the compose
-directories from Settings → Backup → Snapshots, or via the API:
+directories. For each stack, open it and go to Activity → Backups → Restore, or
+use the API:
 
 ```bash
 curl -X POST http://localhost:5001/api/v1/backups/restore \
