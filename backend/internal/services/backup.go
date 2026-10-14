@@ -110,6 +110,20 @@ const (
 	RepoStateLocked RepoState = "locked"
 )
 
+// AllRepoStates lists every RepoState, so a consumer can be checked against
+// all of them: handlers' repoCouldNotBeRead must disposition each one, or a
+// new state makes the snapshot routes answer 500 (agent-os-rgug). A guard
+// test keeps this list equal to the constants declared above.
+var AllRepoStates = []RepoState{
+	RepoStateOK,
+	RepoStateUninitialized,
+	RepoStateUnreachable,
+	RepoStateSettingsUnreadable,
+	RepoStatePasswordMissing,
+	RepoStateWrongPassword,
+	RepoStateLocked,
+}
+
 // BackupAvailability describes which parts of the engine are functional.
 //
 // RepoState is empty on any value that did not probe the repository —
