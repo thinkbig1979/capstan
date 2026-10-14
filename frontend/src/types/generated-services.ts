@@ -25,6 +25,109 @@ export interface DiskUsageBreakdown {
   volumesSizeKnown: boolean;
 }
 /**
+ * HostSummary is GET /resources/host/summary's body: per-category counts,
+ * sizes and what can be freed, all from one DiskUsage snapshot (HostSpaceService).
+ */
+export interface HostSummary {
+  disk: HostDiskSummary;
+  containers: HostContainerSummary;
+  images: HostImageSummary;
+  volumes: HostVolumeSummary;
+  networks: HostNetworkSummary;
+  buildCache: HostBuildCacheSummary;
+  measuredAt: string;
+}
+/**
+ * HostDiskSummary is the headline. Reclaimable is what one click on the
+ * dialog's defaults frees (images, build cache, containers); ReclaimableAll
+ * adds the volumes, which the dialog leaves unticked. InUse is Total minus
+ * Reclaimable, floored at 0, so the two parts of the disk bar add up.
+ */
+export interface HostDiskSummary {
+  total: number /* int64 */;
+  inUse: number /* int64 */;
+  reclaimable: number /* int64 */;
+  reclaimableAll: number /* int64 */;
+  volumesSizeKnown: boolean;
+}
+/**
+ * HostContainerSummary: Stopped counts exited, created and dead containers, so
+ * paused and restarting ones are in Count but in neither Running nor Stopped.
+ */
+export interface HostContainerSummary {
+  count: number /* int */;
+  running: number /* int */;
+  stopped: number /* int */;
+  reclaimableCount: number /* int */;
+  reclaimableBytes: number /* int64 */;
+}
+/**
+ * HostImageSummary: Bytes is LayersSize (shared layers counted once);
+ * ReclaimableBytes sums each candidate's Size minus SharedSize, a lower bound.
+ */
+export interface HostImageSummary {
+  count: number /* int */;
+  inUse: number /* int */;
+  bytes: number /* int64 */;
+  reclaimableCount: number /* int */;
+  reclaimableBytes: number /* int64 */;
+}
+/**
+ * HostVolumeSummary: SizeKnown false means Bytes sums only the volumes whose
+ * size Docker could compute, so it is a floor.
+ */
+export interface HostVolumeSummary {
+  count: number /* int */;
+  attached: number /* int */;
+  bytes: number /* int64 */;
+  sizeKnown: boolean;
+  reclaimableCount: number /* int */;
+  reclaimableBytes: number /* int64 */;
+}
+/**
+ * HostNetworkSummary has no sizes: networks use no disk.
+ */
+export interface HostNetworkSummary {
+  count: number /* int */;
+  builtIn: number /* int */;
+  stackOwned: number /* int */;
+  reclaimableCount: number /* int */;
+}
+export interface HostBuildCacheSummary {
+  count: number /* int */;
+  bytes: number /* int64 */;
+  reclaimableBytes: number /* int64 */;
+}
+/**
+ * HostCandidates is GET /resources/host/candidates's body: the items the
+ * Free-up-space dialog lists. Every slice is non-nil, so an empty category
+ * sends [] rather than null.
+ */
+export interface HostCandidates {
+  images: HostCandidateItem[];
+  buildCache: HostBuildCacheCandidates;
+  containers: HostCandidateItem[];
+  volumes: HostCandidateItem[];
+  networks: HostCandidateItem[];
+}
+/**
+ * HostCandidateItem is one removable object. Size is omitted when Docker did
+ * not report it, so an unknown size is never sent as a measured 0.
+ */
+export interface HostCandidateItem {
+  id: string;
+  label: string;
+  size?: number /* int64 */;
+  detail?: string;
+}
+/**
+ * HostBuildCacheCandidates: build cache is removed as a whole, not per record.
+ */
+export interface HostBuildCacheCandidates {
+  count: number /* int */;
+  bytes: number /* int64 */;
+}
+/**
  * DockerCleanupCandidate is one image a run would remove. Repository is empty
  * for the fully-untagged form; see danglingRepository.
  */

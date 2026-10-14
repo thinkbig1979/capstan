@@ -8,6 +8,8 @@ package services
 // tygo v0.2.21 filters by file, not by type (tygo/config.go, IsFileIgnored),
 // so a struct that is served as-is belongs here and anything else does not.
 
+import "time"
+
 // DiskUsageBreakdown is the per-category Docker disk usage served inside
 // GET /dashboard/stats's diskUsage field.
 type DiskUsageBreakdown struct {
@@ -20,6 +22,101 @@ type DiskUsageBreakdown struct {
 	// size as unavailable (-1 or no usage data). Volumes then sums only the
 	// known ones, so it is a floor, not a measurement.
 	VolumesSizeKnown bool `json:"volumesSizeKnown"`
+}
+
+// HostSummary is GET /resources/host/summary's body: per-category counts,
+// sizes and what can be freed, all from one DiskUsage snapshot (HostSpaceService).
+type HostSummary struct {
+	Disk       HostDiskSummary       `json:"disk"`
+	Containers HostContainerSummary  `json:"containers"`
+	Images     HostImageSummary      `json:"images"`
+	Volumes    HostVolumeSummary     `json:"volumes"`
+	Networks   HostNetworkSummary    `json:"networks"`
+	BuildCache HostBuildCacheSummary `json:"buildCache"`
+	MeasuredAt time.Time             `json:"measuredAt"`
+}
+
+// HostDiskSummary is the headline. Reclaimable is what one click on the
+// dialog's defaults frees (images, build cache, containers); ReclaimableAll
+// adds the volumes, which the dialog leaves unticked. InUse is Total minus
+// Reclaimable, floored at 0, so the two parts of the disk bar add up.
+type HostDiskSummary struct {
+	Total            int64 `json:"total"`
+	InUse            int64 `json:"inUse"`
+	Reclaimable      int64 `json:"reclaimable"`
+	ReclaimableAll   int64 `json:"reclaimableAll"`
+	VolumesSizeKnown bool  `json:"volumesSizeKnown"`
+}
+
+// HostContainerSummary: Stopped counts exited, created and dead containers, so
+// paused and restarting ones are in Count but in neither Running nor Stopped.
+type HostContainerSummary struct {
+	Count            int   `json:"count"`
+	Running          int   `json:"running"`
+	Stopped          int   `json:"stopped"`
+	ReclaimableCount int   `json:"reclaimableCount"`
+	ReclaimableBytes int64 `json:"reclaimableBytes"`
+}
+
+// HostImageSummary: Bytes is LayersSize (shared layers counted once);
+// ReclaimableBytes sums each candidate's Size minus SharedSize, a lower bound.
+type HostImageSummary struct {
+	Count            int   `json:"count"`
+	InUse            int   `json:"inUse"`
+	Bytes            int64 `json:"bytes"`
+	ReclaimableCount int   `json:"reclaimableCount"`
+	ReclaimableBytes int64 `json:"reclaimableBytes"`
+}
+
+// HostVolumeSummary: SizeKnown false means Bytes sums only the volumes whose
+// size Docker could compute, so it is a floor.
+type HostVolumeSummary struct {
+	Count            int   `json:"count"`
+	Attached         int   `json:"attached"`
+	Bytes            int64 `json:"bytes"`
+	SizeKnown        bool  `json:"sizeKnown"`
+	ReclaimableCount int   `json:"reclaimableCount"`
+	ReclaimableBytes int64 `json:"reclaimableBytes"`
+}
+
+// HostNetworkSummary has no sizes: networks use no disk.
+type HostNetworkSummary struct {
+	Count            int `json:"count"`
+	BuiltIn          int `json:"builtIn"`
+	StackOwned       int `json:"stackOwned"`
+	ReclaimableCount int `json:"reclaimableCount"`
+}
+
+type HostBuildCacheSummary struct {
+	Count            int   `json:"count"`
+	Bytes            int64 `json:"bytes"`
+	ReclaimableBytes int64 `json:"reclaimableBytes"`
+}
+
+// HostCandidates is GET /resources/host/candidates's body: the items the
+// Free-up-space dialog lists. Every slice is non-nil, so an empty category
+// sends [] rather than null.
+type HostCandidates struct {
+	Images     []HostCandidateItem      `json:"images"`
+	BuildCache HostBuildCacheCandidates `json:"buildCache"`
+	Containers []HostCandidateItem      `json:"containers"`
+	Volumes    []HostCandidateItem      `json:"volumes"`
+	Networks   []HostCandidateItem      `json:"networks"`
+}
+
+// HostCandidateItem is one removable object. Size is omitted when Docker did
+// not report it, so an unknown size is never sent as a measured 0.
+type HostCandidateItem struct {
+	ID     string `json:"id"`
+	Label  string `json:"label"`
+	Size   *int64 `json:"size,omitempty"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// HostBuildCacheCandidates: build cache is removed as a whole, not per record.
+type HostBuildCacheCandidates struct {
+	Count int   `json:"count"`
+	Bytes int64 `json:"bytes"`
 }
 
 // DockerCleanupCandidate is one image a run would remove. Repository is empty

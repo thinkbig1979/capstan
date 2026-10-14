@@ -288,6 +288,17 @@ Direct Docker resource management, independent of any stack.
 - `POST /api/v1/resources/networks/prune` — prune unused networks
 - `GET /api/v1/resources/build-cache` — inspect Docker build cache usage
 - `POST /api/v1/resources/build-cache/prune` — prune the build cache
+- `GET /api/v1/resources/host/summary` — per-category counts and sizes of what
+  Docker keeps on disk, and what can be freed. `disk.reclaimable` is what the
+  Free-up-space defaults remove (unused images, build cache, stopped containers
+  outside any compose project); `disk.reclaimableAll` adds unattached volumes.
+  Served from a snapshot up to 30 s old (`measuredAt`). Nothing a stack uses or
+  owns is counted as reclaimable, whether the stack is running or not. 503 when
+  Docker is unavailable, never a zeroed body
+- `GET /api/v1/resources/host/candidates` — the items behind those figures:
+  images, containers, volumes and networks as `{id, label, size?, detail?}`
+  lists, and build cache as `{count, bytes}`. Read fresh on every call. `size`
+  is omitted when Docker did not report it. Removes nothing
 - `GET /api/v1/resources/cleanup/policy` — the scheduled Docker cleanup policy,
   plus the server-enforced minimum image age the API will accept
 - `PUT /api/v1/resources/cleanup/policy` — enable or disable scheduled cleanup
