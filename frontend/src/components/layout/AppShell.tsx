@@ -4,6 +4,7 @@ import { Header } from './Header'
 import { useStackEvents } from '@/hooks/useStackEvents'
 import { useUpdateScanWatcher } from '@/hooks/useResources'
 import { CommandPalette } from '@/components/CommandPalette'
+import { HelpPanel } from '@/help/HelpPanel'
 import { DashboardMetricsProvider } from '@/components/layout/DashboardMetricsProvider'
 
 interface AppShellProps {
@@ -25,6 +26,7 @@ export function AppShell({ children }: AppShellProps) {
           <main className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-6">{children}</main>
         </div>
         <CommandPalette />
+        <HelpPanel />
       </div>
     </DashboardMetricsProvider>
   )
