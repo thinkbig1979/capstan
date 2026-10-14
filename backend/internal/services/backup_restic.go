@@ -302,6 +302,21 @@ func (m *ResticManager) unlockStale(ctx context.Context, env []string, out chan<
 	return timeoutError(ctx, m.runner.Run(ctx, "restic", []string{"unlock"}, env, out), "restic unlock")
 }
 
+// UnlockStale removes the stale locks in the repository (`restic unlock`,
+// never --remove-all: see runLocking). The caller holds Capstan's global
+// backup lock, so no Capstan-owned restic can be holding one of them.
+func (m *ResticManager) UnlockStale(ctx context.Context) error {
+	pwFile, cleanup, err := m.withPasswordFile()
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	ctx, cancel := withCommandDeadline(ctx, m.opDeadline(unlockTimeout))
+	defer cancel()
+	return timeoutError(ctx, runDrained(ctx, m.runner, "restic", []string{"unlock"}, m.resticEnv(pwFile)), "restic unlock")
+}
+
 // CheckRepository runs `restic snapshots --quiet` to verify the repository
 // is accessible. Returns nil on success.
 func (m *ResticManager) CheckRepository(ctx context.Context) error {
@@ -407,10 +422,19 @@ func (m *ResticManager) VerifyRepositoryData(ctx context.Context, subset string,
 }
 
 // EnsureRepository initialises the repository if it has not been initialised
-// yet. It first calls CheckRepository; if that fails it runs `restic init`.
+// yet. It first calls CheckRepository, and runs `restic init` only when that
+// reports exit 10, "repository does not exist". Any other failure means a
+// repository may exist (locked, wrong password, or unreadable), so it is
+// returned instead of initialising over it (agent-os-joz7).
 func (m *ResticManager) EnsureRepository(ctx context.Context) error {
-	if err := m.CheckRepository(ctx); err == nil {
+	checkErr := m.CheckRepository(ctx)
+	switch {
+	case checkErr == nil:
 		return nil // already initialised
+	case isExitCode(checkErr, resticExitRepoLocked):
+		return fmt.Errorf("not initialising: the repository exists and is locked by another restic process: %w", checkErr)
+	case !isExitCode(checkErr, resticExitRepoDoesNotExist):
+		return fmt.Errorf("not initialising: the repository check failed for a reason other than a missing repository: %w", checkErr)
 	}
 
 	m.logger.Info("Initialising restic repository", "path", RedactURLUserinfo(m.cfg.ResticRepository))
