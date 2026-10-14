@@ -128,6 +128,48 @@ This is also why `backend.yml` and `frontend.yml` carry no `paths:` filters. A
 path-filtered workflow does not report a required check at all on an unrelated
 PR, which leaves it pending forever rather than passing.
 
+### ECR Public login
+
+CI pulls its base images from `public.ecr.aws`. Anonymous pulls share a per-IP
+data cap, and GitHub-hosted runners share IPs, so on a busy day a job fails with
+`toomanyrequests: Data limit exceeded` with nothing under test wrong. The four
+jobs that pull (`security.yml` image scan, `docker-publish.yml`,
+`integration.yml`, `e2e-backup.yml` backup-flow) therefore run
+`scripts/ecr-public-login.sh` before their first pull, which logs the runner's
+Docker client in to ECR Public with an AWS key.
+
+The step needs two repository secrets, set once under Settings, Secrets and
+variables, Actions:
+
+| Secret | Value |
+| --- | --- |
+| `AWS_ECR_PUBLIC_ACCESS_KEY_ID` | access key id of an IAM user with only the policy below |
+| `AWS_ECR_PUBLIC_SECRET_ACCESS_KEY` | that user's secret access key |
+
+The IAM user needs no console access and one inline policy (ECR Public's API
+exists only in `us-east-1`; the script sets the region itself):
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["ecr-public:GetAuthorizationToken", "sts:GetServiceBearerToken"],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+Without the secrets the step logs `no credentials ... pulling anonymously` and
+the job carries on exactly as before. That is the case for pull requests from
+forks, which GitHub gives no secrets. A rejected key or a failed login also only
+warns. To confirm authenticated pulls on a run, look for
+`ecr-public-login: logged in to public.ecr.aws` in the step's log.
+`scripts/check-dockerhub-pulls.sh` fails the Docs gate when a job pulls from
+`public.ecr.aws` without that step before its first pull.
+
 ## Versioning
 
 Capstan follows [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`),

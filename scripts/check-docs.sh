@@ -1444,6 +1444,22 @@ check_dockerhub_pulls() {
     return 1
   fi
 
+  # The ECR Public login script the check requires jobs to run (rule 2e) has
+  # its own self-test; a login that fails closed or leaks the token would
+  # defeat what the check enforces (agent-os-rcbn).
+  local login="$SCRIPT_DIR/ecr-public-login.sh" login_self
+  if [ ! -f "$login" ]; then
+    echo "FAIL: dockerhub-pulls - $login not found"
+    return 1
+  fi
+  login_self=$(bash "$login" --self-test 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: dockerhub-pulls - scripts/ecr-public-login.sh --self-test failed:"
+    echo "$login_self"
+    return 1
+  fi
+
   local out
   out=$(bash "$script" 2>&1)
   status=$?
