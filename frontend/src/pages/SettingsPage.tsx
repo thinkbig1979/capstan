@@ -208,7 +208,7 @@ export function SettingsPage() {
             <Shield className="h-5 w-5 text-info" />
             <div>
               <p className="text-sm font-medium text-info">Authentication is disabled</p>
-              <p className="text-sm text-info/80">
+              <p className="text-sm text-info">
                 Account security settings are not available because authentication is disabled.
                 Enable authentication to manage account settings.
               </p>

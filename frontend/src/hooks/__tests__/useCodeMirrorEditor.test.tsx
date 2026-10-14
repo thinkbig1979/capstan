@@ -4,11 +4,18 @@ import { useRef } from 'react'
 
 const dispatchMock = vi.fn()
 let createdDocs: string[] = []
+let contentAttrs: Array<Record<string, string>> = []
 
 vi.mock('codemirror', () => {
   class MockEditorView {
     static theme = () => []
     static updateListener = { of: () => [] }
+    static contentAttributes = {
+      of: (attrs: Record<string, string>) => {
+        contentAttrs.push(attrs)
+        return []
+      },
+    }
     _doc: string
     constructor(opts: { state: { doc: { toString: () => string } } }) {
       this._doc = opts.state.doc.toString()
@@ -49,6 +56,7 @@ vi.mock('@codemirror/view', () => ({
   EditorView: class {
     static theme = () => []
     static updateListener = { of: () => [] }
+    static contentAttributes = { of: () => [] }
   },
   keymap: { of: () => [] },
 }))
@@ -64,18 +72,19 @@ vi.mock('@/stores/uiStore', () => ({
 
 import { useCodeMirrorEditor } from '../useCodeMirrorEditor'
 
-function useHarness(doc: string) {
+function useHarness(doc: string, ariaLabel?: string) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   if (containerRef.current === null) {
     containerRef.current = document.createElement('div')
   }
-  return useCodeMirrorEditor(containerRef, { doc, deps: ['stack-1'] })
+  return useCodeMirrorEditor(containerRef, { doc, ariaLabel, deps: ['stack-1'] })
 }
 
 describe('useCodeMirrorEditor', () => {
   beforeEach(() => {
     dispatchMock.mockClear()
     createdDocs = []
+    contentAttrs = []
   })
 
   it('reactively syncs doc into the editor when it changes after mount', () => {
@@ -112,5 +121,16 @@ describe('useCodeMirrorEditor', () => {
     })
 
     expect(dispatchMock).not.toHaveBeenCalled()
+  })
+
+  // axe aria-input-field-name: CodeMirror's contenteditable has no accessible
+  // name unless the caller supplies one.
+  it('names the editor textbox, with a default and a caller override', () => {
+    renderHook(() => useHarness(''))
+    expect(contentAttrs).toEqual([{ 'aria-label': 'Code editor' }])
+
+    contentAttrs = []
+    renderHook(() => useHarness('', 'Compose file editor'))
+    expect(contentAttrs).toEqual([{ 'aria-label': 'Compose file editor' }])
   })
 })
