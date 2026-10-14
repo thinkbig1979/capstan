@@ -19,6 +19,35 @@ type RcloneManager struct {
 	cfg    BackupConfig
 	runner commandRunner
 	logger *slog.Logger
+
+	// testDeadlineCap, when non-zero, shortens every rclone operation's
+	// deadline so a test can watch one expire. Production never sets it.
+	testDeadlineCap time.Duration
+}
+
+// rcloneProbeTimeout bounds the short rclone listings: the connectivity test
+// and the two single-path probes run before a sync or a DR restore.
+const rcloneProbeTimeout = 60 * time.Second
+
+// syncTimeout and restoreRepoTimeout bound one Sync and one RestoreRepo, the
+// retry loop and its backoff waits included. Both run while the global backup
+// lock is held, so a hung rclone would otherwise block every later backup
+// until the server restarts (agent-os-4ex6). They match restic's
+// backupTimeout and restoreTimeout. A run killed at the bound loses no
+// progress: rclone sync skips files the destination already holds, so the
+// next run continues where this one stopped.
+const (
+	syncTimeout        = 4 * time.Hour
+	restoreRepoTimeout = 4 * time.Hour
+)
+
+// opDeadline returns timeout, or testDeadlineCap when a test set a shorter
+// one.
+func (m *RcloneManager) opDeadline(timeout time.Duration) time.Duration {
+	if m.testDeadlineCap > 0 && m.testDeadlineCap < timeout {
+		return m.testDeadlineCap
+	}
+	return timeout
 }
 
 // NewRcloneManager creates an RcloneManager using the real exec-based runner.
@@ -62,7 +91,7 @@ func (m *RcloneManager) TestConnectivity(ctx context.Context, remote string) err
 		return fmt.Errorf("rclone remote is not configured")
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	ctx, cancel := withCommandDeadline(ctx, m.opDeadline(rcloneProbeTimeout))
 	defer cancel()
 
 	// Every rclone call in this file puts "--" before its positionals, with
@@ -73,7 +102,7 @@ func (m *RcloneManager) TestConnectivity(ctx context.Context, remote string) err
 	args := []string{"lsd", "--max-depth", "1", "--", remote + ":"}
 
 	if err := runDrained(ctx, m.runner, "rclone", args, nil); err != nil {
-		return fmt.Errorf("cannot connect to remote %q: %w", remote, err)
+		return fmt.Errorf("cannot connect to remote %q: %w", remote, timeoutError(ctx, err, "rclone lsd"))
 	}
 	return nil
 }
@@ -273,10 +302,18 @@ func (m *RcloneManager) Sync(ctx context.Context, repoPath, remote, path string,
 	args = append(args, "--max-delete", strconv.Itoa(limit))
 	args = append(args, "--", repoPath, destination)
 
+	// One deadline over every attempt and backoff wait: the caller holds the
+	// global backup lock for all of them.
+	ctx, cancel := withCommandDeadline(ctx, m.opDeadline(syncTimeout))
+	defer cancel()
+
 	var lastErr error
 	for attempt := 1; attempt <= retries; attempt++ {
 		m.logger.Info("Sync attempt", "attempt", attempt, "of", retries)
 		if err := m.runner.Run(ctx, "rclone", args, nil, out); err != nil {
+			if commandTimedOut(ctx) {
+				return timeoutError(ctx, err, "rclone sync")
+			}
 			if isExitCode(err, 7) {
 				return fmt.Errorf("rclone sync stopped on a fatal error and was not retried (exit 7; the --max-delete %d backstop stops a sync this way when the remote changed after the pre-flight count, see the run log): %w", limit, err)
 			}
@@ -287,7 +324,7 @@ func (m *RcloneManager) Sync(ctx context.Context, repoPath, remote, path string,
 				m.logger.Info("Waiting before retry", "wait", wait)
 				select {
 				case <-ctx.Done():
-					return ctx.Err()
+					return timeoutError(ctx, ctx.Err(), "rclone sync")
 				case <-time.After(wait):
 				}
 			}
@@ -379,12 +416,12 @@ func (m *RcloneManager) probeRestoreSource(ctx context.Context, remote, path str
 	}
 	target := fmt.Sprintf("%s:%s", remote, configPath)
 
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	ctx, cancel := withCommandDeadline(ctx, m.opDeadline(rcloneProbeTimeout))
 	defer cancel()
 
 	raw, err := m.runner.Output(ctx, "rclone", []string{"lsf", "--", target}, nil)
 	if err != nil {
-		return fmt.Errorf("refusing DR restore: %s does not look like a restic repository (no config object found): %w", target, err)
+		return fmt.Errorf("refusing DR restore: %s does not look like a restic repository (no config object found): %w", target, timeoutError(ctx, err, "rclone lsf"))
 	}
 	if got := strings.TrimSpace(string(raw)); got != "config" {
 		return fmt.Errorf("refusing DR restore: %s does not look like a restic repository (expected to list exactly \"config\", got %q)", target, got)
@@ -447,7 +484,7 @@ func (m *RcloneManager) remoteHasSnapshots(ctx context.Context, remote, path str
 	}
 	target := fmt.Sprintf("%s:%s", remote, snapshotsPath)
 
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	ctx, cancel := withCommandDeadline(ctx, m.opDeadline(rcloneProbeTimeout))
 	defer cancel()
 
 	raw, err := m.runner.Output(ctx, "rclone", []string{"lsf", "--", target}, nil)
@@ -459,7 +496,7 @@ func (m *RcloneManager) remoteHasSnapshots(ctx context.Context, remote, path str
 			// failure to refuse on.
 			return false, nil
 		}
-		return false, fmt.Errorf("could not list %s to check for existing snapshots: %w", target, err)
+		return false, fmt.Errorf("could not list %s to check for existing snapshots: %w", target, timeoutError(ctx, err, "rclone lsf"))
 	}
 	return len(strings.TrimSpace(string(raw))) > 0, nil
 }
@@ -550,17 +587,24 @@ func (m *RcloneManager) RestoreRepo(ctx context.Context, remote, path, localPath
 	}
 	args = append(args, "--", source, localPath)
 
+	// One deadline over every attempt and backoff wait, as in Sync.
+	ctx, cancel := withCommandDeadline(ctx, m.opDeadline(restoreRepoTimeout))
+	defer cancel()
+
 	var lastErr error
 	for attempt := 1; attempt <= retries; attempt++ {
 		m.logger.Info("Restore attempt", "attempt", attempt, "of", retries)
 		if err := m.runner.Run(ctx, "rclone", args, nil, out); err != nil {
+			if commandTimedOut(ctx) {
+				return timeoutError(ctx, err, "rclone sync")
+			}
 			lastErr = err
 			m.logger.Warn("Restore attempt failed", "attempt", attempt, "error", err)
 			if attempt < retries {
 				wait := time.Duration(attempt*30) * time.Second
 				select {
 				case <-ctx.Done():
-					return ctx.Err()
+					return timeoutError(ctx, ctx.Err(), "rclone sync")
 				case <-time.After(wait):
 				}
 			}

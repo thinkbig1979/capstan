@@ -26,15 +26,10 @@ var childRunHelpers = map[string]bool{"runLocking": true, "runDrained": true}
 
 // deadlinePending names functions that start a child process without
 // withCommandDeadline + timeoutError and are tracked for conversion by a
-// follow-up bead (the rclone layer). The guard fails when an entry is
-// converted or removed, so the list only shrinks.
-var deadlinePending = map[string]bool{
-	"TestConnectivity":   true,
-	"probeRestoreSource": true,
-	"remoteHasSnapshots": true,
-	"Sync":               true,
-	"RestoreRepo":        true,
-}
+// follow-up bead. The guard fails when an entry is converted or removed, so
+// the list only shrinks. Empty since the rclone layer moved on
+// (agent-os-4ex6).
+var deadlinePending = map[string]bool{}
 
 // startsChild reports whether call runs a child process through the
 // command runner: <anything>.runner.Run/Output or runner.Run/Output (the
@@ -141,6 +136,7 @@ func TestChildProcessCallsRunUnderACommandDeadline(t *testing.T) {
 	for _, want := range []string{
 		"CheckRepository", "EnsureRepository", "Backup", "Restore", "ListSnapshots", "RestorePreview", "Stats",
 		"Verify", "VerifyRepositoryData", "ApplyRetention", "Prune", "unlockStale",
+		"TestConnectivity", "probeRestoreSource", "remoteHasSnapshots", "Sync", "RestoreRepo", "syncPreflight",
 	} {
 		assert.True(t, found[want], "guard did not see %s start a child: its call detection is blind", want)
 	}
