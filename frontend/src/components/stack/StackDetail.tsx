@@ -1,6 +1,7 @@
 import { Suspense, lazy } from 'react'
 import { Tabs, TabsContent } from '@/components/ui/tabs'
 import { ResponsiveTabsList } from '@/components/ui/responsive-tabs-list'
+import { STACK_TABS, type StackTab } from '@/lib/app-views'
 import { ContainerList } from './ContainerList'
 import { ComposeEnvSplit } from './ComposeEnvSplit'
 import { TerminalComponent } from './Terminal'
@@ -155,6 +156,15 @@ function OverviewTabContent({
   )
 }
 
+const STACK_TAB_LABELS: Record<StackTab, string> = {
+  overview: 'Overview',
+  editor: 'Editor',
+  logs: 'Logs',
+  terminal: 'Terminal',
+  metrics: 'Metrics',
+  activity: 'Activity',
+}
+
 export function StackDetail({ stack, activeTab, onTabChange }: StackDetailProps) {
   // Service-row deep links (Logs / Shell) carry the target container in
   // ?container=; the tab content picks it up as its initial selection.
@@ -168,14 +178,7 @@ export function StackDetail({ stack, activeTab, onTabChange }: StackDetailProps)
           value={activeTab}
           onValueChange={onTabChange}
           variant="line"
-          tabs={[
-            { value: 'overview', label: 'Overview' },
-            { value: 'editor', label: 'Editor' },
-            { value: 'logs', label: 'Logs' },
-            { value: 'terminal', label: 'Terminal' },
-            { value: 'metrics', label: 'Metrics' },
-            { value: 'activity', label: 'Activity' },
-          ]}
+          tabs={STACK_TABS.map((value) => ({ value, label: STACK_TAB_LABELS[value] }))}
         />
 
         <TabsContent value="overview" className="mt-4">

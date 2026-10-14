@@ -32,9 +32,10 @@ import { DirectoriesSettingsContent } from '@/components/settings/DirectoriesSet
 import { AuditLogContent } from '@/components/settings/AuditLogContent'
 import { GlobalEnvSettingsContent } from '@/components/settings/GlobalEnvSettingsContent'
 import { DockerCleanupCard } from '@/components/settings/DockerCleanupCard'
+import type { SettingsSectionId } from '@/lib/app-views'
 
 interface SettingsSection {
-  id: string
+  id: SettingsSectionId
   title: string
   description: string
   Icon: LucideIcon
@@ -109,7 +110,7 @@ const ALL_SECTIONS: SettingsSection[] = [
 ]
 
 // Sidebar grouping. Each group lists section ids in display order.
-const GROUPS: { label: string; ids: string[] }[] = [
+const GROUPS: { label: string; ids: SettingsSectionId[] }[] = [
   { label: 'Account', ids: ['account-security', 'appearance'] },
   { label: 'Stacks', ids: ['directories', 'global-env', 'git'] },
   { label: 'Automation', ids: ['update-schedule', 'backup', 'docker-cleanup'] },
