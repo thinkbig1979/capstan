@@ -24,6 +24,7 @@ function isOneOf<T extends string>(values: readonly T[], value: string): value i
  * dashboard tab maps to stacks; an unknown stack tab renders no tab content,
  * so it has no topic (null, the panel shows the guide index).
  */
+/** @knipignore exported for help/__tests__/page-context.test.ts, which tests the mapping without a router; used in-file by usePageHelpContext */
 export function pageContextFor(pathname: string, search: string): PageContextKey | null {
   const segments = pathname.split('/').filter(Boolean)
 

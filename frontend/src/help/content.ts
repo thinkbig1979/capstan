@@ -1,8 +1,8 @@
 import { slugify } from './slug'
 
-export type HelpGroup = 'start' | 'help' | 'how-to' | 'reference' | 'explanation'
+type HelpGroup = 'start' | 'help' | 'how-to' | 'reference' | 'explanation'
 
-export interface HelpSection {
+interface HelpSection {
   docId: string
   /** slugify(heading); the in-app and Docs CI anchor. */
   anchor: string
@@ -33,6 +33,8 @@ const FENCE = /^ {0,3}(`{3,}|~{3,})/
 const HEADING = /^ {0,3}(#{1,6})[ \t]+(.*?)[ \t]*$/
 
 /**
+ * @knipignore exported for help/__tests__/content.test.ts, which feeds it fixture markdown; used in-file by buildHelpLibrary
+ *
  * Parse one bundled doc. `path` is the glob key ("../../../docs/how-to/x.md").
  * Headings inside ``` or ~~~ fences are code (shell comments), not headings.
  * A fence closes only on the same character at least as long, per CommonMark.
@@ -87,6 +89,7 @@ export function parseHelpDoc(path: string, markdown: string): HelpDoc {
   return { id, title, group, markdown, sections }
 }
 
+/** @knipignore exported for help/__tests__/content.test.ts (empty-glob fail-closed case); used in-file by loadHelpLibrary */
 export function buildHelpLibrary(raw: Record<string, string>): HelpDoc[] {
   const docs = Object.entries(raw).map(([path, markdown]) => parseHelpDoc(path, markdown))
   // Fail closed: an empty glob means the build could not see docs/.

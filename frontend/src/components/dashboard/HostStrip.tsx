@@ -2,8 +2,6 @@ import { formatBytes } from '@/lib/format'
 import type { DashboardStats } from '@/types'
 import { HOST_VIEWS, type HostView } from '@/lib/app-views'
 
-export type { HostView }
-
 const UNAVAILABLE = 'unavailable'
 
 interface HostStripProps {
