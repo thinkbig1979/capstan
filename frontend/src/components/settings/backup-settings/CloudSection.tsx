@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { NumericField } from '../NumericField'
@@ -7,6 +8,7 @@ import { HelpHint } from '@/components/ui/help-hint'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import type { SyncPreflightResponse } from '@/types'
 import type { Draft } from './types'
+import { DrRestoreDialog } from './DrRestoreDialog'
 
 interface CloudSectionProps {
   draft: Draft
@@ -22,12 +24,31 @@ interface CloudSectionProps {
   pendingLargeDelete: SyncPreflightResponse | null
   onConfirmLargeDelete: () => void
   onLargeDeleteOpenChange: (open: boolean) => void
+  onDrRestore: () => void
+  isRestoring: boolean
+  /** The status query reports a backup operation in flight. The server's 409 stays the real guard. */
+  backupRunning: boolean
+  /** The saved local repository path, named in the restore confirmation. */
+  repository: string
 }
 
 function syncBlockedReason(rcloneAvailable: boolean, remote: string, isDirty: boolean): string | undefined {
   if (!rcloneAvailable) return 'rclone not available'
   if (!remote) return 'Set and save a remote first'
   if (isDirty) return 'Save your changes first: a sync uses the saved settings'
+  return undefined
+}
+
+// A DR restore runs on the SAVED settings, like a sync, and holds the global
+// backup lock, so it is blocked while a backup operation runs.
+function restoreBlockedReason(
+  rcloneAvailable: boolean,
+  isDirty: boolean,
+  backupRunning: boolean,
+): string | undefined {
+  if (!rcloneAvailable) return 'rclone not available'
+  if (isDirty) return 'Save your changes first: a restore uses the saved settings'
+  if (backupRunning) return 'A backup operation is running'
   return undefined
 }
 
@@ -43,8 +64,14 @@ export function CloudSection({
   pendingLargeDelete,
   onConfirmLargeDelete,
   onLargeDeleteOpenChange,
+  onDrRestore,
+  isRestoring,
+  backupRunning,
+  repository,
 }: CloudSectionProps) {
   const syncBlocked = syncBlockedReason(rcloneAvailable, draft.rcloneRemote, isDirty)
+  const restoreBlocked = restoreBlockedReason(rcloneAvailable, isDirty, backupRunning)
+  const [restoreOpen, setRestoreOpen] = useState(false)
   return (
     <div className="space-y-4 pt-4 border-t">
       <div className="flex items-center gap-1.5">
@@ -147,6 +174,37 @@ export function CloudSection({
           'Sync now'
         )}
       </Button>
+
+      {draft.rcloneRemote && (
+        <>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="ml-2 text-destructive hover:text-destructive"
+            onClick={() => setRestoreOpen(true)}
+            disabled={isRestoring || restoreBlocked !== undefined}
+            title={restoreBlocked}
+          >
+            {isRestoring ? (
+              <>
+                <span className="mr-2"><LoadingSpinner size="small" /></span>
+                Restoring…
+              </>
+            ) : (
+              'Restore repository from remote'
+            )}
+          </Button>
+          <DrRestoreDialog
+            open={restoreOpen}
+            onOpenChange={setRestoreOpen}
+            remote={draft.rcloneRemote}
+            path={draft.rclonePath}
+            repository={repository}
+            onConfirm={onDrRestore}
+          />
+        </>
+      )}
 
       <ConfirmDialog
         open={pendingLargeDelete !== null}

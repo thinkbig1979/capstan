@@ -311,6 +311,11 @@ and **Path on remote** is the folder inside it.
 - **Sync on demand:** use **Sync now**.
 - **Sync automatically:** turn on **Sync to cloud after each backup** in the Backup
   schedule block.
+- **Pull the repository back from the remote:** use **Restore repository from
+  remote** when the local repository is lost or damaged. You type the remote name to
+  confirm. Local-only files go to a `.pre-dr-<time>` folder next to the repository,
+  and it does not restore the database or stacks. See
+  [Restoring a backup](../how-to/restore-a-backup.md#disaster-recovery).
 
 **Gotchas**
 

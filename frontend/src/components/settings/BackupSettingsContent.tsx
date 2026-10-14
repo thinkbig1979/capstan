@@ -5,7 +5,7 @@ import { EnvUnlockDialog } from '@/components/EnvUnlockDialog'
 import { EnvUnlockStatus } from '@/components/EnvUnlockStatus'
 import { useEnvUnlockStore } from '@/stores/envUnlockStore'
 import { useAuth } from '@/hooks/useAuth'
-import { useBackupSettings } from '@/hooks/useBackup'
+import { useBackupSettings, useBackupStatus } from '@/hooks/useBackup'
 import { classifyError } from '@/lib/error-handler'
 import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 import { CloudSection } from './backup-settings/CloudSection'
@@ -20,6 +20,8 @@ import { usePasswordReveal } from './backup-settings/usePasswordReveal'
 
 export function BackupSettingsContent() {
   const { data: settings, isPending, isError, error, refetch } = useBackupSettings()
+  // Shares BackupStatusCard's query. A running run is always lastRun (newest of any kind).
+  const { data: backupStatus } = useBackupStatus()
   const { authDisabled } = useAuth()
   const isUnlocked = useEnvUnlockStore((s) => s.isUnlocked)
   const unlockedUntil = useEnvUnlockStore((s) => s.unlockedUntil)
@@ -55,6 +57,8 @@ export function BackupSettingsContent() {
     pendingLargeDelete,
     handleConfirmLargeDelete,
     handleLargeDeleteOpenChange,
+    handleDrRestore,
+    isRestoring,
   } = useBackupActions()
 
   // isPending, not isLoading: offline the first fetch is paused, isLoading is false
@@ -146,6 +150,10 @@ export function BackupSettingsContent() {
         pendingLargeDelete={pendingLargeDelete}
         onConfirmLargeDelete={handleConfirmLargeDelete}
         onLargeDeleteOpenChange={handleLargeDeleteOpenChange}
+        onDrRestore={handleDrRestore}
+        isRestoring={isRestoring}
+        backupRunning={backupStatus?.lastRun?.status === 'running'}
+        repository={settings.repository}
       />
 
       {/* Directly above the save control, not a transient toast: the operator is

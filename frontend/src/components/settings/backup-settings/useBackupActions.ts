@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { presentError, presentFault, toastInvalid } from '@/lib/error-handler'
-import { useInitRepo, useRunSync, useSyncPreflight, useTestCloud } from '@/hooks/useBackup'
+import { useInitRepo, useRunDRRestore, useRunSync, useSyncPreflight, useTestCloud } from '@/hooks/useBackup'
 import { repoFaultFrom } from '@/lib/backup-repo-fault'
 import { messageOrNull } from '@/lib/narrow'
 import type { SyncPreflightResponse } from '@/types'
@@ -45,6 +45,7 @@ export function useBackupActions() {
   const testCloud = useTestCloud()
   const syncPreflight = useSyncPreflight()
   const runSync = useRunSync()
+  const runDRRestore = useRunDRRestore()
   // The pre-flight answer awaiting the operator's confirmation, or null when
   // no confirmation is open. It ends when the dialog closes either way.
   const [pendingLargeDelete, setPendingLargeDelete] = useState<SyncPreflightResponse | null>(null)
@@ -192,6 +193,15 @@ export function useBackupActions() {
     })
   }
 
+  // The operator has already confirmed in DrRestoreDialog. 202 means the run
+  // STARTED; whether the repository opened afterwards lands in the history.
+  const handleDrRestore = () => {
+    runDRRestore.mutate(undefined, {
+      onSuccess: () => toast.success('Restore started', { description: 'The result appears in the backup history.' }),
+      onError: (error) => presentSyncError(error, 'Restore could not be started'),
+    })
+  }
+
   const handleConfirmLargeDelete = () => {
     if (pendingLargeDelete) startSync(pendingLargeDelete.remoteOnly)
   }
@@ -206,6 +216,8 @@ export function useBackupActions() {
     pendingLargeDelete,
     handleConfirmLargeDelete,
     handleLargeDeleteOpenChange,
+    handleDrRestore,
+    isRestoring: runDRRestore.isPending,
     handleInitRepo,
     isInitializing: initRepo.isPending,
     handleTestCloud,

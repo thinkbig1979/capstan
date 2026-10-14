@@ -110,10 +110,20 @@ which reads like a broken remote rather than a config it never opened.
 capstan-tools 'rclone sync <remote>:<path> /app/data/restic-repo --stats-one-line'
 ```
 
-`<remote>:<path>` are exactly the values shown in Settings → Backup. This is
-what the API's `POST /api/v1/backups/dr-restore` endpoint does (the UI has no
-button for it); doing it by hand keeps step 1's "container stopped" rule
-intact.
+`<remote>:<path>` are exactly the values shown in Settings → Backup.
+
+Settings → Backup → Cloud also has **Restore repository from remote**, which
+pulls the same repository. Use it when Capstan still runs and only the local
+repository is lost or damaged. It needs a saved remote, asks you to type the
+remote name, and runs in the background. Files that exist only locally, or that
+the remote copy would replace, are moved to `<repository>.pre-dr-<time>` next to
+the repository instead of being deleted, and Capstan never removes that folder.
+Afterwards it checks that the repository opens with the saved password. It does
+not restore the database or your stacks, so steps 3 onward still apply.
+
+On a fresh instance, use the command above instead. It keeps step 1's
+"container stopped" rule intact, and the button needs a working Capstan with the
+remote already saved.
 
 If the remote is a local-filesystem one, add its bind mount to the alias too —
 the path is resolved inside the container.
