@@ -23,7 +23,7 @@
   --muted-foreground: #4E6675;
   --accent: #E3EBE8;
   --accent-foreground: #15242C;
-  --destructive: #C13B33;
+  --destructive: #A62D27;
   --destructive-foreground: #FFFFFF;
   --success: #126B44;
   --success-foreground: #FFFFFF;
@@ -89,8 +89,8 @@
   --muted-foreground: #8AA0B0;
   --accent: #16283A;
   --accent-foreground: #D9E4EC;
-  --destructive: #E5544B;
-  --destructive-foreground: #FFFFFF;
+  --destructive: #F07068;
+  --destructive-foreground: #2A0A07;
   --success: #45C48A;
   --success-foreground: #0B141C;
   --warning: #E4A93C;

@@ -22,7 +22,7 @@ export function EngineAvailabilityBanner({ resticAvailable, rcloneAvailable }: E
             rclone binary not found — cloud sync is disabled
           </p>
         )}
-        <p className="text-xs text-destructive/80">
+        <p className="text-xs text-destructive">
           Install the missing binaries inside the container and restart Capstan.
         </p>
       </div>
