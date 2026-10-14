@@ -36,6 +36,15 @@
  * which never gets RateLimitAuth, so logging out costs nothing against the
  * budget no matter how many times this spec does it.
  *
+ * ACCESSIBILITY SCANS (agent-os-25k4): the /setup page is scanned by the describe
+ * BEFORE the serial block and the /login page by the describe AFTER it, because
+ * this job's backend is virgin only until AUTH-PW-SESSION-001 creates the one
+ * account (setup) and /login only renders once that account exists. They are
+ * separate describes so a scan failure cannot skip the serial block's tests.
+ * They only read: no POST /auth/setup or /auth/login, so the auth-bucket budget
+ * above is untouched. The a11y.spec.ts matrix cannot reach these pages (it runs
+ * against AUTH_DISABLED=true), so this is where they are covered.
+ *
  * Serial + single shared browser context: tests share one server-side
  * session by design (there is only ever one account — no user-management
  * routes exist), and AUTH-PW-SESSION-005 specifically needs the SAME
@@ -47,7 +56,8 @@
  * instead of the injected `page` fixture.
  */
 
-import { test, expect, type Page, type BrowserContext } from 'playwright/test'
+import { test, expect, type Page, type BrowserContext, type Browser } from 'playwright/test'
+import { classify, describeFindings, runAxe, type Scheme } from './helpers/axe-scan'
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -75,6 +85,60 @@ let sharedPage: Page
 function authHeaders(): Record<string, string> {
   return { Authorization: `Bearer ${bearerToken}` }
 }
+
+// ─── Accessibility scans (login and setup pages) ─────────────────────────────
+
+const A11Y_CONFIGS: Array<{ label: string; scheme: Scheme; viewport: { width: number; height: number } }> = [
+  { label: 'light-1280', scheme: 'light', viewport: { width: 1280, height: 720 } },
+  { label: 'dark-1280', scheme: 'dark', viewport: { width: 1280, height: 720 } },
+  { label: 'light-375', scheme: 'light', viewport: { width: 375, height: 812 } },
+  { label: 'dark-375', scheme: 'dark', viewport: { width: 375, height: 812 } },
+]
+
+/**
+ * Opens `path` in a fresh, cookie-less context and returns the blocking axe
+ * findings. The page is ready when its form is visible and the theme class on
+ * <html> matches the scheme asked for (uiStore.ts applies it after mount), so
+ * the scan never races the theme and there is no fixed sleep.
+ */
+async function scanAuthPage(
+  browser: Browser,
+  path: '/setup' | '/login',
+  cfg: (typeof A11Y_CONFIGS)[number],
+): Promise<string> {
+  const context = await browser.newContext({ colorScheme: cfg.scheme, viewport: cfg.viewport })
+  try {
+    const page = await context.newPage()
+    await page.goto(`${BASE_URL}${path}`)
+    await page.waitForURL((u) => u.pathname === path, { timeout: 15_000 })
+    await expect(page.locator('form')).toBeVisible()
+    const html = page.locator('html')
+    if (cfg.scheme === 'dark') await expect(html).toHaveClass(/\bdark\b/)
+    else await expect(html).not.toHaveClass(/\bdark\b/)
+    const { blocking, other } = classify(await runAxe(page), path, cfg.scheme)
+    for (const o of other) test.info().annotations.push({ type: 'non-blocking', description: o })
+    return blocking.length === 0
+      ? ''
+      : `${blocking.length} critical/serious violation(s) on ${path} (${cfg.label}):\n` +
+          describeFindings(blocking)
+  } finally {
+    await context.close()
+  }
+}
+
+// Declared BEFORE the serial block: the backend is virgin (needsSetup:true) only
+// until AUTH-PW-SESSION-001 runs, and /setup is unreachable afterwards.
+test.describe('Auth pages a11y: setup (virgin backend)', () => {
+  for (const cfg of A11Y_CONFIGS) {
+    test(`AUTH-PW-A11Y-SETUP-${cfg.label}: the setup page has no critical or serious axe violation`, async ({
+      browser,
+    }) => {
+      const status = await (await fetch(`${API_URL}/api/v1/auth/status`)).json()
+      expect(status.needsSetup, 'the setup page only renders on a virgin backend').toBe(true)
+      expect(await scanAuthPage(browser, '/setup', cfg)).toBe('')
+    })
+  }
+})
 
 // ─── Suite ───────────────────────────────────────────────────────────────────
 
@@ -469,4 +533,18 @@ test.describe('Auth session E2E', () => {
     await sharedPage.waitForURL((u) => u.pathname === '/login', { timeout: 15_000 })
     expect(new URL(sharedPage.url()).pathname).toBe('/login')
   })
+})
+
+// Declared AFTER the serial block: /login renders only once the account exists
+// (AUTH-PW-SESSION-001) and a fresh context here carries no cookie.
+test.describe('Auth pages a11y: login (account exists, signed out)', () => {
+  for (const cfg of A11Y_CONFIGS) {
+    test(`AUTH-PW-A11Y-LOGIN-${cfg.label}: the login page has no critical or serious axe violation`, async ({
+      browser,
+    }) => {
+      const status = await (await fetch(`${API_URL}/api/v1/auth/status`)).json()
+      expect(status.needsSetup, 'the login page only renders after the account exists').toBe(false)
+      expect(await scanAuthPage(browser, '/login', cfg)).toBe('')
+    })
+  }
 })

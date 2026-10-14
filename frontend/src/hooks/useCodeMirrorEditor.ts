@@ -22,7 +22,7 @@ import { EditorView, basicSetup } from 'codemirror'
 import { Compartment, EditorState, type Extension } from '@codemirror/state'
 import { yaml } from '@codemirror/lang-yaml'
 import { oneDark } from '@codemirror/theme-one-dark'
-import { keymap } from '@codemirror/view'
+import { keymap, ViewPlugin } from '@codemirror/view'
 import { search } from '@codemirror/search'
 import { autocompletion } from '@codemirror/autocomplete'
 import { useUIStore } from '@/stores/uiStore'
@@ -37,6 +37,16 @@ interface UseCodeMirrorEditorOptions {
   ariaLabel?: string
   deps?: React.DependencyList
 }
+
+// CodeMirror 6 creates its scroller with tabindex="-1" (@codemirror/view 6.43.13
+// and 6.43.14, dist/index.js `this.scrollDOM.tabIndex = -1`), which axe reports as
+// scrollable-region-focusable (serious). Making the scroller a tab stop is axe's
+// own remedy; the cost is one extra Tab stop before the editor content
+// (agent-os-25k4, F2). Measured: tabIndex = 0 on `.cm-scroller` clears the finding.
+const focusableScroller = ViewPlugin.define((view) => {
+  view.scrollDOM.tabIndex = 0
+  return {}
+})
 
 function themeExtension(isDark: boolean): Extension {
   return isDark ? oneDark : []
@@ -96,6 +106,7 @@ export function useCodeMirrorEditor(
         },
       ]),
       search({ top: true }),
+      focusableScroller,
       autocompletion(),
       EditorView.contentAttributes.of({
         'aria-label': options.ariaLabel ?? 'Code editor',

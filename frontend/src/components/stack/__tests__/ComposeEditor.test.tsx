@@ -36,6 +36,7 @@ vi.mock('@codemirror/view', () => {
   return {
     EditorView: MockEditorView,
     keymap: { of: () => [] },
+    ViewPlugin: { define: () => [] },
   }
 })
 vi.mock('@codemirror/lang-yaml', () => ({ yaml: () => [] }))

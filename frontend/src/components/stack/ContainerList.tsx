@@ -136,7 +136,7 @@ function PortChips({ ports }: { ports: Container['ports'] }) {
             href={parsed.href}
             target="_blank"
             rel="noopener noreferrer"
-            className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-info hover:underline"
+            className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-info underline underline-offset-2"
           >
             {parsed.label}
           </a>

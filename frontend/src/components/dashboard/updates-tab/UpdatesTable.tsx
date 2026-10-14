@@ -172,7 +172,7 @@ export function UpdatesTable({
                     {container.stackId ? (
                       <Link
                         to={`/stacks/${container.stackId}`}
-                        className="text-sm text-info hover:underline"
+                        className="text-sm text-info underline underline-offset-2"
                       >
                         {container.projectName}
                       </Link>

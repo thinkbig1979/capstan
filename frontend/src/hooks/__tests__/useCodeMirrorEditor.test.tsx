@@ -59,6 +59,7 @@ vi.mock('@codemirror/view', () => ({
     static contentAttributes = { of: () => [] }
   },
   keymap: { of: () => [] },
+  ViewPlugin: { define: () => [] },
 }))
 
 vi.mock('@codemirror/lang-yaml', () => ({ yaml: () => [] }))

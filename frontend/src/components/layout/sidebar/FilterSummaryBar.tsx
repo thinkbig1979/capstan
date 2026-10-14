@@ -11,7 +11,7 @@ export function FilterSummaryBar({ visibleCount, totalCount, onClear }: FilterSu
       <button
         type="button"
         onClick={onClear}
-        className="ml-1.5 text-primary hover:underline"
+        className="ml-1.5 text-primary underline underline-offset-2"
       >
         Clear
       </button>

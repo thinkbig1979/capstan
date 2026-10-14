@@ -264,7 +264,7 @@ export function UpdateLogTab() {
                   {entry.stackName ? (
                     <Link
                       to={`/stacks/${entry.stackId}`}
-                      className="text-sm text-info hover:underline"
+                      className="text-sm text-info underline underline-offset-2"
                     >
                       {entry.stackName}
                     </Link>

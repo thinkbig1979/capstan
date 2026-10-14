@@ -93,7 +93,7 @@ export function AttentionStrip({
           <button
             type="button"
             onClick={s.onAction}
-            className="font-semibold text-primary hover:underline whitespace-nowrap"
+            className="font-semibold text-primary underline underline-offset-2 whitespace-nowrap"
           >
             {s.action} →
           </button>

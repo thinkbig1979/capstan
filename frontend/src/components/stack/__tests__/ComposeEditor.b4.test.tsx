@@ -53,6 +53,7 @@ vi.mock('@codemirror/state', () => ({ EditorState: { create: () => ({}) } }))
 vi.mock('@codemirror/view', () => ({
   EditorView: class { destroy() {} },
   keymap: { of: () => [] },
+  ViewPlugin: { define: () => [] },
 }))
 vi.mock('@codemirror/lang-yaml', () => ({ yaml: () => [] }))
 vi.mock('@codemirror/lint', () => ({ linter: () => [], lintGutter: () => [] }))

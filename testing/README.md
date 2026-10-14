@@ -7,9 +7,10 @@ testing/
 ├── README.md
 ├── tests/playwright/
 │   ├── helpers/
+│   │   ├── axe-scan.ts              # Shared axe-core scan + allowlist classifier (a11y.spec.ts, auth-session.spec.ts)
 │   │   └── network-settle.ts        # Settle guard used instead of networkidle waits
 │   ├── a11y.spec.ts                 # axe wcag2a/wcag2aa scan: dashboard, stack page, settings
-│   ├── auth-session.spec.ts         # Setup, login, session revocation
+│   ├── auth-session.spec.ts         # Setup, login, session revocation; axe scans of /setup and /login
 │   ├── backup-flow.spec.ts          # Backup configure -> run -> restore
 │   ├── dashboard-backups.spec.ts    # Dashboard Backups tab + Auto backup toggle
 │   ├── network-settle-guard.spec.ts # Regression controls for helpers/network-settle.ts
@@ -40,10 +41,10 @@ The specs split across *two* backends, which cannot be the same one:
 
 | Spec | Backend requirement |
 |------|---------------------|
-| `auth-session.spec.ts` | `AUTH_DISABLED=false` and a virgin `DATA_DIR` — its first test performs the one and only `POST /auth/setup` and asserts `needsSetup` was true beforehand |
+| `auth-session.spec.ts` | `AUTH_DISABLED=false` and a virgin `DATA_DIR` — its first test performs the one and only `POST /auth/setup` and asserts `needsSetup` was true beforehand. Also scans `/setup` (before that test) and `/login` (after the file's last session test) with axe, 4 scans each (light and dark, 1280px and 375px), in separate `describe` blocks so a scan failure cannot skip the session tests |
 | `backup-flow.spec.ts` | `AUTH_DISABLED=true`, restic 0.18.0+ on `PATH`, a Docker daemon (the backup path stops the stack before snapshotting), and a pre-existing stack named `test-app`. 0.18.0 is the floor the backup exit codes were measured against (`backend/internal/services/backup.go`); CI and the shipped image install 0.19.1 (`.github/workflows/e2e-backup.yml`, `docker/Dockerfile`), which is what they pin, not a minimum this suite requires |
 | `dashboard-backups.spec.ts` | The same backend as `backup-flow.spec.ts`: `AUTH_DISABLED=true`, restic 0.18.0+ on `PATH`, a Docker daemon, and a pre-existing `test-app` stack. Runs in the backup-flow CI job. Documented with `--retries=0`, because `playwright.config.ts` retries once under CI and Playwright reports a fail-then-pass as FLAKY, not as passed |
-| `a11y.spec.ts` | `AUTH_DISABLED=true` and a pre-existing `test-app` stack; no Docker daemon or restic. Scans 26 URLs in light and dark at 1280px plus four at 375px (56 scans) and fails on any critical or serious violation not on the spec's `ALLOWLIST`. Two `CONTROL` tests need no backend. Runs in the backup-flow CI job (it selects everything except `auth-session`) |
+| `a11y.spec.ts` | `AUTH_DISABLED=true` and a pre-existing `test-app` stack; no Docker daemon or restic. Scans 26 URLs in light and dark at 1280px plus nine at 375px in light and dark (70 scans) and fails on any critical or serious violation not on the spec's `ALLOWLIST`. Two `CONTROL` tests need no backend. Runs in the backup-flow CI job (it selects everything except `auth-session`) |
 | `network-settle-guard.spec.ts` | None — no backend, no frontend, no browser. Its eight tests drive a stub page object to assert the settle guard in `helpers/network-settle.ts` still refuses the orders that defeated an earlier revision of it. Runs in the backup-flow CI job because that job selects everything except `auth-session`, not because it needs that job's backend |
 | `terminal-flow.spec.ts` | `AUTH_DISABLED=true` and a Docker daemon — it starts the `test-app` stack itself and opens a real shell into its container. Runs in the backup-flow CI job (same backend) |
 
@@ -78,8 +79,12 @@ Known violations live in the spec's `ALLOWLIST`, each with its reason. It is a r
 violation that matches no entry fails the run, and an entry that no longer fires fails its own
 `A11Y-ALLOWLIST-*` test, so removing the cause means deleting the entry in the same change. Fix
 colour failures in the design tokens in `frontend/src/index.css` (the contrast ratio and the
-offending colours are in the failure message), not by adding entries. The login and setup pages are
-not scanned.
+offending colours are in the failure message), not by adding entries.
+
+The login and setup pages need the auth-on backend, so `auth-session.spec.ts` scans them with the
+same `helpers/axe-scan.ts` (see its header for the ordering). Links that sit in or beside text
+carry a standing `underline`, not just `hover:underline`: axe passes colour-only links on a 3:1
+colour difference, so `frontend/src/lib/__tests__/linkUnderline.test.ts` enforces it from source.
 
 ## Type-checking the Playwright config and specs
 
