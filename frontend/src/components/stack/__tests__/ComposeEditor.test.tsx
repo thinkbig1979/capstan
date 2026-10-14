@@ -6,6 +6,7 @@ vi.mock('codemirror', () => {
   class MockEditorView {
     static theme = () => []
     static updateListener = { of: () => [] }
+    static contentAttributes = { of: () => [] }
     dispatch() {}
     destroy() {}
     state = { doc: { toString: () => '', length: 0 } }
@@ -27,6 +28,7 @@ vi.mock('@codemirror/view', () => {
   class MockEditorView {
     static theme = () => []
     static updateListener = { of: () => [] }
+    static contentAttributes = { of: () => [] }
     dispatch() {}
     destroy() {}
     state = { doc: { toString: () => '', length: 0 } }

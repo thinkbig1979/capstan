@@ -32,6 +32,9 @@ interface UseCodeMirrorEditorOptions {
   onSave?: () => boolean
   onChange?: (content: string) => void
   onSelect?: (text: string) => void
+  // Accessible name for the editor's textbox; CodeMirror renders an unnamed
+  // contenteditable otherwise (axe aria-input-field-name).
+  ariaLabel?: string
   deps?: React.DependencyList
 }
 
@@ -94,6 +97,9 @@ export function useCodeMirrorEditor(
       ]),
       search({ top: true }),
       autocompletion(),
+      EditorView.contentAttributes.of({
+        'aria-label': options.ariaLabel ?? 'Code editor',
+      }),
       EditorView.theme({
         '&': { fontSize: '14px' },
         '.cm-scroller': {

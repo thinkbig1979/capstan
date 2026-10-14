@@ -34,6 +34,7 @@ export function useComposeEditorMount({
 
   useCodeMirrorEditor(editorRef, {
     doc: pendingCompose ?? composeContent,
+    ariaLabel: 'Compose file editor',
     // Every edit is forwarded: Create submits composeContent, so dropping a
     // change that lands in the same frame as the previous one loses it. No echo
     // loop needs breaking here: useCodeMirrorEditor only pushes `doc` into the

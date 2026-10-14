@@ -43,6 +43,7 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
 
   const { viewRef } = useCodeMirrorEditor(editorRef, {
     doc: data || content,
+    ariaLabel: 'Compose file editor',
     onSave: () => {
       handleSaveRef.current()
       return true
