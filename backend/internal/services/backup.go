@@ -101,6 +101,13 @@ const (
 	// `snapshots` against an initialised repository with the wrong password
 	// exits 12, "wrong password or no key found".
 	RepoStateWrongPassword RepoState = "wrong_password"
+	// RepoStateLocked: the repository answered but is locked by another restic
+	// operation, live or stale (agent-os-zg60). MEASURED with restic 0.18.0:
+	// `snapshots --quiet` exits 11 under an exclusive lock, whether its holder
+	// is running or was killed. The network and the credential are fine. The
+	// probe runs outside the global backup lock, so it never unlocks; the next
+	// backup, retention, check or restore clears a stale lock (runLocking).
+	RepoStateLocked RepoState = "locked"
 )
 
 // BackupAvailability describes which parts of the engine are functional.
@@ -108,7 +115,7 @@ const (
 // RepoState is empty on any value that did not probe the repository —
 // Available() never does, and CheckRepository returns before probing when
 // restic is absent. Empty therefore means "not probed", which is why it is
-// omitempty rather than defaulted to one of the six states.
+// omitempty rather than defaulted to one of the seven states.
 //
 // Note that "not probed" now covers two different reasons, and only the first
 // leaves RepoState empty: restic absent returns before a state is assigned,
@@ -722,6 +729,16 @@ func (s *BackupService) CheckRepository(ctx context.Context) BackupAvailability 
 		if isExitCode(err, resticExitWrongPassword) {
 			av.RepoState = RepoStateWrongPassword
 			av.Message = "the configured restic password was rejected by the repository"
+			return av
+		}
+
+		// Exit 11 is "repository is already locked": the repository answered,
+		// so unreachable's hint (check the network, the mount) is wrong.
+		// No unlock here: this runs outside the global backup lock
+		// (agent-os-zg60).
+		if isExitCode(err, resticExitRepoLocked) {
+			av.RepoState = RepoStateLocked
+			av.Message = "the repository is locked by another restic operation; if none is running, the lock is stale and the next backup clears it"
 			return av
 		}
 

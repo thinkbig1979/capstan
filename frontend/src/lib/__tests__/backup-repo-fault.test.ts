@@ -88,3 +88,31 @@ describe('repoFaultFrom — BACKUP_UNAVAILABLE cause arm', () => {
     expect(fault!.detail).toBe('restic is not installed')
   })
 })
+
+describe('repoFaultFrom — locked repository (agent-os-zg60)', () => {
+  it('names the lock, not the network, for repoState locked', () => {
+    // restic exit 11: the repository answered and is locked by another restic
+    // operation. The unreachable hint ("check the remote or the mount") points
+    // at things that are working.
+    const fault = repoFaultFrom({
+      code: 'BACKUP_REPO_UNREACHABLE',
+      message: 'the repository is locked by another restic operation',
+      details: { repoState: 'locked' },
+    })
+
+    expect(fault?.title).toBe('The backup repository is locked.')
+    expect(fault?.hint).not.toMatch(/remote or the mount/i)
+  })
+
+  it('still sends unreachable to the remote and the mount', () => {
+    // Control on the same instrument: the locked arm must not swallow the
+    // genuine unreachable case.
+    const fault = repoFaultFrom({
+      code: 'BACKUP_REPO_UNREACHABLE',
+      message: 'repository not reachable: exit status 1',
+      details: { repoState: 'unreachable' },
+    })
+
+    expect(fault?.title).toBe('The backup repository could not be reached.')
+  })
+})

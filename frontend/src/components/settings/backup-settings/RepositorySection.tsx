@@ -3,7 +3,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { LoadingSpinner } from '@/components/LoadingSkeleton'
 import { HelpHint } from '@/components/ui/help-hint'
-import { AlertTriangle, CheckCircle2, Eye, EyeOff, KeyRound, XCircle } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Eye, EyeOff, KeyRound, Lock, XCircle } from 'lucide-react'
 import type { BackupSettings } from '@/types'
 import { SourceBadge } from './SourceBadge'
 
@@ -59,6 +59,9 @@ const REPO_STATE_DISPLAY = {
     Icon: AlertTriangle,
     className: 'text-warning font-medium',
   },
+  // Amber like wrong_password: the repository answered, but another restic
+  // operation, live or stale, holds its lock (agent-os-zg60).
+  locked: { label: 'Locked', Icon: Lock, className: 'text-warning font-medium' },
   '': { label: 'Unknown', Icon: AlertTriangle, className: 'text-muted-foreground' },
 } as const satisfies Record<BackupSettings['repoState'], unknown>
 
@@ -120,9 +123,9 @@ export function RepositorySection({
   // STATE, which is true either way. Disabling here is no longer load-bearing
   // for honesty; it stands on its own, that there is nothing to create.
   //
-  // On `unreachable`, `settings_unreadable`, `wrong_password` and
+  // On `unreachable`, `settings_unreadable`, `wrong_password`, `locked` and
   // `password_missing` the server refuses with 503 BACKUP_REPO_UNREACHABLE —
-  // repoInit's guard is `RepoState != RepoStateUninitialized`, so all four take
+  // repoInit's guard is `RepoState != RepoStateUninitialized`, so all five take
   // that one branch. The reason is data loss rather than tidiness for the first
   // three: a repository that could not be read may well exist and hold every
   // backup the user has, one that rejected a password certainly does, and when
@@ -163,7 +166,9 @@ export function RepositorySection({
           ? 'Set a restic password first — without one the repository cannot be created or read'
           : settings.repoState === 'wrong_password'
             ? 'A repository exists here and rejected this password — correct the password rather than initializing over it'
-            : 'The repository could not be read, so it may already exist — initializing is refused'
+            : settings.repoState === 'locked'
+              ? 'A repository exists here and is locked by another restic operation — initializing is refused'
+              : 'The repository could not be read, so it may already exist — initializing is refused'
 
   return (
     <div className="space-y-4">

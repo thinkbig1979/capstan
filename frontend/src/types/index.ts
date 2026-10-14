@@ -430,6 +430,7 @@ export interface BackupSettings {
     | 'settings_unreadable'
     | 'password_missing'
     | 'wrong_password'
+    | 'locked'
   /** Human-readable cause behind a non-`ok` `repoState`. Empty when there is none. */
   repoStateMessage: string
   /** Whether backups run on a fixed interval or at a time of day. */
@@ -464,6 +465,7 @@ export interface BackupStatus {
     | 'settings_unreadable'
     | 'password_missing'
     | 'wrong_password'
+    | 'locked'
   /** Human-readable cause behind a non-`ok` `repoState`. Empty when there is none. */
   repoStateMessage: string
   enabledStackCount: number

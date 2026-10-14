@@ -211,6 +211,7 @@ const REPO_STATE_LABELS = [
   'Unknown',
   'No password set',
   'Password rejected',
+  'Locked',
 ] as const
 
 function repositoryStateText() {
@@ -320,6 +321,26 @@ describe('RepositorySection repository state', () => {
     expect(initButton().disabled).toBe(true)
     expect(initButton().getAttribute('title')).toMatch(/correct the password rather than initializing over it/i)
     expect(repositoryStateElement().getAttribute('title')).toContain('rejected by the repository')
+  })
+
+  it('names a locked repository and refuses to initialize over it (agent-os-zg60)', () => {
+    // restic exit 11. The repository exists and answered; another restic
+    // operation, live or stale, holds its lock. "Unreachable" would point the
+    // operator at a network and a mount that are working.
+    renderSection(
+      makeSettings({
+        repoState: 'locked',
+        repoStateMessage: 'the repository is locked by another restic operation',
+        resticAvailable: true,
+      }),
+      '/data/restic-repo',
+    )
+
+    expect(repositoryStateText()).toBe('Locked')
+    expect(screen.queryByText('Unreachable')).toBeNull()
+    expect(initButton().disabled).toBe(true)
+    expect(initButton().getAttribute('title')).toMatch(/locked/i)
+    expect(repositoryStateElement().getAttribute('title')).toContain('locked by another restic operation')
   })
 
   it('still offers Initialize for uninitialized ONLY, with both new states present', () => {

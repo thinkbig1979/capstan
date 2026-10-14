@@ -241,8 +241,9 @@ export function BackupStatusCard() {
 
   // "Can we back up RIGHT NOW", so `ok` is the only acceptable state: every
   // other one -- uninitialized, unreachable, settings_unreadable,
-  // password_missing, wrong_password, and the empty "not probed" -- means a
-  // backup would fail. Undefined statusData falls to unavailable, which is the
+  // password_missing, wrong_password, locked, and the empty "not probed" --
+  // means a backup would fail, or for `locked` may (the next run clears a
+  // stale lock). Undefined statusData falls to unavailable, which is the
   // safe direction.
   //
   // Deliberately a NEGATIVE test against `ok` rather than a list of the failing
