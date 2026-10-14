@@ -59,7 +59,7 @@ const emptyHost: DashboardStats = {
   totalContainers: 0,
   runningContainers: 0,
   imageDiskUsage: 0,
-  diskUsage: { total: 0, images: 0, containers: 0, volumes: 0, buildCache: 0 },
+  diskUsage: { total: 0, images: 0, containers: 0, volumes: 0, buildCache: 0, volumesSizeKnown: true },
   containers: [],
 }
 

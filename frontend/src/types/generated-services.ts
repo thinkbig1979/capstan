@@ -17,6 +17,12 @@ export interface DiskUsageBreakdown {
   volumes: number /* int64 */;
   buildCache: number /* int64 */;
   total: number /* int64 */;
+  /**
+   * VolumesSizeKnown is false when Docker reported at least one volume's
+   * size as unavailable (-1 or no usage data). Volumes then sums only the
+   * known ones, so it is a floor, not a measurement.
+   */
+  volumesSizeKnown: boolean;
 }
 /**
  * DockerCleanupCandidate is one image a run would remove. Repository is empty

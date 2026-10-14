@@ -137,5 +137,5 @@ func TestDashboardStats_EmptyHostStillReportsZero(t *testing.T) {
 	require.JSONEq(t, `0`, string(body["runningStacks"]))
 	require.JSONEq(t, `1`, string(body["stoppedStacks"]))
 	require.JSONEq(t, `0`, string(body["imageDiskUsage"]))
-	require.JSONEq(t, `{"images":0,"containers":0,"volumes":0,"buildCache":0,"total":0}`, string(body["diskUsage"]))
+	require.JSONEq(t, `{"images":0,"containers":0,"volumes":0,"buildCache":0,"total":0,"volumesSizeKnown":true}`, string(body["diskUsage"]))
 }

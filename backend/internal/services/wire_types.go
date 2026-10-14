@@ -16,6 +16,10 @@ type DiskUsageBreakdown struct {
 	Volumes    int64 `json:"volumes"`
 	BuildCache int64 `json:"buildCache"`
 	Total      int64 `json:"total"`
+	// VolumesSizeKnown is false when Docker reported at least one volume's
+	// size as unavailable (-1 or no usage data). Volumes then sums only the
+	// known ones, so it is a floor, not a measurement.
+	VolumesSizeKnown bool `json:"volumesSizeKnown"`
 }
 
 // DockerCleanupCandidate is one image a run would remove. Repository is empty

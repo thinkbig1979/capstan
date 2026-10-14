@@ -704,27 +704,8 @@ func (s *DockerService) GetDiskUsage(ctx context.Context) (*DiskUsageBreakdown, 
 		return nil, fmt.Errorf("getting disk usage: %w", err)
 	}
 
-	var imagesTotal, containersTotal, volumesTotal, buildCacheTotal int64
-	for _, img := range du.Images {
-		imagesTotal += img.Size
-	}
-	for _, ctr := range du.Containers {
-		containersTotal += ctr.SizeRw
-	}
-	for _, vol := range du.Volumes {
-		volumesTotal += vol.UsageData.Size
-	}
-	for _, bc := range du.BuildCache {
-		buildCacheTotal += bc.Size
-	}
-
-	return &DiskUsageBreakdown{
-		Images:     imagesTotal,
-		Containers: containersTotal,
-		Volumes:    volumesTotal,
-		BuildCache: buildCacheTotal,
-		Total:      imagesTotal + containersTotal + volumesTotal + buildCacheTotal,
-	}, nil
+	summary := summarizeDiskUsage(du)
+	return &summary, nil
 }
 
 func (s *DockerService) GetRunningContainerIDs(ctx context.Context) ([]string, error) {
