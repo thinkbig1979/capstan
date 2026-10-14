@@ -257,8 +257,9 @@ const unlockTimeout = 2 * time.Minute
 
 // runLocking runs a restic command that takes a repository lock while
 // Capstan's global backup lock is held: forget, prune and check, which need
-// the exclusive lock, and backup, which a stale exclusive lock refuses. On
-// exit 11 it runs `restic unlock` and retries once (agent-os-zp01).
+// the exclusive lock, and backup and restore, which a stale exclusive lock
+// refuses. On exit 11 it runs `restic unlock` and retries once (agent-os-zp01,
+// agent-os-hxuz).
 //
 // restic never clears a stale lock by itself. OBSERVED with restic 0.18.0: a
 // lock left by a SIGKILLed `restic backup` still made `restic forget` exit 11;
@@ -900,7 +901,11 @@ func (m *ResticManager) Restore(ctx context.Context, snapshotID, sourcePath, tar
 	for _, rel := range excludes {
 		args = append(args, "--exclude", restoreExcludePattern(rel))
 	}
-	return m.runner.Run(ctx, "restic", args, m.resticEnv(pwFile), out)
+	// runLocking: a stale exclusive lock refuses restore with exit 11 before
+	// anything is written (OBSERVED, restic 0.18.0), so unlocking and retrying
+	// once is safe. The caller, runRestore, holds the global backup lock
+	// (agent-os-hxuz).
+	return m.runLocking(ctx, args, m.resticEnv(pwFile), out)
 }
 
 // cacheDirTagSignature is the header a CACHEDIR.TAG file must start with for
