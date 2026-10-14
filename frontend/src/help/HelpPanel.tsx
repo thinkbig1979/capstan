@@ -153,6 +153,10 @@ export function HelpPanel() {
   const bodyRef = useRef<HTMLDivElement>(null)
   const openerRef = useRef<HTMLElement | null>(null)
 
+  // The store outlives AppShell (module state), so close with it: an open panel
+  // must not reappear after logout and the next login in this tab.
+  useEffect(() => close, [close])
+
   // Follow the page: a route change swaps the topic while followPage is on.
   useEffect(() => {
     syncPage(pageRef)

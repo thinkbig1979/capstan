@@ -192,6 +192,13 @@ describe('HelpPanel keyboard and focus', () => {
     expect(screen.getByTestId('help-panel')).toBeInTheDocument()
   })
 
+  it('closes when it unmounts with AppShell, so it does not reopen after the next login', async () => {
+    const { unmount } = renderPanel('/settings/backup')
+    await openFromButton()
+    unmount()
+    expect(useHelpStore.getState().open).toBe(false)
+  })
+
   it('the footer opens the keyboard shortcuts dialog', async () => {
     renderPanel('/settings/backup')
     await openFromButton()
