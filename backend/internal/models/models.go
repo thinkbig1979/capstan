@@ -461,7 +461,7 @@ type BackupSnapshot struct {
 type DockerCleanupRun struct {
 	ID                  string  `json:"id"`
 	Trigger             string  `json:"trigger"` // "scheduled" | "manual"
-	Status              string  `json:"status"`  // "success" | "failed"
+	Status              string  `json:"status"`  // "success" | "failed" | "skipped"
 	StartedAt           string  `json:"startedAt"`
 	FinishedAt          *string `json:"finishedAt,omitempty"`
 	ImagesDeleted       int     `json:"imagesDeleted"`
@@ -469,4 +469,15 @@ type DockerCleanupRun struct {
 	CacheBytesReclaimed int64   `json:"cacheBytesReclaimed"`
 	MinAgeHours         int     `json:"minAgeHours"`
 	ErrorMessage        string  `json:"errorMessage,omitempty"`
+	// Categories is the comma-separated list of categories the run acted on
+	// (services.CleanupCategory*), recorded per row for the reason MinAgeHours
+	// is. Empty when the run attempted nothing. Rows from before migration 24 read
+	// "dangling_images,build_cache", which is what every earlier run removed.
+	Categories        string `json:"categories"`
+	ContainersDeleted int    `json:"containersDeleted"`
+	VolumesDeleted    int    `json:"volumesDeleted"`
+	NetworksDeleted   int    `json:"networksDeleted"`
+	// OtherBytesReclaimed is container and volume bytes. Freed in total is
+	// BytesReclaimed + CacheBytesReclaimed + OtherBytesReclaimed.
+	OtherBytesReclaimed int64 `json:"otherBytesReclaimed"`
 }

@@ -58,23 +58,99 @@ const (
 // the UI can show what will be rejected instead of discovering it on submit.
 // Precedent: GetLogRetention returns minRetentionDays alongside the configured
 // value (settings.go:442) for exactly this reason.
+//
+// NextRunAt is omitted unless cleanup is enabled AND a ticker is armed: an
+// enabled policy on a Docker-less host has no scheduler, and a time computed
+// for a ticker that is not running would promise a run that never comes.
 type cleanupPolicyResponse struct {
-	Enabled                 bool `json:"enabled"`
-	MinAgeHours             int  `json:"minAgeHours"`
-	IntervalHours           int  `json:"intervalHours"`
-	MinAllowedAgeHours      int  `json:"minAllowedAgeHours"`
-	MinAllowedIntervalHours int  `json:"minAllowedIntervalHours"`
+	Enabled                 bool                             `json:"enabled"`
+	MinAgeHours             int                              `json:"minAgeHours"`
+	IntervalHours           int                              `json:"intervalHours"`
+	Categories              services.DockerCleanupCategories `json:"categories"`
+	AlertThresholdBytes     int64                            `json:"alertThresholdBytes"`
+	NextRunAt               string                           `json:"nextRunAt,omitempty"`
+	MinAllowedAgeHours      int                              `json:"minAllowedAgeHours"`
+	MinAllowedIntervalHours int                              `json:"minAllowedIntervalHours"`
 }
 
-func newCleanupPolicyResponse(p services.DockerCleanupPolicy) cleanupPolicyResponse {
-	return cleanupPolicyResponse{
+func (h *ResourcesHandler) newCleanupPolicyResponse(p services.DockerCleanupPolicy) cleanupPolicyResponse {
+	resp := cleanupPolicyResponse{
 		Enabled:                 p.Enabled,
 		MinAgeHours:             p.MinAgeHours,
 		IntervalHours:           p.IntervalHours,
+		Categories:              p.Categories,
+		AlertThresholdBytes:     p.AlertThresholdBytes,
 		MinAllowedAgeHours:      services.MinCleanupAgeHours,
 		MinAllowedIntervalHours: services.MinCleanupIntervalHours,
 	}
+	if p.Enabled && h.cleanupArmer != nil {
+		if next := h.cleanupArmer.NextRunAt(); !next.IsZero() {
+			resp.NextRunAt = next.UTC().Format(time.RFC3339)
+		}
+	}
+	return resp
 }
+
+// cleanupCategoriesRequest is the PUT body's categories object. Every field is
+// optional: an absent one leaves the stored switch as it is.
+type cleanupCategoriesRequest struct {
+	DanglingImages *bool `json:"danglingImages"`
+	UnusedImages   *bool `json:"unusedImages"`
+	BuildCache     *bool `json:"buildCache"`
+	Containers     *bool `json:"containers"`
+	Volumes        *bool `json:"volumes"`
+	Networks       *bool `json:"networks"`
+}
+
+// mergeInto applies the switches the request sets over a resolved set.
+func (r *cleanupCategoriesRequest) mergeInto(c *services.DockerCleanupCategories) {
+	for _, f := range []struct {
+		req *bool
+		dst *bool
+	}{
+		{r.DanglingImages, &c.DanglingImages},
+		{r.UnusedImages, &c.UnusedImages},
+		{r.BuildCache, &c.BuildCache},
+		{r.Containers, &c.Containers},
+		{r.Volumes, &c.Volumes},
+		{r.Networks, &c.Networks},
+	} {
+		if f.req != nil {
+			*f.dst = *f.req
+		}
+	}
+}
+
+// settingValues returns one SettingValue per switch the request sets. Each
+// key is spelled with its constant, not looked up from a table, so the
+// settings-key classification guard (database/settings_classification_test.go)
+// sees every key this writes.
+func (r *cleanupCategoriesRequest) settingValues() []database.SettingValue {
+	var values []database.SettingValue
+	if r.DanglingImages != nil {
+		values = append(values, database.SettingValue{Key: services.SettingDockerCleanupDanglingImages, Value: strconv.FormatBool(*r.DanglingImages)})
+	}
+	if r.UnusedImages != nil {
+		values = append(values, database.SettingValue{Key: services.SettingDockerCleanupUnusedImages, Value: strconv.FormatBool(*r.UnusedImages)})
+	}
+	if r.BuildCache != nil {
+		values = append(values, database.SettingValue{Key: services.SettingDockerCleanupBuildCache, Value: strconv.FormatBool(*r.BuildCache)})
+	}
+	if r.Containers != nil {
+		values = append(values, database.SettingValue{Key: services.SettingDockerCleanupContainers, Value: strconv.FormatBool(*r.Containers)})
+	}
+	if r.Volumes != nil {
+		values = append(values, database.SettingValue{Key: services.SettingDockerCleanupVolumes, Value: strconv.FormatBool(*r.Volumes)})
+	}
+	if r.Networks != nil {
+		values = append(values, database.SettingValue{Key: services.SettingDockerCleanupNetworks, Value: strconv.FormatBool(*r.Networks)})
+	}
+	return values
+}
+
+// cleanupNoCategoryMessage answers an enabled policy with every category off,
+// which would arm a schedule that removes nothing.
+const cleanupNoCategoryMessage = "Turn on at least one category, or turn automatic cleanup off"
 
 // getCleanupPolicy serves GET /resources/cleanup/policy.
 //
@@ -94,7 +170,7 @@ func (h *ResourcesHandler) getCleanupPolicy(c *gin.Context) {
 			"Failed to read the Docker cleanup policy", err))
 		return
 	}
-	c.JSON(http.StatusOK, newCleanupPolicyResponse(policy))
+	c.JSON(http.StatusOK, h.newCleanupPolicyResponse(policy))
 }
 
 // updateCleanupPolicy serves PUT /resources/cleanup/policy. Every field is
@@ -107,17 +183,20 @@ func (h *ResourcesHandler) getCleanupPolicy(c *gin.Context) {
 // request.
 func (h *ResourcesHandler) updateCleanupPolicy(c *gin.Context) {
 	var req struct {
-		Enabled       *bool `json:"enabled"`
-		MinAgeHours   *int  `json:"minAgeHours"`
-		IntervalHours *int  `json:"intervalHours"`
+		Enabled             *bool                     `json:"enabled"`
+		MinAgeHours         *int                      `json:"minAgeHours"`
+		IntervalHours       *int                      `json:"intervalHours"`
+		Categories          *cleanupCategoriesRequest `json:"categories"`
+		AlertThresholdBytes *int64                    `json:"alertThresholdBytes"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		handleError(c, models.NewAppError(http.StatusBadRequest, models.ErrValidation, "Invalid request body"))
 		return
 	}
-	if req.Enabled == nil && req.MinAgeHours == nil && req.IntervalHours == nil {
+	if req.Enabled == nil && req.MinAgeHours == nil && req.IntervalHours == nil &&
+		req.Categories == nil && req.AlertThresholdBytes == nil {
 		handleError(c, models.NewAppError(http.StatusBadRequest, models.ErrValidation,
-			"Provide at least one of enabled, minAgeHours or intervalHours"))
+			"Provide at least one of enabled, minAgeHours, intervalHours, categories or alertThresholdBytes"))
 		return
 	}
 
@@ -137,6 +216,12 @@ func (h *ResourcesHandler) updateCleanupPolicy(c *gin.Context) {
 			"intervalHours must be at least "+strconv.Itoa(services.MinCleanupIntervalHours)))
 		return
 	}
+	if req.AlertThresholdBytes != nil &&
+		(*req.AlertThresholdBytes < 0 || *req.AlertThresholdBytes > services.MaxCleanupAlertThresholdBytes) {
+		handleError(c, models.NewAppError(http.StatusBadRequest, models.ErrValidation,
+			"alertThresholdBytes must be between 0 and "+strconv.FormatInt(services.MaxCleanupAlertThresholdBytes, 10)))
+		return
+	}
 
 	// Capture the pre-write policy so the re-arm below fires only on a change that
 	// actually moves the ticker. handlers/settings.go:749-754 is the precedent: it
@@ -149,6 +234,33 @@ func (h *ResourcesHandler) updateCleanupPolicy(c *gin.Context) {
 	// shape backend/tools/geterrors exists to catch, and the same lie
 	// getCleanupPolicy refuses to tell.
 	before, beforeErr := services.ResolveDockerCleanupPolicy(h.db)
+
+	// The all-off rule is about the policy AFTER this request, which merges the
+	// request over what is stored. A request that touches enabled or categories
+	// cannot be checked against a policy that could not be read, so it is
+	// refused rather than stored unchecked. Other fields keep the "re-arm anyway"
+	// path below: the rule does not depend on them.
+	if req.Enabled != nil || req.Categories != nil {
+		if beforeErr != nil {
+			slog.Error("Refusing a Docker cleanup policy change: the current policy could not be read, so the change cannot be checked", "error", beforeErr)
+			handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR",
+				"Failed to read the Docker cleanup policy", beforeErr))
+			return
+		}
+		enabled := before.Enabled
+		if req.Enabled != nil {
+			enabled = *req.Enabled
+		}
+		cats := before.Categories
+		if req.Categories != nil {
+			req.Categories.mergeInto(&cats)
+		}
+		if enabled && !cats.AnyOn() {
+			handleError(c, models.NewAppError(http.StatusBadRequest, models.ErrValidation, cleanupNoCategoryMessage))
+			return
+		}
+	}
+
 	if beforeErr != nil {
 		slog.Error("Could not read the previous Docker cleanup policy; re-arming the cleanup tick unconditionally, which discards any interval already counting down",
 			"error", beforeErr)
@@ -167,6 +279,14 @@ func (h *ResourcesHandler) updateCleanupPolicy(c *gin.Context) {
 	if req.IntervalHours != nil {
 		values = append(values, database.SettingValue{Key: services.SettingDockerCleanupIntervalHours, Value: strconv.Itoa(*req.IntervalHours)})
 		applied["intervalHours"] = *req.IntervalHours
+	}
+	if req.Categories != nil {
+		values = append(values, req.Categories.settingValues()...)
+		applied["categories"] = *req.Categories
+	}
+	if req.AlertThresholdBytes != nil {
+		values = append(values, database.SettingValue{Key: services.SettingDockerCleanupAlertThresholdBytes, Value: strconv.FormatInt(*req.AlertThresholdBytes, 10)})
+		applied["alertThresholdBytes"] = *req.AlertThresholdBytes
 	}
 	// One transaction, so a storage fault cannot store half a policy
 	// (agent-os-u0nd).
@@ -202,7 +322,7 @@ func (h *ResourcesHandler) updateCleanupPolicy(c *gin.Context) {
 			"The Docker cleanup policy was saved but could not be read back", err))
 		return
 	}
-	c.JSON(http.StatusOK, newCleanupPolicyResponse(policy))
+	c.JSON(http.StatusOK, h.newCleanupPolicyResponse(policy))
 }
 
 func (h *ResourcesHandler) cleanupSettingWriteFailed(c *gin.Context, err error) {
@@ -275,9 +395,21 @@ func (h *ResourcesHandler) runCleanup(c *gin.Context) {
 	// build-cache half undone. The timeout is what bounds it instead, and it
 	// matters more now that Execute holds a single-flight guard: an unbounded
 	// manual run would block every scheduled tick behind it (agent-os-yicu).
+	// A manual run removes the categories the policy has switched on, read
+	// here even when the body supplied the floor. An unreadable policy refuses,
+	// like the floor read in cleanupMinAgeFromRequest: running at default
+	// categories would remove what an operator may have turned off.
+	policy, err := services.ResolveDockerCleanupPolicy(h.db)
+	if err != nil {
+		slog.Error("Failed to read the Docker cleanup policy", "error", err)
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR",
+			"Failed to read the Docker cleanup policy", err))
+		return
+	}
+
 	runCtx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), services.DockerCleanupRunTimeout)
 	defer cancel()
-	run, err := h.cleanup.Execute(runCtx, services.TriggerManual, minAge)
+	run, err := h.cleanup.Execute(runCtx, services.TriggerManual, minAge, policy.Categories)
 	if errors.Is(err, services.ErrCleanupInProgress) {
 		// Another run (scheduled or manual) holds the guard. Nothing ran and
 		// nothing was recorded, so this is a refusal, not a failure
@@ -299,6 +431,7 @@ func (h *ResourcesHandler) runCleanup(c *gin.Context) {
 		"space_reclaimed":       run.BytesReclaimed,
 		"cache_space_reclaimed": run.CacheBytesReclaimed,
 		"min_age_hours":         run.MinAgeHours,
+		"categories":            run.Categories,
 	})
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Event: "docker_cleanup", Timestamp: time.Now()})
 

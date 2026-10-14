@@ -3,14 +3,17 @@ package services
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/thinkbig1979/capstan/backend/internal/database"
@@ -37,6 +40,7 @@ import (
 type fn7x3ExecuteCall struct {
 	trigger     string
 	minAgeHours int
+	categories  DockerCleanupCategories
 }
 
 type fn7x3FakeCleanupRunner struct {
@@ -45,10 +49,10 @@ type fn7x3FakeCleanupRunner struct {
 	err   error
 }
 
-func (f *fn7x3FakeCleanupRunner) Execute(_ context.Context, trigger string, minAgeHours int) (*models.DockerCleanupRun, error) {
+func (f *fn7x3FakeCleanupRunner) Execute(_ context.Context, trigger string, minAgeHours int, categories DockerCleanupCategories) (*models.DockerCleanupRun, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls = append(f.calls, fn7x3ExecuteCall{trigger: trigger, minAgeHours: minAgeHours})
+	f.calls = append(f.calls, fn7x3ExecuteCall{trigger: trigger, minAgeHours: minAgeHours, categories: categories})
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -374,7 +378,7 @@ func TestResolveDockerCleanupPolicyRefusesOnAFault(t *testing.T) {
 // written, so the scheduler must not write a second one.
 type fn8fw2ErrWithRunRunner struct{ err error }
 
-func (f *fn8fw2ErrWithRunRunner) Execute(_ context.Context, trigger string, minAgeHours int) (*models.DockerCleanupRun, error) {
+func (f *fn8fw2ErrWithRunRunner) Execute(_ context.Context, trigger string, minAgeHours int, _ DockerCleanupCategories) (*models.DockerCleanupRun, error) {
 	return &models.DockerCleanupRun{ID: "fn8fw2-run", Trigger: trigger, Status: "failed", MinAgeHours: minAgeHours}, f.err
 }
 
@@ -524,7 +528,7 @@ type yicuBlockingRunner struct {
 	calls   int
 }
 
-func (f *yicuBlockingRunner) Execute(_ context.Context, _ string, minAgeHours int) (*models.DockerCleanupRun, error) {
+func (f *yicuBlockingRunner) Execute(_ context.Context, _ string, minAgeHours int, _ DockerCleanupCategories) (*models.DockerCleanupRun, error) {
 	f.mu.Lock()
 	f.calls++
 	f.mu.Unlock()
@@ -587,4 +591,154 @@ func TestDockerCleanupTickSkipsWhenAManualRunHoldsTheGuard(t *testing.T) {
 	controlRuns, err := control.GetDockerCleanupRuns(10)
 	require.NoError(t, err)
 	require.Len(t, controlRuns, 1, "control: any other runner error with no run must still leave a row")
+}
+
+// agent-os-8hdg — the category switches and the alert threshold (D98-A, D98-C).
+
+// faultOneSettingDB returns a migrated on-disk database whose settings table
+// answers every key normally except `key`, whose read fails inside SQLite.
+//
+// hiddenSettingsDB cannot test a category read: it hides the whole table, so
+// the resolver fails on docker_cleanup_enabled, which it reads first, and a
+// resolver that ignored every category read error would pass. Here only the
+// named key faults. The table is replaced by a view whose value column runs
+// abs(-9223372036854775808) for that key, which SQLite rejects with "integer
+// overflow" when the row is read.
+func faultOneSettingDB(t *testing.T, key string, seed map[string]string) *database.DB {
+	t.Helper()
+	dataDir := t.TempDir()
+	db, err := database.NewWithMigrations(dataDir)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	for k, v := range seed {
+		require.NoError(t, db.SetSetting(k, v))
+	}
+
+	side, err := sql.Open("sqlite", filepath.Join(dataDir, "capstan.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = side.Close() })
+	_, err = side.Exec(`ALTER TABLE settings RENAME TO settings_real`)
+	require.NoError(t, err)
+	// The key is spliced in as a literal because a view's body cannot hold a
+	// bound parameter: sqlite3 answers `create view w as select ... :k ...`
+	// with "parameters are not allowed in views" (run 2026-10-14). Callers
+	// pass the package's own setting-name constants, never input.
+	_, err = side.Exec(`CREATE VIEW settings AS SELECT key, CASE WHEN key = '` + key + //nolint:gosec // G202: test fixture; key is a package constant and a view cannot take a bound parameter (see above)
+		`' THEN abs(-9223372036854775808) ELSE value END AS value FROM settings_real`)
+	require.NoError(t, err)
+	return db
+}
+
+var cleanupCategoryKeys = []string{
+	SettingDockerCleanupDanglingImages,
+	SettingDockerCleanupUnusedImages,
+	SettingDockerCleanupBuildCache,
+	SettingDockerCleanupContainers,
+	SettingDockerCleanupVolumes,
+	SettingDockerCleanupNetworks,
+	SettingDockerCleanupAlertThresholdBytes,
+}
+
+// TestResolveDockerCleanupPolicyCategories: no rows give today's behaviour,
+// stored rows are honoured, and a fault on any ONE of the seven new keys
+// refuses rather than resolving that key to its default.
+func TestResolveDockerCleanupPolicyCategories(t *testing.T) {
+	t.Run("absent rows give the defaults", func(t *testing.T) {
+		p, err := ResolveDockerCleanupPolicy(fn7x3MemoryDB(t))
+		require.NoError(t, err)
+		assert.Equal(t, DockerCleanupCategories{DanglingImages: true, BuildCache: true}, p.Categories)
+		assert.Equal(t, int64(5368709120), p.AlertThresholdBytes)
+	})
+
+	t.Run("stored rows are honoured", func(t *testing.T) {
+		// Every value is the opposite of its default, so a resolver that
+		// ignored the rows fails on each field.
+		db := fn7x3MemoryDB(t)
+		require.NoError(t, db.SetSettings([]database.SettingValue{
+			{Key: SettingDockerCleanupDanglingImages, Value: "false"},
+			{Key: SettingDockerCleanupUnusedImages, Value: "true"},
+			{Key: SettingDockerCleanupBuildCache, Value: "false"},
+			{Key: SettingDockerCleanupContainers, Value: "true"},
+			{Key: SettingDockerCleanupVolumes, Value: "true"},
+			{Key: SettingDockerCleanupNetworks, Value: "true"},
+			{Key: SettingDockerCleanupAlertThresholdBytes, Value: "0"},
+		}))
+		p, err := ResolveDockerCleanupPolicy(db)
+		require.NoError(t, err)
+		assert.Equal(t, DockerCleanupCategories{UnusedImages: true, Containers: true, Volumes: true, Networks: true}, p.Categories)
+		assert.Equal(t, int64(0), p.AlertThresholdBytes, "0 is a stored value (alert off), not an absent one")
+	})
+
+	for _, key := range cleanupCategoryKeys {
+		t.Run("unreadable "+key+" refuses", func(t *testing.T) {
+			// The faulted key holds a row, so the fault is on a real read and
+			// not on an absent row (which must stay the default).
+			db := faultOneSettingDB(t, key, map[string]string{key: "true", "unrelated_key": "x"})
+			_, err := ResolveDockerCleanupPolicy(db)
+			require.Error(t, err, "a fault on %s resolved to a policy anyway", key)
+			require.Contains(t, err.Error(), "integer overflow")
+
+			// Positive control on the same fixture shape: faulting a key the
+			// resolver never reads leaves it working, so the error above is
+			// about this key.
+			ok := faultOneSettingDB(t, "unrelated_key", map[string]string{key: "true", "unrelated_key": "x"})
+			_, err = ResolveDockerCleanupPolicy(ok)
+			require.NoError(t, err)
+		})
+	}
+}
+
+// TestDockerCleanupNextRunAt: zero when not armed, and the next multiple of the
+// interval after the arm time otherwise.
+func TestDockerCleanupNextRunAt(t *testing.T) {
+	armedAt := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
+
+	t.Run("disabled is zero", func(t *testing.T) {
+		s, _ := fn7x3Scheduler(t, fn7x3MemoryDB(t), &fn7x3FakeCleanupRunner{})
+		s.now = func() time.Time { return armedAt }
+		s.StartFromPolicy()
+		t.Cleanup(s.Stop)
+		assert.True(t, s.NextRunAt().IsZero(), "a disabled policy arms nothing, so there is no next run")
+	})
+
+	t.Run("enabled counts from the arm time", func(t *testing.T) {
+		db := fn7x3MemoryDB(t)
+		require.NoError(t, db.SetSetting(SettingDockerCleanupEnabled, "true"))
+		s, _ := fn7x3Scheduler(t, db, &fn7x3FakeCleanupRunner{})
+		clock := armedAt
+		s.now = func() time.Time { return clock }
+		s.StartFromPolicy() // interval 24h by default
+		t.Cleanup(s.Stop)
+
+		clock = armedAt.Add(time.Minute)
+		assert.Equal(t, armedAt.Add(24*time.Hour), s.NextRunAt(), "before the first tick")
+		clock = armedAt.Add(24*time.Hour + time.Minute)
+		assert.Equal(t, armedAt.Add(48*time.Hour), s.NextRunAt(), "just after the first tick")
+		clock = armedAt
+		assert.Equal(t, armedAt.Add(24*time.Hour), s.NextRunAt(), "at the arm instant the first tick is a full interval away")
+
+		s.Stop()
+		assert.True(t, s.NextRunAt().IsZero(), "a stopped ticker has no next run")
+	})
+}
+
+// TestDockerCleanupTickPassesThePolicyCategories: the scheduled run receives
+// the stored switches, not the defaults. The stored set is the opposite of the
+// default on both executed categories, so a tick passing defaults fails.
+func TestDockerCleanupTickPassesThePolicyCategories(t *testing.T) {
+	db := fn7x3MemoryDB(t)
+	require.NoError(t, db.SetSettings([]database.SettingValue{
+		{Key: SettingDockerCleanupEnabled, Value: "true"},
+		{Key: SettingDockerCleanupDanglingImages, Value: "false"},
+		{Key: SettingDockerCleanupBuildCache, Value: "false"},
+		{Key: SettingDockerCleanupVolumes, Value: "true"},
+	}))
+	runner := &fn7x3FakeCleanupRunner{}
+	s, _ := fn7x3Scheduler(t, db, runner)
+
+	s.runCycle(context.Background())
+
+	calls := runner.recorded()
+	require.Len(t, calls, 1)
+	assert.Equal(t, DockerCleanupCategories{Volumes: true}, calls[0].categories)
 }

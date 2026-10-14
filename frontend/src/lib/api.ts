@@ -41,6 +41,7 @@ import type {
   BackupOperationResult,
   SyncPreflightResponse,
   VersionInfo,
+  DockerCleanupCategories,
   DockerCleanupPolicy,
   DockerCleanupPreview,
   DockerCleanupHistory,
@@ -813,6 +814,9 @@ export const resourcesApi = {
     enabled?: boolean
     minAgeHours?: number
     intervalHours?: number
+    // Partial: an absent switch keeps its stored value.
+    categories?: Partial<DockerCleanupCategories>
+    alertThresholdBytes?: number
   }) => {
     const response = await apiClient.put<DockerCleanupPolicy>('/resources/cleanup/policy', data)
     return response.data

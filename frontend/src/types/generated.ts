@@ -955,7 +955,7 @@ export interface BackupSnapshot {
 export interface DockerCleanupRun {
   id: string;
   trigger: string; // "scheduled" | "manual"
-  status: string; // "success" | "failed"
+  status: string; // "success" | "failed" | "skipped"
   startedAt: string;
   finishedAt?: string;
   imagesDeleted: number /* int */;
@@ -963,4 +963,19 @@ export interface DockerCleanupRun {
   cacheBytesReclaimed: number /* int64 */;
   minAgeHours: number /* int */;
   errorMessage?: string;
+  /**
+   * Categories is the comma-separated list of categories the run acted on
+   * (services.CleanupCategory*), recorded per row for the reason MinAgeHours
+   * is. Empty when the run attempted nothing. Rows from before migration 24 read
+   * "dangling_images,build_cache", which is what every earlier run removed.
+   */
+  categories: string;
+  containersDeleted: number /* int */;
+  volumesDeleted: number /* int */;
+  networksDeleted: number /* int */;
+  /**
+   * OtherBytesReclaimed is container and volume bytes. Freed in total is
+   * BytesReclaimed + CacheBytesReclaimed + OtherBytesReclaimed.
+   */
+  otherBytesReclaimed: number /* int64 */;
 }

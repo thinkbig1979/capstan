@@ -300,17 +300,34 @@ Direct Docker resource management, independent of any stack.
   lists, and build cache as `{count, bytes}`. Read fresh on every call. `size`
   is omitted when Docker did not report it. Removes nothing
 - `GET /api/v1/resources/cleanup/policy` — the scheduled Docker cleanup policy,
-  plus the server-enforced minimum image age the API will accept
+  plus the server-enforced minimum image age the API will accept. `categories`
+  holds one switch per category (`danglingImages`, `unusedImages`,
+  `buildCache`, `containers`, `volumes`, `networks`); with no stored value,
+  dangling images and build cache are on and the rest off.
+  `alertThresholdBytes` is the dashboard alert threshold (default 5 GiB, 0 =
+  off). `nextRunAt` (RFC3339) is the next scheduled run, present only while
+  cleanup is enabled and scheduled
 - `PUT /api/v1/resources/cleanup/policy` — enable or disable scheduled cleanup
-  and set its interval and minimum image age. A minimum age below the server
-  floor is rejected, not clamped: a prune is irreversible, so an operator who
-  asked for 0 must not be told 1 was stored
+  and set its interval, minimum image age, categories and alert threshold.
+  Every field is optional; `categories` may be partial, and a switch it leaves
+  out keeps its stored value. A minimum age below the server floor is
+  rejected, not clamped: a prune is irreversible, so an operator who asked for
+  0 must not be told 1 was stored. `alertThresholdBytes` must be between 0 and
+  1 TiB. An enabled policy with every category off is rejected with 400 "Turn
+  on at least one category, or turn automatic cleanup off". Everything is
+  validated before anything is stored, and the changed keys are stored together
 - `POST /api/v1/resources/cleanup/preview` — what a cleanup would remove.
   Removes nothing
 - `POST /api/v1/resources/cleanup/run` — run a cleanup now, independently of
-  the schedule and whether the schedule is enabled
+  the schedule and whether the schedule is enabled. It removes the categories
+  the policy has switched on. Today a run removes dangling images and build
+  cache only; the other categories are stored but not yet acted on
 - `GET /api/v1/resources/cleanup/history` — recent cleanup runs. `limit`
-  defaults to 50 and is capped at 100
+  defaults to 50 and is capped at 100. Each run records the `categories` it
+  acted on (comma-separated), per-category counts (`containersDeleted`,
+  `volumesDeleted`, `networksDeleted`) and `otherBytesReclaimed`. `status` is
+  `success` or `failed`; `skipped` is reserved for a scheduled run that finds
+  another operation holding its turn, which no run writes yet
 
 ## Terminal
 

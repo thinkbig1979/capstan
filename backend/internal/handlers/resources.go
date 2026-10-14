@@ -38,14 +38,16 @@ type updateScanner interface {
 // run handlers are testable without a Docker daemon.
 type dockerCleanupService interface {
 	Preview(ctx context.Context, minAgeHours int) (*services.DockerCleanupPreview, error)
-	Execute(ctx context.Context, trigger string, minAgeHours int) (*models.DockerCleanupRun, error)
+	Execute(ctx context.Context, trigger string, minAgeHours int, categories services.DockerCleanupCategories) (*models.DockerCleanupRun, error)
 }
 
 // dockerCleanupArmer is the slice of *services.DockerCleanupSchedulerService the
 // policy PUT needs: re-arm the tick from the freshly stored policy, so an
-// operator who opts in does not have to restart the process.
+// operator who opts in does not have to restart the process. NextRunAt is what
+// the policy GET and PUT report as nextRunAt.
 type dockerCleanupArmer interface {
 	StartFromPolicy()
+	NextRunAt() time.Time
 }
 
 // resourcePruner is the slice of *services.DockerService the four cross-stack
