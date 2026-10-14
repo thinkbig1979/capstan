@@ -358,13 +358,14 @@ func TestHostFreeSpace_RunContextIsOperationOwned(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/resources/host/free-space", strings.NewReader(`{"images":["sha256:a"]}`)).WithContext(ctx)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
+	before := time.Now()
 	r.ServeHTTP(w, req)
 
 	require.Len(t, fake.freeCalls, 1, "body = %s", w.Body.String())
 	assert.NoError(t, fake.freeCtxErr, "the run context ended with the request")
 	deadline, ok := fake.freeCtx.Deadline()
 	require.True(t, ok, "the run has no deadline")
-	assert.WithinDuration(t, time.Now().Add(services.HostFreeSpaceTimeout), deadline, time.Minute)
+	assert.WithinDuration(t, before.Add(services.HostFreeSpaceTimeout), deadline, time.Minute)
 }
 
 // A removal route invalidates the host summary even when Docker fails: the
