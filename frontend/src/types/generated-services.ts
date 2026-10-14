@@ -128,6 +128,63 @@ export interface HostBuildCacheCandidates {
   bytes: number /* int64 */;
 }
 /**
+ * HostFreeSpaceRequest is POST /resources/host/free-space's body: the IDs the
+ * user ticked in the Free-up-space dialog. It is here, unlike other request
+ * bodies, so the dialog's hook sends the generated shape. A category left out
+ * removes nothing in it.
+ */
+export interface HostFreeSpaceRequest {
+  images?: string[];
+  containers?: string[];
+  volumes?: string[];
+  networks?: string[];
+  buildCache?: boolean;
+}
+/**
+ * HostFreeSpaceResult is what a free-space run did, served as the
+ * ActionResult's details: one key per field.
+ */
+export interface HostFreeSpaceResult {
+  images: HostFreeSpaceCategoryResult;
+  containers: HostFreeSpaceCategoryResult;
+  volumes: HostFreeSpaceCategoryResult;
+  networks: HostFreeSpaceCategoryResult;
+  buildCache: HostFreeSpaceBuildCacheResult;
+  /**
+   * SpaceReclaimed is Docker's disk use before the run minus after it,
+   * floored at 0. Omitted when the after-read failed: unknown, not 0.
+   */
+  spaceReclaimed?: number /* int64 */;
+}
+/**
+ * HostFreeSpaceCategoryResult: every requested ID lands in exactly one list.
+ * The lists are never nil, so an empty one is sent as [].
+ */
+export interface HostFreeSpaceCategoryResult {
+  removed: string[];
+  failed: HostFreeSpaceItemIssue[];
+  skipped: HostFreeSpaceItemIssue[];
+}
+/**
+ * HostFreeSpaceItemIssue names an ID that was not removed, and why.
+ */
+export interface HostFreeSpaceItemIssue {
+  id: string;
+  reason: string;
+}
+/**
+ * HostFreeSpaceBuildCacheResult: build cache is pruned as a whole. Removed is
+ * the number of records Docker deleted. Failed or Skipped carries the reason
+ * when the prune failed or was not run although requested.
+ */
+export interface HostFreeSpaceBuildCacheResult {
+  requested: boolean;
+  removed: number /* int */;
+  spaceReclaimed: number /* int64 */;
+  failed?: string;
+  skipped?: string;
+}
+/**
  * DockerCleanupCandidate is one image a run would remove. Repository is empty
  * for the fully-untagged form; see danglingRepository.
  */

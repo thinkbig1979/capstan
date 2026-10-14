@@ -407,6 +407,9 @@ func (h *ResourcesHandler) runCleanup(c *gin.Context) {
 		return
 	}
 
+	// A run removes images and build cache: the host summary must not show
+	// them for up to 30 s afterwards (agent-os-yyat).
+	defer h.invalidateHostSpace()
 	runCtx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), services.DockerCleanupRunTimeout)
 	defer cancel()
 	run, err := h.cleanup.Execute(runCtx, services.TriggerManual, minAge, policy.Categories)

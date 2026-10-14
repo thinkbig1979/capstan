@@ -119,6 +119,56 @@ type HostBuildCacheCandidates struct {
 	Bytes int64 `json:"bytes"`
 }
 
+// HostFreeSpaceRequest is POST /resources/host/free-space's body: the IDs the
+// user ticked in the Free-up-space dialog. It is here, unlike other request
+// bodies, so the dialog's hook sends the generated shape. A category left out
+// removes nothing in it.
+type HostFreeSpaceRequest struct {
+	Images     []string `json:"images,omitempty"`
+	Containers []string `json:"containers,omitempty"`
+	Volumes    []string `json:"volumes,omitempty"`
+	Networks   []string `json:"networks,omitempty"`
+	BuildCache bool     `json:"buildCache,omitempty"`
+}
+
+// HostFreeSpaceResult is what a free-space run did, served as the
+// ActionResult's details: one key per field.
+type HostFreeSpaceResult struct {
+	Images     HostFreeSpaceCategoryResult   `json:"images"`
+	Containers HostFreeSpaceCategoryResult   `json:"containers"`
+	Volumes    HostFreeSpaceCategoryResult   `json:"volumes"`
+	Networks   HostFreeSpaceCategoryResult   `json:"networks"`
+	BuildCache HostFreeSpaceBuildCacheResult `json:"buildCache"`
+	// SpaceReclaimed is Docker's disk use before the run minus after it,
+	// floored at 0. Omitted when the after-read failed: unknown, not 0.
+	SpaceReclaimed *int64 `json:"spaceReclaimed,omitempty"`
+}
+
+// HostFreeSpaceCategoryResult: every requested ID lands in exactly one list.
+// The lists are never nil, so an empty one is sent as [].
+type HostFreeSpaceCategoryResult struct {
+	Removed []string                 `json:"removed"`
+	Failed  []HostFreeSpaceItemIssue `json:"failed"`
+	Skipped []HostFreeSpaceItemIssue `json:"skipped"`
+}
+
+// HostFreeSpaceItemIssue names an ID that was not removed, and why.
+type HostFreeSpaceItemIssue struct {
+	ID     string `json:"id"`
+	Reason string `json:"reason"`
+}
+
+// HostFreeSpaceBuildCacheResult: build cache is pruned as a whole. Removed is
+// the number of records Docker deleted. Failed or Skipped carries the reason
+// when the prune failed or was not run although requested.
+type HostFreeSpaceBuildCacheResult struct {
+	Requested      bool   `json:"requested"`
+	Removed        int    `json:"removed"`
+	SpaceReclaimed int64  `json:"spaceReclaimed"`
+	Failed         string `json:"failed,omitempty"`
+	Skipped        string `json:"skipped,omitempty"`
+}
+
 // DockerCleanupCandidate is one image a run would remove. Repository is empty
 // for the fully-untagged form; see danglingRepository.
 type DockerCleanupCandidate struct {

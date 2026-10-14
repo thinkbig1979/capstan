@@ -2,7 +2,10 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +28,14 @@ const hostSpaceSnapshotTTL = 30 * time.Second
 
 const composeProjectLabel = "com.docker.compose.project"
 
+// HostFreeSpaceTimeout bounds a free-space run. The handler runs it on a
+// context of its own (safe-defaults rule 15), so this is what ends it.
+const HostFreeSpaceTimeout = 15 * time.Minute
+
+// notCandidateReason is the skipped reason for a requested ID that is not in
+// the candidate set rebuilt under the lock.
+const notCandidateReason = "no longer removable: in use, owned by a stack, or gone"
+
 // builtInNetworks are created by Docker itself and never listed for removal.
 // ingress and docker_gwbridge are swarm's; they carry no compose label and can
 // have no attached container, so the label and attachment rules alone would
@@ -44,6 +55,13 @@ type hostSpaceDocker interface {
 	DiskUsage(ctx context.Context, options dockertypes.DiskUsageOptions) (dockertypes.DiskUsage, error)
 	NetworkList(ctx context.Context, options network.ListOptions) ([]network.Summary, error)
 	networkInspector
+
+	// The removals FreeSpace makes, one object at a time.
+	ContainerRemove(ctx context.Context, containerID string, options container.RemoveOptions) error
+	ImageRemove(ctx context.Context, imageID string, options image.RemoveOptions) ([]image.DeleteResponse, error)
+	NetworkRemove(ctx context.Context, networkID string) error
+	VolumeRemove(ctx context.Context, volumeID string, force bool) error
+	BuildCachePrune(ctx context.Context, opts build.CachePruneOptions) (*build.CachePruneReport, error)
 }
 
 // hostSpaceStacks is the slice of *database.DB that says which compose
@@ -381,4 +399,120 @@ func volumeIsCandidate(vol *volume.Volume, owned map[string]bool) bool {
 		return false
 	}
 	return !isStackOwned(vol.Labels, owned)
+}
+
+// FreeSpace removes the requested items that are still candidates. The caller
+// holds the exclusive stack turn, so the candidate set rebuilt here cannot go
+// stale before the removals: a requested ID outside it was in use, stack-owned
+// or gone by the time the lock was taken, and is skipped, never removed.
+//
+// Every removal passes force=false, so Docker itself refuses anything in use.
+// Images are removed without PruneChildren: an untagged parent was not listed,
+// so it is not this run's to remove. Order: containers first (which can free
+// images, but those are not added to this run), images, networks, volumes,
+// then build cache.
+//
+// An error means nothing was removed: the candidate read failed.
+func (s *HostSpaceService) FreeSpace(ctx context.Context, req HostFreeSpaceRequest) (*HostFreeSpaceResult, error) {
+	snap, err := s.snapshot(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+	// Anything removed below changes the summary; drop the snapshot whatever
+	// happens from here on.
+	defer s.Invalidate()
+	before := snap.summary.Disk.Total
+
+	res := &HostFreeSpaceResult{
+		Images:     newCategoryResult(),
+		Containers: newCategoryResult(),
+		Volumes:    newCategoryResult(),
+		Networks:   newCategoryResult(),
+	}
+	cand := snap.candidates
+
+	removeEach(req.Containers, cand.Containers, &res.Containers, func(id string) error {
+		return s.docker.ContainerRemove(ctx, id, container.RemoveOptions{Force: false})
+	})
+	removeEach(req.Images, cand.Images, &res.Images, func(id string) error {
+		resp, err := s.docker.ImageRemove(ctx, id, image.RemoveOptions{Force: false, PruneChildren: false})
+		if err != nil {
+			return err
+		}
+		for _, r := range resp {
+			if r.Deleted != "" {
+				return nil
+			}
+		}
+		return errors.New("only untagged; the image is still referenced")
+	})
+	removeEach(req.Networks, cand.Networks, &res.Networks, func(id string) error {
+		return s.docker.NetworkRemove(ctx, id)
+	})
+	removeEach(req.Volumes, cand.Volumes, &res.Volumes, func(id string) error {
+		return s.docker.VolumeRemove(ctx, id, false)
+	})
+
+	if req.BuildCache {
+		res.BuildCache.Requested = true
+		if cand.BuildCache.Count == 0 {
+			res.BuildCache.Skipped = "no unused build cache"
+		} else {
+			// All=false spares shared records, matching buildCacheIsCandidate.
+			// INFERRED from BuildKit's prune (the non-all filter skips shared
+			// records), not run against a daemon.
+			report, err := s.docker.BuildCachePrune(ctx, build.CachePruneOptions{All: false})
+			switch {
+			case err != nil:
+				res.BuildCache.Failed = err.Error()
+			case report != nil:
+				res.BuildCache.Removed = len(report.CachesDeleted)
+				res.BuildCache.SpaceReclaimed = int64(min(report.SpaceReclaimed, math.MaxInt64))
+			}
+		}
+	}
+
+	after, err := s.docker.DiskUsage(ctx, dockertypes.DiskUsageOptions{})
+	if err != nil {
+		slog.Warn("Free-space run: could not measure Docker disk use afterwards", "error", err)
+		return res, nil
+	}
+	// Floored at 0: something outside Capstan can grow Docker's use while
+	// the run is in progress.
+	freed := max(0, before-summarizeDiskUsage(after).Total)
+	res.SpaceReclaimed = &freed
+	return res, nil
+}
+
+func newCategoryResult() HostFreeSpaceCategoryResult {
+	return HostFreeSpaceCategoryResult{
+		Removed: []string{},
+		Failed:  []HostFreeSpaceItemIssue{},
+		Skipped: []HostFreeSpaceItemIssue{},
+	}
+}
+
+// removeEach removes every requested ID that is in candidates, once each, and
+// records each ID in exactly one of out's lists.
+func removeEach(requested []string, candidates []HostCandidateItem, out *HostFreeSpaceCategoryResult, remove func(id string) error) {
+	eligible := make(map[string]bool, len(candidates))
+	for _, c := range candidates {
+		eligible[c.ID] = true
+	}
+	seen := make(map[string]bool, len(requested))
+	for _, id := range requested {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		if !eligible[id] {
+			out.Skipped = append(out.Skipped, HostFreeSpaceItemIssue{ID: id, Reason: notCandidateReason})
+			continue
+		}
+		if err := remove(id); err != nil {
+			out.Failed = append(out.Failed, HostFreeSpaceItemIssue{ID: id, Reason: err.Error()})
+			continue
+		}
+		out.Removed = append(out.Removed, id)
+	}
 }

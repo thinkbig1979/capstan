@@ -80,6 +80,7 @@ func (h *ResourcesHandler) deleteImage(c *gin.Context) {
 		return
 	}
 	defer release()
+	defer h.invalidateHostSpace()
 
 	id := c.Param("id")
 	force := c.Query("force") == "true"
@@ -157,6 +158,7 @@ func (h *ResourcesHandler) pruneImages(c *gin.Context) {
 		return
 	}
 	defer release()
+	defer h.invalidateHostSpace()
 
 	report, err := h.prunerSeam().PruneImages(c.Request.Context(), parsePruneOptions(c))
 	if err != nil {
@@ -180,6 +182,7 @@ func (h *ResourcesHandler) pruneContainers(c *gin.Context) {
 		return
 	}
 	defer release()
+	defer h.invalidateHostSpace()
 
 	report, err := h.prunerSeam().PruneContainers(c.Request.Context(), parsePruneOptions(c))
 	if err != nil {
@@ -226,6 +229,7 @@ func (h *ResourcesHandler) deleteContainer(c *gin.Context) {
 		return
 	}
 	defer release()
+	defer h.invalidateHostSpace()
 	if err := h.containerOps.DeleteContainer(c.Request.Context(), id, force); err != nil {
 		fail(err)
 		return
@@ -245,6 +249,7 @@ func (h *ResourcesHandler) deleteVolume(c *gin.Context) {
 		return
 	}
 	defer release()
+	defer h.invalidateHostSpace()
 
 	name := c.Param("name")
 	force := c.Query("force") == "true"
@@ -271,6 +276,7 @@ func (h *ResourcesHandler) pruneVolumes(c *gin.Context) {
 		return
 	}
 	defer release()
+	defer h.invalidateHostSpace()
 
 	report, err := h.prunerSeam().PruneVolumes(c.Request.Context(), parsePruneOptions(c))
 	if err != nil {
@@ -359,6 +365,7 @@ func (h *ResourcesHandler) deleteNetwork(c *gin.Context) {
 		return
 	}
 	defer release()
+	defer h.invalidateHostSpace()
 
 	id := c.Param("id")
 
@@ -384,6 +391,7 @@ func (h *ResourcesHandler) pruneNetworks(c *gin.Context) {
 		return
 	}
 	defer release()
+	defer h.invalidateHostSpace()
 
 	report, err := h.prunerSeam().PruneNetworks(c.Request.Context(), parsePruneOptions(c))
 	if err != nil {
@@ -414,6 +422,7 @@ func (h *ResourcesHandler) pruneNetworks(c *gin.Context) {
 }
 
 func (h *ResourcesHandler) pruneBuildCache(c *gin.Context) {
+	defer h.invalidateHostSpace()
 	report, err := h.docker.PruneBuildCache(c.Request.Context(), parsePruneOptions(c))
 	if err != nil {
 		slog.Error("Failed to prune build cache", "error", err)

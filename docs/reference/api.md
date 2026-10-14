@@ -299,6 +299,20 @@ Direct Docker resource management, independent of any stack.
   images, containers, volumes and networks as `{id, label, size?, detail?}`
   lists, and build cache as `{count, bytes}`. Read fresh on every call. `size`
   is omitted when Docker did not report it. Removes nothing
+- `POST /api/v1/resources/host/free-space` — remove the listed items, body
+  `{images?, containers?, volumes?, networks?: string[], buildCache?: bool}`
+  (IDs as `candidates` returns them, at most 1000 per category). Waits for no
+  stack: it answers 409 `OPERATION_IN_PROGRESS` while any stack operation runs,
+  and blocks stack operations while it runs. The candidates are read again
+  first, and a requested ID that is no longer one (in use, owned by a stack, or
+  gone) is skipped, never removed. Nothing is forced. Returns an action result
+  whose `details` has `{removed, failed: [{id, reason}], skipped: [{id,
+  reason}]}` per category, `buildCache: {requested, removed, spaceReclaimed,
+  failed?, skipped?}`, and `spaceReclaimed`, Docker's disk use before minus
+  after (omitted when it could not be measured). Outcome `success`, `partial`
+  (207), `no_change`, or `failed` (500) when every removal failed. 400
+  `VALIDATION_ERROR` for an empty request, too many IDs, or an ID that is not a
+  Docker ID or name. Carries on if the browser disconnects (15 min limit)
 - `GET /api/v1/resources/cleanup/policy` — the scheduled Docker cleanup policy,
   plus the server-enforced minimum image age the API will accept. `categories`
   holds one switch per category (`danglingImages`, `unusedImages`,

@@ -44,6 +44,9 @@ const (
 	OpKindNetworkDelete = "network delete"
 	OpKindVolumeDelete  = "volume delete"
 	OpKindImageDelete   = "image delete"
+	// OpKindHostFreeSpace is the Free-up-space dialog's removal of a list of
+	// images, containers, networks and volumes across every stack.
+	OpKindHostFreeSpace = "free up space"
 )
 
 // OperationLock is a per-stack try-lock: Acquire fails fast instead of waiting

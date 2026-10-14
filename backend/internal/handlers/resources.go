@@ -119,10 +119,10 @@ type ResourcesHandler struct {
 	// stack (agent-os-a1ye.4). Injected by SetOperationLock like the two
 	// above; nil (test-built handlers) means no locking.
 	opLock *services.OperationLock
-	// hostSpace serves the Docker host summary and cleanup candidates.
-	// Injected by SetHostSpaceService; nil on a Docker-less host, and the
-	// host routes then answer 503.
-	hostSpace hostSpaceReader
+	// hostSpace serves the Docker host summary and cleanup candidates and
+	// runs free-space. Injected by SetHostSpaceService; nil on a Docker-less
+	// host, and the host routes then answer 503.
+	hostSpace hostSpaceService
 }
 
 // SetOperationLock installs the per-stack operation lock shared with the
@@ -213,6 +213,7 @@ func (h *ResourcesHandler) RegisterRoutes(r *gin.RouterGroup) {
 	// Docker host page (agent-os-p8sm). Handlers in host_space.go.
 	r.GET("/resources/host/summary", h.getHostSummary)
 	r.GET("/resources/host/candidates", h.getHostCandidates)
+	r.POST("/resources/host/free-space", h.freeSpace)
 
 	// Scheduled Docker cleanup (agent-os-fn7x.3). Handlers in docker_cleanup.go.
 	r.GET("/resources/cleanup/policy", h.getCleanupPolicy)
