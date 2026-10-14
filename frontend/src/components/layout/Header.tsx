@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useEffect } from 'react'
 import { useLocation, Link } from 'react-router'
 import { Logo } from '@/components/Logo'
 import { Button } from '@/components/ui/button'
@@ -21,6 +21,8 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { HeaderVitals } from '@/components/layout/HeaderVitals'
 import { useUIStore } from '@/stores/uiStore'
 import { useAuth } from '@/hooks/useAuth'
+import { isEditableTarget } from '@/lib/editable-target'
+import { useHelpStore, usePageHelpRef } from '@/help/helpStore'
 import { toast } from 'sonner'
 import { HelpCircle, Settings, Sun, Moon, Laptop, ChevronLeft } from 'lucide-react'
 
@@ -29,6 +31,7 @@ const KEYBOARD_SHORTCUTS = [
     category: 'General',
     shortcuts: [
       { key: 'Ctrl+K', description: 'Open search' },
+      { key: '?', description: 'Open help for this page' },
       { key: 'Ctrl+/', description: 'Keyboard shortcuts help' },
     ],
   },
@@ -59,7 +62,10 @@ export function Header() {
   const location = useLocation()
   const { theme, setTheme, toggleSidebar } = useUIStore()
   const { user, logout } = useAuth()
-  const [showShortcuts, setShowShortcuts] = useState(false)
+  const showShortcuts = useHelpStore((s) => s.shortcutsOpen)
+  const setShowShortcuts = useHelpStore((s) => s.setShortcutsOpen)
+  const openHelpForPage = useHelpStore((s) => s.openForPage)
+  const pageHelpRef = usePageHelpRef()
 
   const getCurrentCategory = () => {
     const path = location.pathname
@@ -77,10 +83,18 @@ export function Header() {
       if (e.key === 'Escape') {
         setShowShortcuts(false)
       }
+      // `?` toggles help, but never while typing: in an input, a textarea (the
+      // terminal) or a contentEditable (the editors) it is just a character.
+      if (e.key === '?' && !e.ctrlKey && !e.metaKey && !e.altKey && !isEditableTarget(e.target)) {
+        e.preventDefault()
+        const help = useHelpStore.getState()
+        if (help.open) help.close()
+        else help.openForPage(pageHelpRef)
+      }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [])
+  }, [setShowShortcuts, pageHelpRef])
 
   const handleLogout = async () => {
     try {
@@ -187,9 +201,10 @@ export function Header() {
         <Button
           variant="ghost"
           size="icon"
-          onClick={() => setShowShortcuts(true)}
-          title="Keyboard shortcuts (Ctrl+/)"
-          aria-label="Show keyboard shortcuts"
+          onClick={() => openHelpForPage(pageHelpRef)}
+          title="Help (?)"
+          aria-label="Open help"
+          data-testid="header-help-button"
         >
           <HelpCircle className="h-5 w-5" />
         </Button>

@@ -24,6 +24,12 @@ RUN pnpm install --frozen-lockfile --ignore-scripts && \
 
 COPY frontend/ ./
 
+# The in-app help bundles docs/**/*.md at build time (frontend/src/help/docs-raw.ts
+# globs ../../../docs from /app/frontend/src/help). Without this COPY the glob
+# matches nothing and the build still succeeds, so the image would ship with no
+# help; .dockerignore re-includes docs markdown for the same reason.
+COPY docs/ /app/docs/
+
 RUN npm run build
 
 # Backend build stage — also pinned to $BUILDPLATFORM. Go cross-compiles

@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react'
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
+import { HelpHint } from '@/components/ui/help-hint'
 import { Badge } from '@/components/ui/badge'
 import { LoadingSpinner } from '@/components/LoadingSkeleton'
 import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
@@ -180,7 +181,13 @@ export function DirectoriesSettingsContent() {
         ) : (
           <>
             <div className="space-y-2">
-              <Label htmlFor="scan-depth">Directory Recursion Depth</Label>
+              <div className="flex items-center gap-1.5">
+                <Label htmlFor="scan-depth">Directory Recursion Depth</Label>
+                <HelpHint label="Directory recursion depth" topic="directories.scan-depth">
+                  <p>How many folder levels Capstan searches below each monitored directory for compose files.</p>
+                  <p>Saving a new depth does not add stacks by itself: rescan from the dashboard.</p>
+                </HelpHint>
+              </div>
               <Select value={effectiveDepth} onValueChange={setScanDepth}>
                 <SelectTrigger id="scan-depth" className="w-full max-w-xs" aria-label="Directory Recursion Depth">
                   <SelectValue />
@@ -240,7 +247,13 @@ export function DirectoriesSettingsContent() {
                 </p>
               )}
               <div className="space-y-2">
-                <Label htmlFor="default-dir">Default Directory for New Stacks</Label>
+                <div className="flex items-center gap-1.5">
+                  <Label htmlFor="default-dir">Default Directory for New Stacks</Label>
+                  <HelpHint label="Default directory for new stacks" topic="directories.default-dir">
+                    <p>The directory the New Stack dialog preselects. You can only pick a directory that is already monitored.</p>
+                    <p>A change applies after the server restarts.</p>
+                  </HelpHint>
+                </div>
                 <Select value={effectiveDefault} onValueChange={setDefaultDir}>
                   <SelectTrigger id="default-dir" className="w-full max-w-md" aria-label="Default Directory for New Stacks">
                     <SelectValue placeholder="Select default directory" />

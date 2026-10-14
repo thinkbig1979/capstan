@@ -227,7 +227,13 @@ export function DockerCleanupCard() {
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 max-w-xl">
           <div className="space-y-1">
-            <Label htmlFor="docker-cleanup-min-age">Age floor (hours)</Label>
+            <div className="flex items-center gap-1.5">
+              <Label htmlFor="docker-cleanup-min-age">Age floor (hours)</Label>
+              <HelpHint label="Age floor" topic="docker-cleanup.min-age">
+                <p>An image must be older than this before cleanup may remove it, which protects fresh builds.</p>
+                <p>Age counts from when the image was created, not from when it was last used.</p>
+              </HelpHint>
+            </div>
             <NumericField
               id="docker-cleanup-min-age"
               min={data.minAllowedAgeHours}

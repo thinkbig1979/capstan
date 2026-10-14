@@ -25,7 +25,7 @@ export function RetentionSection({ draft, onChange }: RetentionSectionProps) {
           label="Retention"
           title="Retention"
           side="right"
-          href="https://github.com/thinkbig1979/capstan/blob/main/docs/reference/configuration.md#backups--restic"
+          topic="backup.retention"
         >
           <p>
             After every backup, old snapshots are removed from the list, keeping a set number

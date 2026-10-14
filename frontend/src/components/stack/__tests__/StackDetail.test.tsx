@@ -19,6 +19,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { expectHintOpensHelp } from '@/test/helpHint'
 import { renderWithProviders } from '../../../test/utils'
 import type { Stack } from '@/types'
 
@@ -403,5 +404,14 @@ describe('StackDetail — a failed backup-policies refresh (agent-os-r6fx)', () 
       screen.getByText(notice).compareDocumentPosition(screen.getByTestId('backup-toggle')) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy()
+  })
+})
+
+describe('StackDetail — field help (agent-os-pkq9)', () => {
+  it('stack.backup: the Backup hint opens help at its topic', async () => {
+    const user = userEvent.setup()
+    renderDetail()
+
+    await expectHintOpensHelp(user, 'Backup', 'stack.backup')
   })
 })

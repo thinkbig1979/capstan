@@ -105,6 +105,14 @@ by resource, plus health-check and version examples.
 - [Security model](docs/explanation/security-model.md)
 - [Architecture](docs/explanation/architecture.md)
 
+### In-app help
+
+Short, per-page guides to the dashboard, the stack page and Settings.
+
+- [Dashboard help](docs/help/dashboard.md)
+- [Stack page help](docs/help/stack-page.md)
+- [Settings help](docs/help/settings.md)
+
 ## Contributing
 
 Project structure, local development, testing, branch protection, and the

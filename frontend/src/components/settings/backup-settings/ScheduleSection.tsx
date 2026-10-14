@@ -1,5 +1,6 @@
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
+import { HelpHint } from '@/components/ui/help-hint'
 import { NumericField } from '../NumericField'
 import { ScheduleModeFields } from '../ScheduleModeFields'
 import type { Draft } from './types'
@@ -63,7 +64,16 @@ export function ScheduleSection({ draft, onChange }: ScheduleSectionProps) {
           onCheckedChange={(v) => onChange('verifyWeekly', v)}
         />
         <div>
-          <Label htmlFor="backup-verify-weekly">Check the repository weekly</Label>
+          <div className="flex items-center gap-1.5">
+            <Label htmlFor="backup-verify-weekly">Check the repository weekly</Label>
+            <HelpHint label="Weekly repository check" topic="backup.verify">
+              <p>
+                Reads a 5% sample of the stored data after a scheduled backup, at most once a
+                week.
+              </p>
+              <p>It only runs while scheduled backups are on.</p>
+            </HelpHint>
+          </div>
           <p className="text-xs text-muted-foreground">
             After a scheduled backup, once a week, read 5% of the backup data to confirm it can
             be restored. A failed check shows a warning; backups keep running.

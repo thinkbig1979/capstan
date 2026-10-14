@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, Suspense, lazy } from 'react'
+import { useState, useEffect, useCallback, useMemo, Suspense, lazy, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router'
 import { directoriesApi, stacksApi, dashboardApi, settingsApi } from '@/lib/api'
@@ -21,7 +21,8 @@ import { UpdatesTab } from '@/components/dashboard/UpdatesTab'
 import { BackupHistoryTab } from '@/components/dashboard/BackupHistoryTab'
 import { DashboardHeader } from '@/components/dashboard/DashboardHeader'
 import { AttentionStrip } from '@/components/dashboard/AttentionStrip'
-import { HostStrip, type HostView } from '@/components/dashboard/HostStrip'
+import { HostStrip } from '@/components/dashboard/HostStrip'
+import { DASHBOARD_TABS, type DashboardTab, type HostView } from '@/lib/app-views'
 import { StacksTab } from '@/components/dashboard/StacksTab'
 import { DirectoriesTab } from '@/components/dashboard/DirectoriesTab'
 import { classifyError, presentError } from '@/lib/error-handler'
@@ -292,6 +293,21 @@ export function DashboardPage() {
     )
   }
 
+  const tabLabels: Record<DashboardTab, ReactNode> = {
+    stacks: 'Stacks',
+    overview: 'Metrics',
+    directories: 'Directories',
+    updates: isScanningUpdates ? (
+      <span className="flex items-center gap-1.5">
+        Updates
+        <RefreshCw className="h-3 w-3 animate-spin" />
+      </span>
+    ) : (
+      'Updates'
+    ),
+    backups: 'Backups',
+  }
+
   return (
     <div className="space-y-6">
       {/* agent-os-lurn: past the guard, an error means a REFRESH failed over
@@ -316,23 +332,7 @@ export function DashboardPage() {
           value={activeTab}
           onValueChange={setActiveTab}
           variant="line"
-          tabs={[
-            { value: 'stacks', label: 'Stacks' },
-            { value: 'overview', label: 'Metrics' },
-            { value: 'directories', label: 'Directories' },
-            {
-              value: 'updates',
-              label: isScanningUpdates ? (
-                <span className="flex items-center gap-1.5">
-                  Updates
-                  <RefreshCw className="h-3 w-3 animate-spin" />
-                </span>
-              ) : (
-                'Updates'
-              ),
-            },
-            { value: 'backups', label: 'Backups' },
-          ]}
+          tabs={DASHBOARD_TABS.map((value) => ({ value, label: tabLabels[value] }))}
         />
 
         <TabsContent value="overview" className="mt-4">

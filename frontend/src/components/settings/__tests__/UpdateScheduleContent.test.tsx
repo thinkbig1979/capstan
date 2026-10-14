@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { UpdateScheduleContent } from '../UpdateScheduleContent'
 import { toast } from 'sonner'
+import { expectHintOpensHelp } from '@/test/helpHint'
 
 /**
  * SettingsPage.test.tsx:40 replaces this panel with an empty div, so nothing
@@ -759,5 +760,14 @@ describe('UpdateScheduleContent — a cleared custom interval (agent-os-z91e.15)
       }),
     )
     expect(screen.queryByText('Enter a number')).not.toBeInTheDocument()
+  })
+})
+
+describe('UpdateScheduleContent — field help (agent-os-pkq9)', () => {
+  it('updates.schedule: the scan interval hint opens help at its topic', async () => {
+    const user = userEvent.setup()
+    mockGetUpdates.mockResolvedValue(makeSettings())
+    renderPanel()
+    await expectHintOpensHelp(user, 'Scan interval', 'updates.schedule')
   })
 })

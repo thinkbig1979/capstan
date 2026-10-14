@@ -206,6 +206,20 @@ export function useRunSync() {
   })
 }
 
+// The DR restore answers 202 {runId, wsUrl} (a BackupOperationResult, not an
+// ActionResult), so this is a plain mutation like useRunSync: the outcome of the
+// run itself lands in the backup history, not in this response.
+export function useRunDRRestore() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => backupApi.drRestore({ confirm: true }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.backup.status() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.backup.historyAll() })
+    },
+  })
+}
+
 export function useTestCloud() {
   return useMutation({
     mutationFn: () => backupApi.testCloud(),

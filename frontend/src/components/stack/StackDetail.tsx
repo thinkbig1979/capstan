@@ -1,6 +1,7 @@
 import { Suspense, lazy } from 'react'
 import { Tabs, TabsContent } from '@/components/ui/tabs'
 import { ResponsiveTabsList } from '@/components/ui/responsive-tabs-list'
+import { STACK_TABS, type StackTab } from '@/lib/app-views'
 import { ContainerList } from './ContainerList'
 import { ComposeEnvSplit } from './ComposeEnvSplit'
 import { TerminalComponent } from './Terminal'
@@ -141,7 +142,7 @@ function OverviewTabContent({
               <HelpHint
                 label="Backup"
                 title="Backup"
-                href="https://github.com/thinkbig1979/capstan/blob/main/docs/how-to/configure-backups.md"
+                topic="stack.backup"
               >
                 <p>Adds this stack to scheduled backups. The backup covers the stack directory (compose file, .env and files inside it). Named Docker volumes are not included.</p>
                 <p>Set up the repository and schedule under Settings, Backup.</p>
@@ -153,6 +154,15 @@ function OverviewTabContent({
       </div>
     </div>
   )
+}
+
+const STACK_TAB_LABELS: Record<StackTab, string> = {
+  overview: 'Overview',
+  editor: 'Editor',
+  logs: 'Logs',
+  terminal: 'Terminal',
+  metrics: 'Metrics',
+  activity: 'Activity',
 }
 
 export function StackDetail({ stack, activeTab, onTabChange }: StackDetailProps) {
@@ -168,14 +178,7 @@ export function StackDetail({ stack, activeTab, onTabChange }: StackDetailProps)
           value={activeTab}
           onValueChange={onTabChange}
           variant="line"
-          tabs={[
-            { value: 'overview', label: 'Overview' },
-            { value: 'editor', label: 'Editor' },
-            { value: 'logs', label: 'Logs' },
-            { value: 'terminal', label: 'Terminal' },
-            { value: 'metrics', label: 'Metrics' },
-            { value: 'activity', label: 'Activity' },
-          ]}
+          tabs={STACK_TABS.map((value) => ({ value, label: STACK_TAB_LABELS[value] }))}
         />
 
         <TabsContent value="overview" className="mt-4">

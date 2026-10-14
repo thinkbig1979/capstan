@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { expectHintOpensHelp } from '@/test/helpHint'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { BackupSettingsContent } from '../BackupSettingsContent'
@@ -1287,5 +1289,43 @@ describe('BackupSettingsContent — a cleared Parallel transfers field is empty,
 
     fireEvent.click(saveButton())
     await waitFor(() => expect(mockUpdateSettings).toHaveBeenCalledWith({ rcloneTransfers: 8 }))
+  })
+})
+
+describe('BackupSettingsContent — field help (agent-os-pkq9)', () => {
+  function renderSettings() {
+    const user = userEvent.setup()
+    render(<BackupSettingsContent />, { wrapper: createWrapper() })
+    return user
+  }
+
+  it('backup.repository: the restic repository hint opens help at its topic', async () => {
+    const user = renderSettings()
+    await expectHintOpensHelp(user, 'restic repository', 'backup.repository')
+  })
+
+  it('backup.password: the repository password hint opens help at its topic', async () => {
+    const user = renderSettings()
+    await expectHintOpensHelp(user, 'Restic password', 'backup.password')
+  })
+
+  it('backup.retention: the retention hint opens help at its topic', async () => {
+    const user = renderSettings()
+    await expectHintOpensHelp(user, 'Retention', 'backup.retention')
+  })
+
+  it('backup.verify: the weekly repository check hint opens help at its topic', async () => {
+    const user = renderSettings()
+    await expectHintOpensHelp(user, 'Weekly repository check', 'backup.verify')
+  })
+
+  it('backup.cloud: the cloud sync hint opens help at its topic', async () => {
+    const user = renderSettings()
+    await expectHintOpensHelp(user, 'Cloud sync', 'backup.cloud')
+  })
+
+  it('backup.transfers: the parallel transfers hint opens help at its topic', async () => {
+    const user = renderSettings()
+    await expectHintOpensHelp(user, 'Parallel transfers', 'backup.transfers')
   })
 })

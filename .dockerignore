@@ -2,7 +2,7 @@
 # the repo root — this is the file BuildKit actually honors; docker/.dockerignore
 # is not used when the context is the repo root).
 #
-# Keep: backend/, frontend/, docker/entrypoint.sh — everything the Dockerfile COPYs.
+# Keep: backend/, frontend/, docs/, docker/entrypoint.sh — everything the Dockerfile COPYs.
 # Exclude: VCS, deps, build output, local data, secrets, docs, and agent tooling
 # so the context stays small and no secrets are ever sent to the daemon.
 
@@ -34,6 +34,10 @@ reports/
 # Docs and assets not needed at build time
 **/*.md
 !README.md
+# ...except docs/, which the frontend bundles as in-app help (docker/Dockerfile
+# copies it into the frontend-build stage). Must stay after **/*.md: the last
+# matching rule wins.
+!docs/**/*.md
 Supporting-Docs/
 screenshots/
 scorecard.png

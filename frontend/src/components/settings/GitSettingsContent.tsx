@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { HelpHint } from '@/components/ui/help-hint'
 import { LoadingSpinner } from '@/components/LoadingSkeleton'
 import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 import { LoadFailedNotice } from '@/components/LoadFailedNotice'
@@ -80,7 +81,13 @@ export function GitSettingsContent() {
       <div className="space-y-4">
         <h3 className="text-lg font-medium">SSH</h3>
         <div className="space-y-2">
-          <Label htmlFor="git-ssh-key">SSH Private Key Path</Label>
+          <div className="flex items-center gap-1.5">
+            <Label htmlFor="git-ssh-key">SSH Private Key Path</Label>
+            <HelpHint label="SSH private key path" topic="git.ssh-key">
+              <p>This is a path inside the container, not on the host.</p>
+              <p>Mount the key into the container first, then enter the path as the container sees it.</p>
+            </HelpHint>
+          </div>
           <Input
             id="git-ssh-key"
             type="text"
@@ -109,12 +116,18 @@ export function GitSettingsContent() {
           />
         </div>
         <div className="space-y-2">
-          <Label htmlFor="git-https-token">
-            Personal Access Token
-            {tokenReadable && (
-              <span className="ml-2 text-xs text-muted-foreground font-normal">(currently set)</span>
-            )}
-          </Label>
+          <div className="flex items-center gap-1.5">
+            <Label htmlFor="git-https-token">
+              Personal Access Token
+              {tokenReadable && (
+                <span className="ml-2 text-xs text-muted-foreground font-normal">(currently set)</span>
+              )}
+            </Label>
+            <HelpHint label="Personal access token" topic="git.https-token">
+              <p>Leave the field blank to keep the stored token. It is stored encrypted.</p>
+              <p>Give it only the access it needs, usually read access to the repositories you clone.</p>
+            </HelpHint>
+          </div>
           <div className="flex items-center gap-2 max-w-md">
             <Input
               id="git-https-token"

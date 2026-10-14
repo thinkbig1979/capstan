@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { expectHintOpensHelp } from '@/test/helpHint'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { GitSettingsContent } from '../GitSettingsContent'
@@ -381,5 +383,19 @@ describe('GitSettingsContent — a failed FIRST load offers no form to save (age
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
     expect(await screen.findByLabelText('SSH Private Key Path')).toHaveValue('/keys/id_ed25519')
     expect(screen.getByRole('button', { name: 'Save Git Settings' })).toBeEnabled()
+  })
+})
+
+describe('GitSettingsContent — field help (agent-os-pkq9)', () => {
+  it('git.ssh-key: the SSH private key path hint opens help at its topic', async () => {
+    const user = userEvent.setup()
+    renderPanel()
+    await expectHintOpensHelp(user, 'SSH private key path', 'git.ssh-key')
+  })
+
+  it('git.https-token: the personal access token hint opens help at its topic', async () => {
+    const user = userEvent.setup()
+    renderPanel()
+    await expectHintOpensHelp(user, 'Personal access token', 'git.https-token')
   })
 })

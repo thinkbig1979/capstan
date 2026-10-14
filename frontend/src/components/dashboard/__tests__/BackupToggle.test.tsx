@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { expectHintOpensHelp } from '@/test/helpHint'
 import { BackupToggle } from '../BackupToggle'
 import { BackupPoliciesRefreshNotice } from '../BackupPoliciesRefreshNotice'
 import type { BackupRun, BackupStatus } from '@/types'
@@ -574,5 +576,22 @@ describe('BackupPoliciesRefreshNotice — a failed refetch is disclosed (agent-o
     ;(useBackupPolicies as ReturnType<typeof vi.fn>).mockReturnValue({ data: undefined, isError: true })
     render(<BackupPoliciesRefreshNotice />)
     expect(screen.queryByText(notice)).toBeNull()
+  })
+})
+
+describe('BackupToggle — field help (agent-os-pkq9)', () => {
+  it('stack.backup-stop-policy: the stop policy hint opens help at its topic', async () => {
+    const user = userEvent.setup()
+    ;(useBackupPolicies as ReturnType<typeof vi.fn>).mockReturnValue(makePolicy(true, 'stop'))
+    render(<BackupToggle stackId={STACK_ID} />)
+
+    await expectHintOpensHelp(user, 'Backup stop policy', 'stack.backup-stop-policy')
+  })
+
+  it('offers no stop policy hint while backup is off, as there is no stop policy control then', () => {
+    ;(useBackupPolicies as ReturnType<typeof vi.fn>).mockReturnValue(makePolicy(false))
+    render(<BackupToggle stackId={STACK_ID} />)
+
+    expect(screen.queryByRole('button', { name: 'Help: Backup stop policy' })).not.toBeInTheDocument()
   })
 })
