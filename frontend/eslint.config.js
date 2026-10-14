@@ -110,6 +110,30 @@ export default defineConfig([
       'react-refresh/only-export-components': 'off',
     },
   },
+  // agent-os-3a4p (the agent-os-3hka class): scrollIntoView scrolls every
+  // scrollable ancestor, the document included, so a live log that calls it on
+  // each new line drags the whole page down with it. Set scrollTop on the
+  // scrolling container instead (a Radix ScrollArea exposes it through the
+  // `viewportRef` prop in components/ui/scroll-area.tsx).
+  //
+  // App code only: tests and the jsdom setup file assign or spy on
+  // Element.prototype.scrollIntoView, because jsdom does not implement it.
+  // `no-restricted-properties` is a different rule from `no-restricted-syntax`,
+  // so this block does not clobber the selectors above.
+  {
+    files: ['src/**/*.{ts,tsx}'],
+    ignores: ['src/**/__tests__/**', 'src/**/*.test.{ts,tsx}', 'src/test/**'],
+    rules: {
+      'no-restricted-properties': [
+        'error',
+        {
+          property: 'scrollIntoView',
+          message:
+            'scrollIntoView scrolls the document as well as the container. Set scrollTop on the scrolling element instead (ScrollArea viewportRef).',
+        },
+      ],
+    },
+  },
   // agent-os-5g8a: a ratchet over the SHAPE that lets the backend's cause be
   // discarded — a fixed string, template or `x || 'fixed string'` as the first
   // argument to toast.error. Deliberately WIDER than the defect class: a hit is
