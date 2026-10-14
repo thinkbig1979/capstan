@@ -161,6 +161,10 @@ type ResticManager struct {
 	cfg    BackupConfig
 	runner commandRunner
 	logger *slog.Logger
+
+	// testDeadlineCap, when non-zero, shortens forget's and prune's operation
+	// deadlines so a test can watch one expire. Production never sets it.
+	testDeadlineCap time.Duration
 }
 
 // NewResticManager creates a ResticManager using the real exec-based runner.
@@ -593,6 +597,27 @@ func (m *ResticManager) Verify(ctx context.Context, tag string, out chan<- Strea
 	return m.runner.Run(ctx, "restic", args, m.resticEnv(pwFile), out)
 }
 
+// retentionTimeout bounds a plain `restic forget`, which only rewrites
+// snapshot metadata. pruneTimeout bounds `restic prune` and `forget --prune`,
+// which repack data and are legitimately long on a large repository; it
+// matches verifyTimeout, the bound already chosen for reading pack data. Both
+// run while Capstan's global backup lock is held, so a hung one would
+// otherwise block every later backup, sync, restore and check until the server
+// restarts (agent-os-j6ob, safe-defaults rule 1).
+const (
+	retentionTimeout = 10 * time.Minute
+	pruneTimeout     = 4 * time.Hour
+)
+
+// opDeadline returns timeout, or testDeadlineCap when a test set a shorter
+// one.
+func (m *ResticManager) opDeadline(timeout time.Duration) time.Duration {
+	if m.testDeadlineCap > 0 && m.testDeadlineCap < timeout {
+		return m.testDeadlineCap
+	}
+	return timeout
+}
+
 // ApplyRetention runs `restic forget` with the configured keep-* flags and
 // --prune when AutoPrune is set. It streams output to out.
 func (m *ResticManager) ApplyRetention(ctx context.Context, tag string, out chan<- StreamLine) error {
@@ -633,11 +658,16 @@ func (m *ResticManager) ApplyRetention(ctx context.Context, tag string, out chan
 		return nil
 	}
 
+	timeout := retentionTimeout
 	if m.cfg.AutoPrune {
 		args = append(args, "--prune")
+		timeout = pruneTimeout
 	}
 
-	return m.runLocking(ctx, args, m.resticEnv(pwFile), out)
+	// The deadline covers the attempt, the stale-lock unlock and the retry.
+	ctx, cancel := withCommandDeadline(ctx, m.opDeadline(timeout))
+	defer cancel()
+	return timeoutError(ctx, m.runLocking(ctx, args, m.resticEnv(pwFile), out), "restic forget")
 }
 
 // Prune runs `restic prune` (optionally with --dry-run). It streams output to out.
@@ -653,7 +683,9 @@ func (m *ResticManager) Prune(ctx context.Context, dryRun bool, out chan<- Strea
 		args = append(args, "--dry-run")
 	}
 
-	return m.runLocking(ctx, args, m.resticEnv(pwFile), out)
+	ctx, cancel := withCommandDeadline(ctx, m.opDeadline(pruneTimeout))
+	defer cancel()
+	return timeoutError(ctx, m.runLocking(ctx, args, m.resticEnv(pwFile), out), "restic prune")
 }
 
 // resticSnapshot is the JSON shape returned by `restic snapshots --json`.
