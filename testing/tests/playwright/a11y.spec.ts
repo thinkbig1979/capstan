@@ -9,18 +9,22 @@
  * Prerequisites (same backend as terminal-flow.spec.ts):
  *   - App on CAPSTAN_BASE_URL (default http://localhost:3001), backend on
  *     CAPSTAN_API_URL (default http://localhost:5001).
- *   - AUTH_DISABLED=true. The login and setup pages are not scanned: they need
- *     the auth-session job's virgin backend.
+ *   - AUTH_DISABLED=true. The login and setup pages are not scanned here: they
+ *     need the auth-session job's virgin backend, and are scanned from
+ *     auth-session.spec.ts with the same helpers/axe-scan.ts.
  *   - A stack named CAPSTAN_TEST_STACK (default test-app).
  *
  * Run:
  *   AUTH_DISABLED=true npx playwright test a11y --retries=0
  *
- * MATRIX (56 scans). Every URL below in light at 1280x720 and in dark at
- * 1280x720, plus four representative URLs in light at 375x812. Contrast
- * failures are theme specific (the primary label failed in both themes with
- * different ratios), so dark is scanned in full; layout-driven failures are
- * what the narrow viewport adds, and four URLs cover the layouts.
+ * MATRIX (70 scans). Every URL below in light at 1280x720 and in dark at
+ * 1280x720, plus nine representative URLs (NARROW_TARGETS) in light and in dark
+ * at 375x812. Contrast failures are theme specific (the primary label failed in
+ * both themes with different ratios), so dark is scanned in full at desktop and
+ * at the narrow width; layout-driven failures are what the narrow viewport adds,
+ * and nine URLs cover the layouts. Measured 2026-10-14 (agent-os-25k4): all 26
+ * URLs at 375 in both schemes had no finding beyond the editor entry on the
+ * ALLOWLIST, so the nine are coverage, not a filter hiding failures.
  *
  * NO FIXED SLEEPS. A scan starts after `waitForInvalidationSettle`, because the
  * app keeps rendering after load (WS-driven invalidations, debounced 750ms; see
@@ -38,13 +42,15 @@
  */
 
 import { test, expect, Page } from 'playwright/test'
-import AxeBuilder from '@axe-core/playwright'
 import { waitForInvalidationSettle } from './helpers/network-settle'
-
-// axe-core is a transitive dependency of @axe-core/playwright, so its types are
-// derived from the builder rather than imported from a package the root does not list.
-type Result = Awaited<ReturnType<AxeBuilder['analyze']>>['violations'][number]
-type NodeResult = Result['nodes'][number]
+import {
+  classify,
+  describeFindings,
+  nodeData,
+  runAxe,
+  type AllowedViolation,
+  type Scheme,
+} from './helpers/axe-scan'
 
 const API_URL = process.env.CAPSTAN_API_URL ?? 'http://localhost:5001'
 const AUTH_DISABLED = (process.env.AUTH_DISABLED ?? 'false') === 'true'
@@ -99,9 +105,17 @@ const TARGETS: Target[] = [
   ...SETTINGS_SECTIONS.map((s) => ({ name: `settings:${s}`, url: () => `/settings/${s}` })),
 ]
 
-const NARROW_TARGETS = ['dash:stacks', 'dash:containers', 'stack:overview', 'settings:appearance']
-
-type Scheme = 'light' | 'dark'
+const NARROW_TARGETS = [
+  'dash:stacks',
+  'dash:containers',
+  'dash:updates',
+  'dash:backups',
+  'stack:overview',
+  'stack:editor',
+  'stack:logs',
+  'settings:appearance',
+  'settings:account-security',
+]
 
 const CONFIGS: Array<{
   label: string
@@ -117,33 +131,17 @@ const CONFIGS: Array<{
     viewport: { width: 375, height: 812 },
     targets: TARGETS.filter((t) => NARROW_TARGETS.includes(t.name)),
   },
+  {
+    label: 'dark 375',
+    scheme: 'dark',
+    viewport: { width: 375, height: 812 },
+    targets: TARGETS.filter((t) => NARROW_TARGETS.includes(t.name)),
+  },
 ]
 
 // ─── Allowlist ───────────────────────────────────────────────────────────────
 
-interface AllowedViolation {
-  rule: string
-  /** Target name from TARGETS. */
-  page: string
-  /** Restrict to one scheme; omit for both. */
-  scheme?: Scheme
-  /** Narrows the entry to specific nodes of that rule. */
-  matches: (node: NodeResult) => boolean
-  reason: string
-}
-
-const nodeData = (node: NodeResult): Record<string, unknown> =>
-  (node.any[0]?.data ?? {}) as Record<string, unknown>
-
 const ALLOWLIST: AllowedViolation[] = [
-  {
-    rule: 'scrollable-region-focusable',
-    page: 'stack:editor',
-    matches: (n) => n.target.join(' ') === '.cm-scroller',
-    reason:
-      'CodeMirror 6 renders its scroller with tabindex="-1"; the focusable contenteditable ' +
-      '(.cm-content) is a sibling inside it. Library markup, not ours.',
-  },
   {
     rule: 'color-contrast',
     page: 'stack:editor',
@@ -155,71 +153,7 @@ const ALLOWLIST: AllowedViolation[] = [
   },
 ]
 
-// ─── Scan ────────────────────────────────────────────────────────────────────
-
-const BLOCKING = new Set(['critical', 'serious'])
-
-interface Finding {
-  rule: string
-  impact: string
-  target: string
-  html: string
-  detail: string
-  helpUrl: string
-}
-
-async function runAxe(page: Page): Promise<Result[]> {
-  const result = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze()
-  return result.violations
-}
-
-/** Splits blocking violations into allowlisted and not, and collects the rest. */
-function classify(
-  violations: Result[],
-  pageName: string,
-  scheme: Scheme,
-): { blocking: Finding[]; allowed: AllowedViolation[]; other: string[] } {
-  const blocking: Finding[] = []
-  const allowed: AllowedViolation[] = []
-  const other: string[] = []
-  for (const v of violations) {
-    if (!BLOCKING.has(v.impact ?? '')) {
-      other.push(`${v.impact} ${v.id} x${v.nodes.length}`)
-      continue
-    }
-    for (const node of v.nodes) {
-      const entry = ALLOWLIST.find(
-        (a) =>
-          a.rule === v.id &&
-          a.page === pageName &&
-          (a.scheme === undefined || a.scheme === scheme) &&
-          a.matches(node),
-      )
-      if (entry) {
-        allowed.push(entry)
-        continue
-      }
-      const d = nodeData(node)
-      blocking.push({
-        rule: v.id,
-        impact: v.impact ?? '',
-        target: node.target.join(' '),
-        html: (node.html ?? '').slice(0, 160),
-        detail: d.contrastRatio
-          ? `${d.fgColor} on ${d.bgColor} = ${d.contrastRatio}:1 (needs ${d.expectedContrastRatio})`
-          : (node.failureSummary ?? '').split('\n').slice(0, 2).join(' '),
-        helpUrl: v.helpUrl,
-      })
-    }
-  }
-  return { blocking, allowed, other }
-}
-
-function describeFindings(findings: Finding[]): string {
-  return findings
-    .map((f) => `  [${f.impact}] ${f.rule}: ${f.target}\n    ${f.detail}\n    ${f.html}\n    ${f.helpUrl}`)
-    .join('\n')
-}
+// ─── Scan ───────────────────────────────────────────────────────────────────
 
 async function openAndSettle(page: Page, url: string): Promise<void> {
   await page.goto(url)
@@ -256,7 +190,7 @@ test.describe('a11y: axe wcag2a/wcag2aa', () => {
       for (const target of cfg.targets) {
         test(`A11Y-${cfg.label.replace(' ', '-')}-${target.name}`, async ({ page }) => {
           await openAndSettle(page, target.url(stackId))
-          const { blocking, other } = classify(await runAxe(page), target.name, cfg.scheme)
+          const { blocking, other } = classify(await runAxe(page), target.name, cfg.scheme, ALLOWLIST)
           for (const o of other) test.info().annotations.push({ type: 'non-blocking', description: o })
           // Counted rather than toEqual([]): a failing toEqual would dump every node.
           expect(
@@ -282,7 +216,7 @@ test.describe('a11y: axe wcag2a/wcag2aa', () => {
         }) => {
           const target = TARGETS.find((t) => t.name === entry.page)!
           await openAndSettle(page, target.url(stackId))
-          const { allowed } = classify(await runAxe(page), entry.page, scheme)
+          const { allowed } = classify(await runAxe(page), entry.page, scheme, ALLOWLIST)
           expect(
             allowed.filter((a) => a === entry).length,
             `ALLOWLIST entry no longer fires on ${entry.page} (${scheme}); remove it from a11y.spec.ts.\n` +

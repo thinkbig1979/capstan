@@ -387,7 +387,7 @@ function ContainerTable({
                             <TooltipTrigger asChild>
                               <Link
                                 to={`/stacks/${container.stackId}`}
-                                className="text-xs text-info hover:underline truncate max-w-[200px]"
+                                className="text-xs text-info underline underline-offset-2 truncate max-w-[200px]"
                               >
                                 {container.projectName}
                               </Link>

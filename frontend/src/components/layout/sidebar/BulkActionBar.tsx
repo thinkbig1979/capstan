@@ -26,7 +26,7 @@ export function BulkActionBar({
         <button
           type="button"
           onClick={onSelectAllVisible}
-          className="text-primary hover:underline"
+          className="text-primary underline underline-offset-2"
         >
           {selectedCount === totalVisible && totalVisible > 0
             ? 'Clear all'

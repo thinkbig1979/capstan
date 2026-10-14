@@ -54,7 +54,7 @@ export function CreateStackFooter({
                <li key={error.field}>
                  <button
                    type="button"
-                   className="text-sm text-destructive hover:underline flex items-center gap-1"
+                   className="text-sm text-destructive underline underline-offset-2 flex items-center gap-1"
                  >
                    <AlertCircle className="h-3 w-3" />
                    {error.message}
