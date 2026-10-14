@@ -154,7 +154,7 @@ function GuideIndex({
                 <li key={doc.id}>
                   <button
                     type="button"
-                    className="text-left text-sm text-primary underline-offset-2 hover:underline"
+                    className="text-left text-sm text-primary underline underline-offset-2"
                     onClick={() => onOpen(doc.id)}
                   >
                     {doc.title}
