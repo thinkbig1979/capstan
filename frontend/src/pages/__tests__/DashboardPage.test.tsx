@@ -257,6 +257,16 @@ describe('DashboardPage', () => {
       expect(screen.queryByTestId('tab-overview')).not.toBeInTheDocument()
     })
 
+    // agent-os-pnug: an unknown ?tab= value (old bookmark, typo) used to keep
+    // the bogus value as the active tab, so no TabsContent matched and the
+    // body rendered empty.
+    it('falls back to the Stacks tab and drops an unknown ?tab= value', async () => {
+      renderPage('/?tab=bogus')
+      await waitFor(() => expect(screen.getByTestId('tab-stacks')).toBeInTheDocument())
+      expect(window.location.pathname).toBe('/')
+      expect(window.location.search).toBe('')
+    })
+
     it('switches tabs and updates the URL when a tab trigger is clicked', async () => {
       const user = userEvent.setup()
       renderPage('/')
