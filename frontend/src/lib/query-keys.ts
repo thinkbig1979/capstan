@@ -70,6 +70,7 @@ export const queryKeys = {
      * list's prefix, so invalidating the list re-checks it too.
      */
     volumesPruneImpact: () => ['resources', 'volumes', 'prune-impact'] as const,
+    volumesPruneScope: () => ['resources', 'volumes', 'prune-scope'] as const,
     networksPruneImpact: () => ['resources', 'networks', 'prune-impact'] as const,
     buildCache: () => ['resources', 'build-cache'] as const,
     updates: () => ['resources', 'updates'] as const,

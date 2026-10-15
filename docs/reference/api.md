@@ -290,6 +290,11 @@ Direct Docker resource management, independent of any stack.
   a volume whose usage Docker did not report is listed too. `uncheckedStacks`
   names stacks whose compose file could not be read. 503 when Docker is
   unavailable and 500 on another read failure, never an empty answer
+- `GET /api/v1/resources/volumes/prune-scope` — `{removesAllUnused}`: true
+  when a volume prune without `all=true` removes every unused volume, named
+  ones included. Docker does that for a request below API 1.42 (an Engine
+  older than 23, or `DOCKER_API_VERSION` pinned below 1.42). 503 when Docker
+  is unavailable and 500 when the version could not be read, never `false`
 - `GET /api/v1/resources/networks` — list networks
 - `POST /api/v1/resources/networks` — create a network
 - `DELETE /api/v1/resources/networks/:id` — delete a network

@@ -12,6 +12,7 @@ import (
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/api/types/versions"
 	"github.com/docker/docker/api/types/volume"
 
 	"github.com/thinkbig1979/capstan/backend/internal/models"
@@ -219,6 +220,31 @@ func (s *DockerService) PruneVolumes(ctx context.Context, opts PruneOptions) (vo
 		f.Add("all", "true")
 	}
 	return s.client.VolumesPrune(ctx, f)
+}
+
+// volumePruneAllVersion is the API version from which a volume prune without
+// all=true removes anonymous volumes only. Below it the daemon adds all=true to
+// the request itself (moby v28.5.2 api/server/router/volume/volume_routes.go:200-204),
+// keyed on the request's API version, not the Engine's: an old Engine and a
+// DOCKER_API_VERSION pinned below 1.42 both get "every unused volume".
+const volumePruneAllVersion = "1.42"
+
+// VolumePruneRemovesAllUnused reports whether PruneVolumes without opts.All
+// removes every unused volume, named ones included, on this daemon. The
+// Volumes page reads it to warn about the default prune too (agent-os-ny0c).
+func (s *DockerService) VolumePruneRemovesAllUnused(ctx context.Context) (bool, error) {
+	if s == nil || s.client == nil {
+		return false, ErrDockerUnavailable
+	}
+	// Ping, not NegotiateAPIVersion: that one swallows a failed ping and keeps
+	// the newest version, which would read as "anonymous only" (fail open).
+	// NegotiateAPIVersionPing leaves a DOCKER_API_VERSION pin alone.
+	ping, err := s.client.Ping(ctx)
+	if err != nil {
+		return false, fmt.Errorf("reading the Docker API version: %w", err)
+	}
+	s.client.NegotiateAPIVersionPing(ping)
+	return versions.LessThan(s.client.ClientVersion(), volumePruneAllVersion), nil
 }
 
 func (s *DockerService) ListNetworks(ctx context.Context) ([]models.DockerNetwork, error) {

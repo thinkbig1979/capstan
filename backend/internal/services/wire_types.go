@@ -144,6 +144,14 @@ type PruneImpact struct {
 	UncheckedStacks []string `json:"uncheckedStacks"`
 }
 
+// VolumePruneScope is GET /resources/volumes/prune-scope's body
+// (agent-os-ny0c). RemovesAllUnused is true when the request API version is
+// below 1.42 (an old Engine, or DOCKER_API_VERSION pinned): Docker then
+// removes every unused volume on a prune without "all", named ones included.
+type VolumePruneScope struct {
+	RemovesAllUnused bool `json:"removesAllUnused"`
+}
+
 // PruneImpactStack is one stack and the object names the prune would remove
 // from it: ones it owns by its compose project label or names in its compose
 // file. An object whose usage Docker did not report is listed too: the prune

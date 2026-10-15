@@ -54,6 +54,7 @@ import type {
   HostSummary,
   PruneImpact,
 } from '@/types/generated-services'
+import type { VolumePruneScope } from '@/types/generated-services'
 
 /**
  * LifecycleResult is the wire type for stack start/stop/restart/pull responses.
@@ -792,6 +793,12 @@ export const resourcesApi = {
   /** The stacks a volume prune with "all unused" would take volumes from (agent-os-8d8a). */
   volumePruneImpact: async () => {
     const response = await apiClient.get<PruneImpact>('/resources/volumes/prune-impact')
+    return response.data
+  },
+
+  // Whether the default volume prune removes named volumes too (API < 1.42).
+  volumePruneScope: async () => {
+    const response = await apiClient.get<VolumePruneScope>('/resources/volumes/prune-scope')
     return response.data
   },
 

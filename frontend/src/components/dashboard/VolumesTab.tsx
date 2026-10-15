@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { useVolumes, useDeleteVolume } from '@/hooks/useResources'
 import { resourcesApi } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
@@ -27,6 +28,16 @@ const PAGE_SIZE = 50
 
 type SortKey = 'name' | 'driver' | 'size' | 'stack'
 
+// Below Docker API 1.42 the daemon turns the default prune into "every unused
+// volume" (agent-os-ny0c). Unknown (still loading, or the read failed) is
+// treated as that, so the stack-impact check runs.
+const PRUNE_DESCRIPTION_ANONYMOUS =
+  "By default only anonymous volumes are removed. Enable 'all unused' to remove every volume not used by a container."
+const PRUNE_DESCRIPTION_ALL_UNUSED =
+  'This Docker version (API below 1.42) removes every volume not used by a container, named ones included, even without "all unused".'
+const PRUNE_DESCRIPTION_UNKNOWN =
+  "Docker API 1.42 and later remove only anonymous volumes by default; older versions remove every volume not used by a container. Capstan could not tell which this host runs."
+
 const VOL_SEARCH_FIELDS = [
   (v: DockerVolume) => v.name,
   (v: DockerVolume) => v.driver,
@@ -40,6 +51,18 @@ export function VolumesTab() {
   const [deletingName, setDeletingName] = useState<string | null>(null)
 
   const deleteMutation = useDeleteVolume()
+  const pruneScope = useQuery({
+    queryKey: queryKeys.resources.volumesPruneScope(),
+    queryFn: () => resourcesApi.volumePruneScope(),
+    retry: false,
+  })
+  // True only when the server said so; pending or failed counts as false.
+  const defaultPruneIsAnonymousOnly = pruneScope.data?.removesAllUnused === false
+  const pruneDescription = defaultPruneIsAnonymousOnly
+    ? PRUNE_DESCRIPTION_ANONYMOUS
+    : pruneScope.data?.removesAllUnused
+      ? PRUNE_DESCRIPTION_ALL_UNUSED
+      : PRUNE_DESCRIPTION_UNKNOWN
 
   const { query, setQuery, filtered } = useTextFilter(volumes ?? [], VOL_SEARCH_FIELDS)
 
@@ -142,12 +165,12 @@ export function VolumesTab() {
             pruneFn={(opts) => resourcesApi.pruneVolumes(opts)}
             options={{ all: { label: 'Remove all unused volumes, not just anonymous' } }}
             confirmMessage="Prune Unused Volumes?"
-            confirmDescription="By default only anonymous volumes are removed. Enable 'all unused' to remove every volume not used by a container."
+            confirmDescription={pruneDescription}
             stackImpact={{
               queryKey: queryKeys.resources.volumesPruneImpact(),
               queryFn: () => resourcesApi.volumePruneImpact(),
-              // Without "all", Docker removes anonymous volumes only.
-              when: ({ all }) => all,
+              // Without "all", API 1.42+ removes anonymous volumes only.
+              when: ({ all }) => all || !defaultPruneIsAnonymousOnly,
               noun: 'volumes',
               heading: 'These removed (down) stacks would lose these volumes:',
             }}
