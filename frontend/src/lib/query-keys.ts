@@ -79,6 +79,8 @@ export const queryKeys = {
      * key shared by every reader of the Docker host numbers.
      */
     hostSummary: () => ['resources', 'host-summary'] as const,
+    /** GET /resources/host/candidates: fetched fresh each time the Free-up-space dialog opens. */
+    hostCandidates: () => ['resources', 'host-candidates'] as const,
   },
 
   /** Applied-update history. `all` prefix-matches every filtered list. */

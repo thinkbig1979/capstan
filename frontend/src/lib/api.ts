@@ -47,7 +47,12 @@ import type {
   DockerCleanupHistory,
   DockerCleanupRun,
 } from '@/types'
-import type { HostSummary } from '@/types/generated-services'
+import type {
+  HostCandidates,
+  HostFreeSpaceRequest,
+  HostFreeSpaceResult,
+  HostSummary,
+} from '@/types/generated-services'
 
 /**
  * LifecycleResult is the wire type for stack start/stop/restart/pull responses.
@@ -802,6 +807,27 @@ export const resourcesApi = {
 
   hostSummary: async () => {
     const response = await apiClient.get<HostSummary>('/resources/host/summary')
+    return response.data
+  },
+
+  /** What the Free-up-space dialog lists. Never cached server-side: the user is about to delete from it. */
+  hostCandidates: async () => {
+    const response = await apiClient.get<HostCandidates>('/resources/host/candidates')
+    return response.data
+  },
+
+  /**
+   * Removes the listed IDs. The server re-derives the candidates under an
+   * exclusive lock and skips any ID that is no longer one, so a `partial` or
+   * `no_change` result is normal and must be read, not assumed a success.
+   */
+  freeSpace: async (req: HostFreeSpaceRequest) => {
+    // Pick turns the generated interface into an object type, which (unlike an
+    // interface) is assignable to ActionResult's Record<string, unknown>.
+    const response = await apiClient.post<ActionResult<Pick<HostFreeSpaceResult, keyof HostFreeSpaceResult>>>(
+      '/resources/host/free-space',
+      req,
+    )
     return response.data
   },
 
