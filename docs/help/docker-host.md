@@ -9,8 +9,9 @@ The numbers refresh every minute and when Docker reports a change.
 
 The top of the page is a disk bar with Docker's total disk use, split into space in
 use and space that could be reclaimed. Below it, one card per kind of resource shows
-a count or a size and a line of detail. A card also shows what could be removed, or
-"Nothing to clean up". **View all** opens that resource's list.
+a count or a size and a line of detail. A card also shows what could be removed, with
+**Clean up**, or "Nothing to clean up". **View all** opens that resource's list.
+**Free up** at the top of the page shows how much one click would free.
 
 **Common tasks**
 
@@ -22,10 +23,46 @@ a count or a size and a line of detail. A card also shows what could be removed,
 
 - **Volume sizes can read "size unknown".** Docker could not measure every volume, so
   the totals count only the volumes it could. Unknown is not zero.
-- **A card reports what could be removed, it removes nothing.** Removing happens in
-  each list, with **Prune** or the row icons.
+- **A card removes nothing by itself.** **Clean up** and **Free up** open the
+  Free up space dialog, where you pick what to remove. Each list also has **Prune**
+  and the row icons.
 - **If a refresh fails,** the page keeps the last numbers and says the refresh failed.
   If the first load fails, it shows no numbers and offers **Retry**.
+
+## Free up space
+
+The **Free up space** dialog opens from **Free up** at the top of the page or from
+any card's **Clean up**. It lists what Docker keeps that nothing uses, in five rows:
+unused images, build cache, stopped containers outside any stack, unattached volumes
+and unused networks. Tick the rows you want gone, then press **Remove selected**.
+
+**Common tasks**
+
+- **See exactly what goes:** open **Show the items** under a row. Long lists show the
+  first 200 and how many more there are.
+- **Check the total first:** the figure next to the buttons updates as you tick and
+  untick rows.
+- **Make it automatic:** tick **Do this automatically** before pressing **Remove
+  selected**. Once the removal finishes, automatic cleanup is turned on for the ticked
+  rows. The line under the box names everything the schedule will then remove, and
+  how old it must be and how often it runs. It only adds to the schedule, it never
+  turns anything off. If the schedule already covers your rows, the dialog says so
+  and offers **Change timing**.
+
+**Gotchas**
+
+- **Nothing a stack uses is listed.** The server builds the lists and checks every
+  item again just before it removes it. An item that came into use in the meantime
+  is skipped, and the result says how many were skipped or failed.
+- **Volumes and networks are off by default.** A volume can hold a database or
+  uploads, and removing it cannot be undone, so back up first if you are unsure.
+  Networks use no disk. Turning on automatic removal of volumes asks you to confirm
+  first.
+- **A stack whose compose file cannot be read hides the lists.** The dialog names
+  the stack. Until Capstan can read its compose file, only build cache is listed,
+  because that stack could use any image, container, volume or network.
+- **Image sizes are an estimate.** Each image counts only the layers no other image
+  shares, so removing several images can free more than the total shown.
 
 ## Automatic cleanup
 

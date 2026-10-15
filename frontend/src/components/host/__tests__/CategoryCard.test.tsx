@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router'
 import { CategoryCard } from '../CategoryCard'
 import { hostCards } from '../host-views'
@@ -30,7 +31,8 @@ function renderVolumesCard(volumes: HostSummary['volumes']) {
 }
 
 describe('CategoryCard', () => {
-  it('shows the reclaim line, View all and no Clean up action when something can be removed', () => {
+  it('shows the reclaim line, View all and a Clean up action that calls onCleanUp when something can be removed', async () => {
+    const onCleanUp = vi.fn()
     render(
       <MemoryRouter>
         <CategoryCard
@@ -40,14 +42,15 @@ describe('CategoryCard', () => {
           detail="48 images · 31 used by a container."
           reclaim="17 unused images · about 14.00 GB"
           viewHref="/host/images"
+          onCleanUp={onCleanUp}
         />
       </MemoryRouter>,
     )
     const card = screen.getByTestId('host-card-images')
     expect(within(card).getByText('21.00 GB')).toBeInTheDocument()
     expect(screen.getByTestId('host-card-images-reclaim')).toHaveTextContent('17 unused images · about 14.00 GB')
-    expect(within(card).queryByRole('link', { name: /^Clean up/ })).toBeNull()
-    expect(within(card).queryByRole('button', { name: /^Clean up/ })).toBeNull()
+    await userEvent.click(within(card).getByRole('button', { name: 'Clean up images' }))
+    expect(onCleanUp).toHaveBeenCalledTimes(1)
     expect(within(card).getByRole('link', { name: /^View all/ })).toHaveAttribute('href', '/host/images')
     expect(within(card).queryByText('Nothing to clean up')).toBeNull()
   })
@@ -61,12 +64,13 @@ describe('CategoryCard', () => {
           value="3"
           detail="0 used by stacks · 3 built in."
           viewHref="/host/networks"
+          onCleanUp={() => {}}
         />
       </MemoryRouter>,
     )
     const card = screen.getByTestId('host-card-networks')
     expect(within(card).getByText('Nothing to clean up')).toBeInTheDocument()
-    expect(within(card).queryByRole('link', { name: /^Clean up/ })).toBeNull()
+    expect(within(card).queryByRole('button', { name: /^Clean up/ })).toBeNull()
     expect(screen.queryByTestId('host-card-networks-reclaim')).toBeNull()
   })
 

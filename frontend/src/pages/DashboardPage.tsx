@@ -53,13 +53,19 @@ function sortDirectories(items: ConfiguredDir[] | undefined) {
 /**
  * agent-os-8y80: the five Docker host views moved to /host/<view>. An old
  * /?tab=<view> bookmark is redirected here, before the dashboard body mounts,
- * so the redirect starts none of the dashboard's queries.
+ * so the redirect starts none of the dashboard's queries. An unknown ?tab=
+ * value goes to / the same way.
  */
 export function DashboardPage() {
   const [searchParams] = useSearchParams()
   const tab = searchParams.get('tab')
   if (isHostView(tab)) {
     return <Navigate to={`/host/${tab}`} replace />
+  }
+  // agent-os-pnug: an unknown tab would match no TabsContent and leave the
+  // body empty, so it lands on Stacks with a clean URL instead.
+  if (tab && !(DASHBOARD_TABS as readonly string[]).includes(tab)) {
+    return <Navigate to="/" replace />
   }
   return <DashboardContent />
 }

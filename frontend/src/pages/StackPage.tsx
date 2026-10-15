@@ -33,6 +33,7 @@ import { HelpHint } from '@/components/ui/help-hint'
 import { useStreamingOperation } from '@/hooks/useStreamingOperation'
 import { stackUptime } from '@/lib/uptime'
 import type { StackStatus } from '@/types'
+import { STACK_TABS } from '@/lib/app-views'
 import { queryKeys } from '@/lib/query-keys'
 
 // Same status → tone/label mapping as the dashboard's StatusBadge: stopped is
@@ -68,7 +69,8 @@ export function StackPage() {
     setSelectedStack(id ?? null)
   }, [id, setSelectedStack])
 
-  // Old deep-link tabs redirect to the merged tab set: Compose/Environment/
+  // Old deep-link tabs redirect to the merged tab set (an unknown tab goes to
+  // Overview): Compose/Environment/
   // Compose+Env became the Editor split view, History/Updates/Backups became
   // sections of the Activity tab (the section rides in ?view=).
   useEffect(() => {
@@ -83,6 +85,9 @@ export function StackPage() {
     }
     const target = redirects[activeTab]
     if (target) navigate(`/stacks/${id}/${target}`, { replace: true })
+    // agent-os-gw22: an unknown segment would match no tab and leave the body
+    // empty, so it lands on Overview with a clean URL instead.
+    else if (!(STACK_TABS as readonly string[]).includes(activeTab)) navigate(`/stacks/${id}`, { replace: true })
   }, [activeTab, id, navigate])
 
   const handleTabChange = (newTab: string) => {
