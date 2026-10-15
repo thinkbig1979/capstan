@@ -102,6 +102,10 @@ type HostCandidates struct {
 	Containers []HostCandidateItem      `json:"containers"`
 	Volumes    []HostCandidateItem      `json:"volumes"`
 	Networks   []HostCandidateItem      `json:"networks"`
+	// WithheldStacks names the stacks whose compose file could not be read.
+	// While it is non-empty no image, container, volume or network is listed:
+	// such a stack could name any of them (agent-os-3rr3). Omitted when empty.
+	WithheldStacks []string `json:"withheldStacks,omitempty"`
 }
 
 // HostCandidateItem is one removable object. Size is omitted when Docker did

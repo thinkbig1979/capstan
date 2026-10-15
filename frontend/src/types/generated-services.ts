@@ -109,6 +109,12 @@ export interface HostCandidates {
   containers: HostCandidateItem[];
   volumes: HostCandidateItem[];
   networks: HostCandidateItem[];
+  /**
+   * WithheldStacks names the stacks whose compose file could not be read.
+   * While it is non-empty no image, container, volume or network is listed:
+   * such a stack could name any of them (agent-os-3rr3). Omitted when empty.
+   */
+  withheldStacks?: string[];
 }
 /**
  * HostCandidateItem is one removable object. Size is omitted when Docker did

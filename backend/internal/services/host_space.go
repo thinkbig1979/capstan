@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -78,6 +79,9 @@ type HostSpaceService struct {
 	docker hostSpaceDocker
 	stacks hostSpaceStacks
 	now    func() time.Time
+	// refs resolves what the stacks' compose files name; fetch withholds
+	// every referenced object from the candidates (agent-os-3rr3).
+	refs stackReferenceResolver
 
 	// fetching is a one-slot semaphore held for a whole fetch, so concurrent
 	// callers make one Docker read between them. A channel rather than a mutex
@@ -104,7 +108,12 @@ func NewHostSpaceService(docker *DockerService, stacks hostSpaceStacks) *HostSpa
 	if docker == nil || docker.client == nil {
 		return nil
 	}
-	return newHostSpaceService(docker.client, stacks, time.Now)
+	svc := newHostSpaceService(docker.client, stacks, time.Now)
+	if docker.config != nil && docker.config.DataDir != "" {
+		// The same global.env buildComposeArgs hands compose.
+		svc.refs = composeStackReferences(filepath.Join(docker.config.DataDir, "global.env"))
+	}
+	return svc
 }
 
 func newHostSpaceService(docker hostSpaceDocker, stacks hostSpaceStacks, now func() time.Time) *HostSpaceService {
@@ -112,6 +121,7 @@ func newHostSpaceService(docker hostSpaceDocker, stacks hostSpaceStacks, now fun
 		docker:   docker,
 		stacks:   stacks,
 		now:      now,
+		refs:     composeStackReferences(""),
 		fetching: make(chan struct{}, 1),
 	}
 }
@@ -192,6 +202,8 @@ func (s *HostSpaceService) fetch(ctx context.Context) (*hostSpaceSnapshot, error
 		}
 	}
 
+	refs := s.refs(ctx, stacks)
+
 	du, err := s.docker.DiskUsage(ctx, dockertypes.DiskUsageOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("reading Docker disk usage: %w", err)
@@ -205,10 +217,11 @@ func (s *HostSpaceService) fetch(ctx context.Context) (*hostSpaceSnapshot, error
 	snap := &hostSpaceSnapshot{
 		summary: HostSummary{MeasuredAt: s.now().UTC()},
 		candidates: HostCandidates{
-			Images:     []HostCandidateItem{},
-			Containers: []HostCandidateItem{},
-			Volumes:    []HostCandidateItem{},
-			Networks:   []HostCandidateItem{},
+			Images:         []HostCandidateItem{},
+			Containers:     []HostCandidateItem{},
+			Volumes:        []HostCandidateItem{},
+			Networks:       []HostCandidateItem{},
+			WithheldStacks: refs.withheld,
 		},
 	}
 	sum, cand := &snap.summary, &snap.candidates
@@ -222,7 +235,7 @@ func (s *HostSpaceService) fetch(ctx context.Context) (*hostSpaceSnapshot, error
 		if img.Containers > 0 {
 			sum.Images.InUse++
 		}
-		if !imageIsCandidate(img) {
+		if !imageIsCandidate(img) || refs.withholdsImage(img) {
 			continue
 		}
 		size := imageReclaimableSize(img)
@@ -258,7 +271,7 @@ func (s *HostSpaceService) fetch(ctx context.Context) (*hostSpaceSnapshot, error
 		case containerIsStopped(ctr.State):
 			sum.Containers.Stopped++
 		}
-		if !containerIsCandidate(ctr) {
+		if !containerIsCandidate(ctr) || refs.withholdsContainer(ctr) {
 			continue
 		}
 		item := HostCandidateItem{ID: ctr.ID, Label: containerLabel(ctr), Detail: ctr.Status}
@@ -281,7 +294,7 @@ func (s *HostSpaceService) fetch(ctx context.Context) (*hostSpaceSnapshot, error
 		if vol.UsageData != nil && vol.UsageData.RefCount > 0 {
 			sum.Volumes.Attached++
 		}
-		if !volumeIsCandidate(vol, owned) {
+		if !volumeIsCandidate(vol, owned) || refs.withholdsVolume(vol) {
 			continue
 		}
 		item := HostCandidateItem{ID: vol.Name, Label: vol.Name, Detail: vol.Labels[composeProjectLabel]}
@@ -304,7 +317,7 @@ func (s *HostSpaceService) fetch(ctx context.Context) (*hostSpaceSnapshot, error
 		case stackOwned:
 			sum.Networks.StackOwned++
 		}
-		if builtIn || stackOwned {
+		if builtIn || stackOwned || refs.withholdsNetwork(n) {
 			continue
 		}
 		// NetworkList leaves Containers empty, so the count comes from an

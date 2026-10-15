@@ -169,8 +169,14 @@ var stoppedStack = models.Stack{ID: "s1", ProjectName: "shop", Status: "stopped"
 
 func newHostSpaceForTest(docker *hostSpaceFakeDocker, stacks ...models.Stack) (*HostSpaceService, *hostSpaceClock) {
 	clock := &hostSpaceClock{t: time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)}
-	return newHostSpaceService(docker, &hostSpaceFakeStacks{stacks: stacks}, clock.now), clock
+	svc := newHostSpaceService(docker, &hostSpaceFakeStacks{stacks: stacks}, clock.now)
+	// These fixtures' stacks have no compose file on disk; the compose
+	// reference rules are tested on real files in host_space_compose_refs_test.go.
+	svc.refs = noStackReferences
+	return svc, clock
 }
+
+func noStackReferences(context.Context, []models.Stack) stackReferences { return newStackReferences() }
 
 func candidateIDs(items []HostCandidateItem) []string {
 	ids := make([]string, 0, len(items))
