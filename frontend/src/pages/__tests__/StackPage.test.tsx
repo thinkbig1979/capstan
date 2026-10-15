@@ -138,9 +138,18 @@ describe('StackPage', () => {
     })
 
     it('passes the tab segment from the URL through to StackDetail', async () => {
-      renderPage('/stacks/s1/containers')
+      renderPage('/stacks/s1/logs')
       await waitFor(() => expect(screen.getByTestId('stack-detail')).toBeInTheDocument())
-      expect(screen.getByTestId('active-tab')).toHaveTextContent('containers')
+      expect(screen.getByTestId('active-tab')).toHaveTextContent('logs')
+    })
+
+    // agent-os-gw22: an unknown segment used to reach StackDetail as the active
+    // tab, which no TabsContent matches, so the stack body rendered empty.
+    it('lands an unknown tab segment on overview with a clean URL', async () => {
+      renderPage('/stacks/s1/bogus')
+      await waitFor(() => expect(window.location.pathname).toBe('/stacks/s1'))
+      expect(window.location.search).toBe('')
+      await waitFor(() => expect(screen.getByTestId('active-tab')).toHaveTextContent('overview'))
     })
 
     it('navigates to the new tab path when StackDetail requests a tab change', async () => {
