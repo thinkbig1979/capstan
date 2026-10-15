@@ -96,8 +96,8 @@ func TestHostSummaryRouteServesTheSummaryShape(t *testing.T) {
 	summary := &services.HostSummary{
 		Disk:       services.HostDiskSummary{Total: 1000, InUse: 700, Reclaimable: 300, ReclaimableAll: 400, VolumesSizeKnown: true},
 		Containers: services.HostContainerSummary{Count: 3, Running: 1, Stopped: 2, ReclaimableCount: 1, ReclaimableBytes: 5},
-		Images:     services.HostImageSummary{Count: 4, InUse: 2, Bytes: 600, ReclaimableCount: 2, ReclaimableBytes: 250},
-		Volumes:    services.HostVolumeSummary{Count: 2, Attached: 1, Bytes: 300, SizeKnown: true, ReclaimableCount: 1, ReclaimableBytes: 100},
+		Images:     services.HostImageSummary{Count: 4, InUse: 2, InUseKnown: true, Bytes: 600, ReclaimableCount: 2, ReclaimableBytes: 250},
+		Volumes:    services.HostVolumeSummary{Count: 2, Attached: 1, AttachedKnown: false, Bytes: 300, SizeKnown: true, ReclaimableCount: 1, ReclaimableBytes: 100},
 		Networks:   services.HostNetworkSummary{Count: 5, BuiltIn: 3, StackOwned: 1, ReclaimableCount: 1},
 		BuildCache: services.HostBuildCacheSummary{Count: 2, Bytes: 95, ReclaimableBytes: 45},
 		MeasuredAt: time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC),
@@ -109,8 +109,8 @@ func TestHostSummaryRouteServesTheSummaryShape(t *testing.T) {
 	assert.JSONEq(t, `{
 		"disk": {"total":1000,"inUse":700,"reclaimable":300,"reclaimableAll":400,"volumesSizeKnown":true},
 		"containers": {"count":3,"running":1,"stopped":2,"reclaimableCount":1,"reclaimableBytes":5},
-		"images": {"count":4,"inUse":2,"bytes":600,"reclaimableCount":2,"reclaimableBytes":250},
-		"volumes": {"count":2,"attached":1,"bytes":300,"sizeKnown":true,"reclaimableCount":1,"reclaimableBytes":100},
+		"images": {"count":4,"inUse":2,"inUseKnown":true,"bytes":600,"reclaimableCount":2,"reclaimableBytes":250},
+		"volumes": {"count":2,"attached":1,"attachedKnown":false,"bytes":300,"sizeKnown":true,"reclaimableCount":1,"reclaimableBytes":100},
 		"networks": {"count":5,"builtIn":3,"stackOwned":1,"reclaimableCount":1},
 		"buildCache": {"count":2,"bytes":95,"reclaimableBytes":45},
 		"measuredAt": "2026-10-14T12:00:00Z"

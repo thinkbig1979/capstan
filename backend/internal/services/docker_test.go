@@ -387,18 +387,23 @@ func (f fakeNetworkInspector) NetworkInspect(_ context.Context, networkID string
 // TestNetworkContainerCount reproduces FLAG 2 (D-3): NetworkList never populates
 // the Containers map, so the list-reported count is always 0 and the in-use delete
 // guard is inert. networkContainerCount must inspect each network to get the real
-// attachment count, and fall back to the list value only when inspect fails.
+// attachment count, and report a failed inspect as unknown (agent-os-m84q).
 func TestNetworkContainerCount(t *testing.T) {
 	ctx := context.Background()
 
 	// Real attachments revealed by inspect, even though the list reported 0.
 	inspector := fakeNetworkInspector{containers: map[string]int{"net-busy": 3, "net-empty": 0}}
-	assert.Equal(t, 3, networkContainerCount(ctx, inspector, "net-busy", 0))
-	assert.Equal(t, 0, networkContainerCount(ctx, inspector, "net-empty", 0))
+	n, known := networkContainerCount(ctx, inspector, "net-busy")
+	assert.Equal(t, 3, n)
+	assert.True(t, known)
+	n, known = networkContainerCount(ctx, inspector, "net-empty")
+	assert.Equal(t, 0, n)
+	assert.True(t, known, "an inspected network with nothing attached is a known 0")
 
-	// Inspect failure: fall back to whatever the list reported.
+	// Inspect failure: unknown, never a 0 that reads as "nothing attached".
 	failing := fakeNetworkInspector{err: errors.New("inspect boom")}
-	assert.Equal(t, 7, networkContainerCount(ctx, failing, "net-x", 7))
+	_, known = networkContainerCount(ctx, failing, "net-x")
+	assert.False(t, known)
 }
 
 // TestBuildStackStatuses locks in the FLAG 1 follow-up: live stack status +

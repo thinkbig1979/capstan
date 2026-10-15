@@ -64,21 +64,26 @@ export interface HostContainerSummary {
 /**
  * HostImageSummary: Bytes is LayersSize (shared layers counted once);
  * ReclaimableBytes sums each candidate's Size minus SharedSize, a lower bound.
+ * InUseKnown false means Docker did not count the containers of some image
+ * (-1), so InUse is a floor.
  */
 export interface HostImageSummary {
   count: number /* int */;
   inUse: number /* int */;
+  inUseKnown: boolean;
   bytes: number /* int64 */;
   reclaimableCount: number /* int */;
   reclaimableBytes: number /* int64 */;
 }
 /**
  * HostVolumeSummary: SizeKnown false means Bytes sums only the volumes whose
- * size Docker could compute, so it is a floor.
+ * size Docker could compute, so it is a floor. AttachedKnown false means the
+ * same for Attached: some volume's reference count was not computed.
  */
 export interface HostVolumeSummary {
   count: number /* int */;
   attached: number /* int */;
+  attachedKnown: boolean;
   bytes: number /* int64 */;
   sizeKnown: boolean;
   reclaimableCount: number /* int */;

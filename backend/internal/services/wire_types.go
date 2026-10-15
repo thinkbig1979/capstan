@@ -60,19 +60,24 @@ type HostContainerSummary struct {
 
 // HostImageSummary: Bytes is LayersSize (shared layers counted once);
 // ReclaimableBytes sums each candidate's Size minus SharedSize, a lower bound.
+// InUseKnown false means Docker did not count the containers of some image
+// (-1), so InUse is a floor.
 type HostImageSummary struct {
 	Count            int   `json:"count"`
 	InUse            int   `json:"inUse"`
+	InUseKnown       bool  `json:"inUseKnown"`
 	Bytes            int64 `json:"bytes"`
 	ReclaimableCount int   `json:"reclaimableCount"`
 	ReclaimableBytes int64 `json:"reclaimableBytes"`
 }
 
 // HostVolumeSummary: SizeKnown false means Bytes sums only the volumes whose
-// size Docker could compute, so it is a floor.
+// size Docker could compute, so it is a floor. AttachedKnown false means the
+// same for Attached: some volume's reference count was not computed.
 type HostVolumeSummary struct {
 	Count            int   `json:"count"`
 	Attached         int   `json:"attached"`
+	AttachedKnown    bool  `json:"attachedKnown"`
 	Bytes            int64 `json:"bytes"`
 	SizeKnown        bool  `json:"sizeKnown"`
 	ReclaimableCount int   `json:"reclaimableCount"`

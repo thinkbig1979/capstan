@@ -103,6 +103,17 @@ linters:
         # are not visible to a name match.
         - pattern: '^(os\.WriteFile|os\.Create|os\.OpenFile|ioutil\.WriteFile)$'
           msg: 'write files through writeFileAtomic (handlers/atomic_write.go), safe-defaults rule 7 (agent-os-qags.3)'
+        # agent-os-m84q: Docker reports a volume Size or RefCount it did not
+        # compute as -1 (or leaves UsageData nil). Read raw, -1 renders as a
+        # size and a RefCount of -1 reads as "not in use", which made an
+        # unchecked volume look safe to delete (agent-os-gkgr). volumeUsageOf
+        # (services/docker_resources.go) resolves the sentinel into known
+        # flags. `pkg` pins the match to Docker's volume package, so the rule
+        # sees an aliased import, a copied `ud := v.UsageData` and a value
+        # UsageData alike (OBSERVED with planted reads, agent-os-m84q).
+        - pattern: '^volume\.UsageData\.(Size|RefCount)$'
+          pkg: '^github\.com/docker/docker/api/types/volume$'
+          msg: 'read a volume''s UsageData through volumeUsageOf (services/docker_resources.go), so a -1 is unknown, not a value (agent-os-m84q)'
       analyze-types: true
   enable:
     - errcheck
@@ -182,6 +193,10 @@ linters:
       - path: 'internal/handlers/atomic_write\.go'
         linters: [forbidigo]
         text: 'writeFileAtomic'
+      # docker_resources.go defines volumeUsageOf, the one raw reader.
+      - path: 'internal/services/docker_resources\.go'
+        linters: [forbidigo]
+        text: 'volumeUsageOf'
       # SA1019 (deprecated Docker SDK types) had a blanket per-file exclusion
       # here; agent-os-9zi migrated every site instead of excluding them, so
       # this rule is gone. Two things worth recording for whoever reads this

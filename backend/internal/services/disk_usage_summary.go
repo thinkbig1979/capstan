@@ -22,11 +22,12 @@ func summarizeDiskUsage(du types.DiskUsage) DiskUsageBreakdown {
 		}
 	}
 	for _, vol := range du.Volumes {
-		if vol == nil || vol.UsageData == nil || vol.UsageData.Size < 0 {
+		u := volumeUsageOf(vol)
+		if !u.sizeKnown {
 			out.VolumesSizeKnown = false
 			continue
 		}
-		out.Volumes += vol.UsageData.Size
+		out.Volumes += u.size
 	}
 	for _, bc := range du.BuildCache {
 		if bc != nil {
