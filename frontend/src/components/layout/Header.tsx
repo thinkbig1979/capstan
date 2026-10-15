@@ -19,6 +19,7 @@ import {
 } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { HeaderVitals } from '@/components/layout/HeaderVitals'
+import { getBreadcrumbs } from '@/components/layout/breadcrumbs'
 import { useUIStore } from '@/stores/uiStore'
 import { useAuth } from '@/hooks/useAuth'
 import { isEditableTarget } from '@/lib/editable-target'
@@ -105,39 +106,7 @@ export function Header() {
     }
   }
 
-  const getBreadcrumbs = () => {
-    const path = location.pathname
-    if (path === '/') {
-      return [{ label: 'Dashboard', path: '/' }]
-    }
-    if (path.startsWith('/stacks/')) {
-      // Routes are /stacks/<id>/<tab>; the tab lives in the path, not the query string.
-      const segments = path.split('/').filter(Boolean) // ['stacks', '<encId>', '<tab>?']
-      const encId = segments[1] || ''
-      const tab = segments[2] || 'overview'
-      const tabLabel = tab.charAt(0).toUpperCase() + tab.slice(1)
-      // Derive a friendly stack name from the id (format: <dir>~<name>:<profile>).
-      let decodedId = encId
-      try { decodedId = decodeURIComponent(encId) } catch { /* keep raw */ }
-      const nameMatch = decodedId.match(/~([^~:]+)(?::[^:]*)?$/)
-      const stackName = nameMatch ? nameMatch[1] : 'Stack Details'
-      const stackPath = `/stacks/${encId}`
-      return [
-        { label: 'Dashboard', path: '/' },
-        { label: stackName, path: stackPath },
-        { label: tabLabel, path: `${stackPath}/${tab}` },
-      ]
-    }
-    if (path === '/settings') {
-      return [
-        { label: 'Dashboard', path: '/' },
-        { label: 'Settings', path: '/settings' },
-      ]
-    }
-    return [{ label: 'Dashboard', path: '/' }]
-  }
-
-  const breadcrumbs = getBreadcrumbs()
+  const breadcrumbs = getBreadcrumbs(location.pathname)
 
   return (
     <header className="sticky top-0 z-10 flex h-16 shrink-0 items-center gap-2 border-b bg-background/90 backdrop-blur-sm px-4">

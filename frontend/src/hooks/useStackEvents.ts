@@ -246,6 +246,7 @@ export function useStackEvents() {
       queryKeys.resources.volumes(),
       queryKeys.resources.networks(),
       queryKeys.resources.buildCache(),
+      queryKeys.resources.hostSummary(),
       queryKeys.dashboardStats(),
     ]
     if (event.containerId) {

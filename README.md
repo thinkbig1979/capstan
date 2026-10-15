@@ -107,9 +107,10 @@ by resource, plus health-check and version examples.
 
 ### In-app help
 
-Short, per-page guides to the dashboard, the stack page and Settings.
+Short, per-page guides to the dashboard, the Docker host page, the stack page and Settings.
 
 - [Dashboard help](docs/help/dashboard.md)
+- [Docker host help](docs/help/docker-host.md)
 - [Stack page help](docs/help/stack-page.md)
 - [Settings help](docs/help/settings.md)
 

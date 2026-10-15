@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import appSource from '@/App.tsx?raw'
 import dashboardSource from '@/pages/DashboardPage.tsx?raw'
+import hostPageSource from '@/pages/HostPage.tsx?raw'
 import stackDetailSource from '@/components/stack/StackDetail.tsx?raw'
 import { DASHBOARD_TABS, HOST_VIEWS, SETTINGS_SECTION_IDS, STACK_TABS } from '@/lib/app-views'
 import { loadHelpLibrary, type HelpDoc } from '../content'
@@ -8,7 +10,8 @@ import { FIELD_HELP, PAGE_HELP, type HelpRef, type PageContextKey } from '../reg
 // Every view the app renders, keyed as the registry keys it.
 const VIEW_KEYS: PageContextKey[] = [
   ...DASHBOARD_TABS.map((v) => `dashboard:${v}` as const),
-  ...HOST_VIEWS.map((v) => `dashboard:${v}` as const),
+  'host:overview',
+  ...HOST_VIEWS.map((v) => `host:${v}` as const),
   ...STACK_TABS.map((v) => `stack:${v}` as const),
   ...SETTINGS_SECTION_IDS.map((v) => `settings:${v}` as const),
 ]
@@ -27,7 +30,7 @@ describe('help coverage (a): every view and field resolves to a real heading', (
   it('every exported view has a PAGE_HELP entry', () => {
     const missing = VIEW_KEYS.filter((key) => !(key in PAGE_HELP))
     expect(missing).toEqual([])
-    expect(VIEW_KEYS).toHaveLength(26)
+    expect(VIEW_KEYS).toHaveLength(27)
   })
 
   it('every PAGE_HELP ref names a bundled doc and heading', async () => {
@@ -63,13 +66,28 @@ function tabsContentValues(source: string): { values: string[]; openings: number
 
 describe('help coverage (b): every rendered tab panel is in the exported arrays', () => {
   it.each([
-    ['DashboardPage.tsx', dashboardSource, [...DASHBOARD_TABS, ...HOST_VIEWS] as readonly string[], 10],
+    ['DashboardPage.tsx', dashboardSource, DASHBOARD_TABS as readonly string[], 5],
     ['StackDetail.tsx', stackDetailSource, STACK_TABS as readonly string[], 6],
   ])('%s', (_file, source, exported, atLeast) => {
     const { values, openings } = tabsContentValues(source)
     expect(values.length).toBe(openings)
     expect(values.length).toBeGreaterThanOrEqual(atLeast)
     expect(values.filter((v) => !exported.includes(v))).toEqual([])
+  })
+})
+
+// HostPage renders no tabs: the consumer arm reads the lists it switches on and
+// the routes App registers, so a sixth list or a renamed route fails here.
+describe('help coverage (b2): the Docker host page renders exactly the exported views', () => {
+  it('HostPage.tsx switches on every HOST_VIEWS value and nothing else', () => {
+    const cases = [...hostPageSource.matchAll(/case '([^']+)':/g)].map((m) => m[1])
+    expect(cases.length).toBe(hostPageSource.match(/\bcase\b/g)?.length ?? 0)
+    expect([...cases].sort()).toEqual([...HOST_VIEWS].sort())
+  })
+
+  it('App.tsx registers /host and /host/:view in both route trees', () => {
+    expect(appSource.match(/path="\/host"/g)?.length).toBe(2)
+    expect(appSource.match(/path="\/host\/:view"/g)?.length).toBe(2)
   })
 })
 

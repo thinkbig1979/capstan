@@ -259,3 +259,31 @@ describe('useStackEvents events_resync', () => {
     ])
   })
 })
+
+// agent-os-8y80: a prune, delete or free-up broadcasts resource_changed, and the
+// Docker host summary (page, and later badge/pill/tiles) must refetch with the
+// lists rather than wait for its 60 s poll.
+describe('useStackEvents resource_changed', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('refetches the host summary with the resource lists', () => {
+    renderHook(() => useStackEvents())
+
+    capturedOnMessage!({ type: 'resource_changed', event: 'prune', timestamp: '' })
+
+    expect(flushInvalidations()).toEqual([
+      queryKeys.resources.images(),
+      queryKeys.resources.volumes(),
+      queryKeys.resources.networks(),
+      queryKeys.resources.buildCache(),
+      queryKeys.resources.hostSummary(),
+      queryKeys.dashboardStats(),
+    ])
+  })
+})

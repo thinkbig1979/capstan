@@ -1,4 +1,4 @@
-import type { DashboardView, SettingsSectionId, StackTab } from '@/lib/app-views'
+import type { DashboardTab, HostView, SettingsSectionId, StackTab } from '@/lib/app-views'
 
 /** A bundled doc (id as in HelpDoc.id) and optionally a heading anchor in it. */
 export interface HelpRef {
@@ -7,11 +7,12 @@ export interface HelpRef {
 }
 
 /**
- * One key per app view. A new key family (e.g. a future `host:` route) is a
- * new union member here plus its entries below.
+ * One key per app view. A new key family is a new union member here plus its
+ * entries below.
  */
 export type PageContextKey =
-  | `dashboard:${DashboardView}`
+  | `dashboard:${DashboardTab}`
+  | `host:${'overview' | HostView}`
   | `stack:${StackTab}`
   | `settings:${SettingsSectionId}`
 
@@ -33,6 +34,7 @@ export type FieldHelpId =
   | 'updates.schedule'
 
 const DASHBOARD = 'help/dashboard'
+const DOCKER_HOST = 'help/docker-host'
 const STACK = 'help/stack-page'
 const SETTINGS = 'help/settings'
 
@@ -44,11 +46,13 @@ export const PAGE_HELP: Record<PageContextKey, HelpRef> = {
   'dashboard:directories': { doc: DASHBOARD, anchor: 'directories' },
   'dashboard:updates': { doc: DASHBOARD, anchor: 'updates' },
   'dashboard:backups': { doc: DASHBOARD, anchor: 'backups' },
-  'dashboard:containers': { doc: DASHBOARD, anchor: 'containers' },
-  'dashboard:images': { doc: DASHBOARD, anchor: 'images' },
-  'dashboard:volumes': { doc: DASHBOARD, anchor: 'volumes' },
-  'dashboard:networks': { doc: DASHBOARD, anchor: 'networks' },
-  'dashboard:build-cache': { doc: DASHBOARD, anchor: 'build-cache' },
+
+  'host:overview': { doc: DOCKER_HOST, anchor: 'overview' },
+  'host:containers': { doc: DOCKER_HOST, anchor: 'containers' },
+  'host:images': { doc: DOCKER_HOST, anchor: 'images' },
+  'host:volumes': { doc: DOCKER_HOST, anchor: 'volumes' },
+  'host:networks': { doc: DOCKER_HOST, anchor: 'networks' },
+  'host:build-cache': { doc: DOCKER_HOST, anchor: 'build-cache' },
 
   'stack:overview': { doc: STACK, anchor: 'overview' },
   'stack:editor': { doc: STACK, anchor: 'editor' },
