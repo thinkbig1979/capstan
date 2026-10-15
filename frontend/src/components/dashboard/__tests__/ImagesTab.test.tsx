@@ -144,15 +144,15 @@ describe('ImagesTab — the scheduled-cleanup readout', () => {
     expect(readout).not.toHaveTextContent('Nothing for scheduled cleanup to reclaim')
   })
 
-  it('names the schedule state and links to its settings', async () => {
+  it('names the schedule state and links to the automatic cleanup panel', async () => {
     mockGetCleanupPolicy.mockResolvedValue({ ...POLICY, enabled: true })
     renderTab()
 
     const readout = await screen.findByTestId('cleanup-reclaimable')
     await waitFor(() => expect(readout).toHaveTextContent('Scheduled cleanup is on.'))
-    expect(screen.getByRole('link', { name: 'Cleanup settings' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Automatic cleanup' })).toHaveAttribute(
       'href',
-      '/settings/docker-cleanup',
+      '/host#automatic-cleanup',
     )
   })
 
@@ -183,7 +183,7 @@ describe('ImagesTab — the scheduled-cleanup readout', () => {
 
     expect(screen.queryByTestId('cleanup-reclaimable')).toBeNull()
     expect(screen.queryByText(/Scheduled cleanup/)).toBeNull()
-    expect(screen.queryByRole('link', { name: 'Cleanup settings' })).toBeNull()
+    expect(screen.queryByRole('link', { name: 'Automatic cleanup' })).toBeNull()
   })
 })
 

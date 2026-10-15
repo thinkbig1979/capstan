@@ -77,7 +77,7 @@ describe('HelpPanel topic', () => {
 
   it('focuses the section heading when opened at a topic from elsewhere', async () => {
     renderPanel('/')
-    act(() => useHelpStore.getState().openAt({ doc: 'help/settings', anchor: 'age-floor' }))
+    act(() => useHelpStore.getState().openAt({ doc: 'help/docker-host', anchor: 'age-floor' }))
     const heading = await screen.findByRole('heading', { level: 3, name: 'Age floor' })
     await waitFor(() => expect(heading).toHaveFocus())
   })

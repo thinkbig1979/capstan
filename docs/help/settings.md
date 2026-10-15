@@ -344,36 +344,8 @@ How many files rclone copies at once during a sync, from 1 to 32 (default 4).
 
 ## Docker cleanup
 
-Removes dangling images and build cache on a schedule. A dangling image is one that no
-tag points at any more, usually a build replaced by a newer one.
-
-**Common tasks**
-
-- **Turn the schedule on:** switch **Run cleanup on a schedule** on, set the interval in
-  hours and save.
-- **Preview before you commit:** the preview shows what a run would remove at the
-  current age floor, and removes nothing.
-- **Run once now:** use **Run cleanup now** and confirm.
-- **Review past runs:** the Recent runs table lists images removed and space reclaimed.
-
-**Gotchas**
-
-- **Removed images cannot be recovered,** though Docker can pull them again.
-- **Only dangling images and build cache are touched.** Tagged images stay.
-
-### Age floor
-
-The minimum age, in hours, an image must have before cleanup may remove it. It protects
-recent images and cache.
-
-**Common tasks**
-
-- **Protect fresh builds:** raise the floor.
-
-**Gotchas**
-
-- **Age means creation time,** not last use.
-- **The form enforces a minimum** and tells you what it is.
+Docker cleanup moved to the Docker host page, beside the numbers it acts on. This
+section links there. See [Docker host help](docker-host.md#automatic-cleanup).
 
 ## Audit log
 
