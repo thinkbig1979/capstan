@@ -152,3 +152,55 @@ func TestPruneImpact_EmptySendsArrays(t *testing.T) {
 		assert.JSONEq(t, `{"stacks":[],"uncheckedStacks":[]}`, string(body))
 	}
 }
+
+// Capstan allows two stacks with one project name (AmbiguousProjectNameError).
+// Each one's compose references count, in either order ListStacks returns
+// them; one that cannot be read makes the project unchecked.
+func TestPruneImpact_SharedProjectNameMergesEveryStack(t *testing.T) {
+	const bareCompose = "services:\n  web:\n    image: nginx\n"
+	a := writeStack(t, "shop", map[string]string{"compose.yaml": shopCompose})
+	b := writeStack(t, "shop", map[string]string{"compose.yaml": bareCompose})
+	b.ID = "shop-b"
+	broken := writeStack(t, "shop", nil)
+	broken.ID = "shop-broken"
+	docker := &hostSpaceFakeDocker{
+		du:      dockertypes.DiskUsage{Volumes: []*volume.Volume{{Name: "pgdata", UsageData: usage(100, 0)}}},
+		nets:    []network.Summary{{ID: "n-proxy", Name: "proxy"}},
+		inspect: map[string]int{"n-proxy": 0},
+	}
+	cases := map[string]struct {
+		stacks    []models.Stack
+		unchecked []string
+	}{
+		"named stack first":        {[]models.Stack{a, b}, []string{}},
+		"named stack last":         {[]models.Stack{b, a}, []string{}},
+		"unreadable sibling last":  {[]models.Stack{a, broken}, []string{"shop"}},
+		"unreadable sibling first": {[]models.Stack{broken, a}, []string{"shop"}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			svc := newHostSpaceWithStacks(docker, tc.stacks...)
+
+			vols, err := svc.VolumePruneImpact(context.Background())
+			require.NoError(t, err)
+			assert.Equal(t, []PruneImpactStack{{Stack: "shop", Items: []string{"pgdata"}}}, vols.Stacks,
+				"a stack's external volume was dropped because another stack shares its project name")
+			assert.Equal(t, tc.unchecked, vols.UncheckedStacks)
+
+			nets, err := svc.NetworkPruneImpact(context.Background())
+			require.NoError(t, err)
+			assert.Equal(t, []PruneImpactStack{{Stack: "shop", Items: []string{"proxy"}}}, nets.Stacks,
+				"a stack's external network was dropped because another stack shares its project name")
+			assert.Equal(t, tc.unchecked, nets.UncheckedStacks)
+		})
+	}
+
+	t.Run("two unreadable stacks are one unchecked project", func(t *testing.T) {
+		broken2 := writeStack(t, "shop", nil)
+		broken2.ID = "shop-broken-2"
+		svc := newHostSpaceWithStacks(docker, broken, broken2)
+		vols, err := svc.VolumePruneImpact(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, []string{"shop"}, vols.UncheckedStacks)
+	})
+}

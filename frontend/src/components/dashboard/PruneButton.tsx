@@ -173,6 +173,15 @@ export function PruneButton({
   const affected = impactState === 'checked' ? impact.data!.stacks : []
   const unchecked = impactState === 'checked' ? impact.data!.uncheckedStacks : []
   const needsTyping = impactState === 'failed' || affected.length > 0 || unchecked.length > 0
+
+  // The typed word consents to the answer on screen. A new answer, or a
+  // failed re-check, clears it (adjusted during render, as ConfirmDialog does).
+  const answerVersion = `${impact.dataUpdatedAt}:${impact.errorUpdatedAt}`
+  const [consentedTo, setConsentedTo] = useState(answerVersion)
+  if (answerVersion !== consentedTo) {
+    setConsentedTo(answerVersion)
+    setTyped('')
+  }
   const canConfirm = impactState !== 'checking' && (!needsTyping || typed === PRUNE_CONFIRM_WORD)
 
   const handleOpenChange = (next: boolean) => {

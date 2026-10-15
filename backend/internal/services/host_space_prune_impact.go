@@ -70,11 +70,12 @@ func (s *HostSpaceService) NetworkPruneImpact(ctx context.Context) (*PruneImpact
 }
 
 // pruneImpactBuilder attributes unused objects to the stacks that own them by
-// label or name them in their compose file.
+// label or name them in their compose file. Both are keyed by project name,
+// which Capstan lets two stacks share: their references are merged.
 type pruneImpactBuilder struct {
 	owned     map[string]bool
 	refs      map[string]stackReferences
-	unchecked []string
+	unchecked map[string]bool
 	items     map[string][]string
 }
 
@@ -86,7 +87,7 @@ func (s *HostSpaceService) newPruneImpactBuilder(ctx context.Context) (*pruneImp
 	b := &pruneImpactBuilder{
 		owned:     map[string]bool{},
 		refs:      map[string]stackReferences{},
-		unchecked: []string{},
+		unchecked: map[string]bool{},
 		items:     map[string][]string{},
 	}
 	for _, st := range stacks {
@@ -95,15 +96,25 @@ func (s *HostSpaceService) newPruneImpactBuilder(ctx context.Context) (*pruneImp
 		}
 		b.owned[st.ProjectName] = true
 		// One stack per resolver call, so each name is attributed to the
-		// stack that names it.
+		// project that names it. A project is unchecked when any of its
+		// stacks cannot be read.
 		refs := s.refs(ctx, []models.Stack{st})
 		if len(refs.withheld) > 0 {
-			b.unchecked = append(b.unchecked, st.ProjectName)
+			b.unchecked[st.ProjectName] = true
 			continue
 		}
-		b.refs[st.ProjectName] = refs
+		merged, ok := b.refs[st.ProjectName]
+		if !ok {
+			merged = newStackReferences()
+			b.refs[st.ProjectName] = merged
+		}
+		for name := range refs.volumes {
+			merged.volumes[name] = true
+		}
+		for name := range refs.networks {
+			merged.networks[name] = true
+		}
 	}
-	sort.Strings(b.unchecked)
 	return b, nil
 }
 
@@ -132,7 +143,11 @@ func (b *pruneImpactBuilder) addIf(name string, labels map[string]string, named 
 }
 
 func (b *pruneImpactBuilder) result() *PruneImpact {
-	out := &PruneImpact{Stacks: []PruneImpactStack{}, UncheckedStacks: b.unchecked}
+	out := &PruneImpact{Stacks: []PruneImpactStack{}, UncheckedStacks: []string{}}
+	for project := range b.unchecked {
+		out.UncheckedStacks = append(out.UncheckedStacks, project)
+	}
+	sort.Strings(out.UncheckedStacks)
 	for project, items := range b.items {
 		sort.Strings(items)
 		out.Stacks = append(out.Stacks, PruneImpactStack{Stack: project, Items: items})

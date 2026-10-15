@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
@@ -378,5 +378,93 @@ describe('VolumesTab — prune warns about stacks that would lose volumes', () =
     expect(typedBox()).not.toBeInTheDocument()
     expect(confirmButton()).toBeEnabled()
     expect(mockVolumePruneImpact).not.toHaveBeenCalled()
+  })
+})
+
+// The adversary review of ae78352: the gates below held, but no test pinned
+// them (agent-os-8d8a round 2).
+describe('VolumesTab — the prune check gates Confirm at every step', () => {
+  const impactKey = ['resources', 'volumes', 'prune-impact']
+  const shop = { stack: 'shop', items: ['pgdata'] }
+  const confirmButton = () => screen.getAllByRole('button', { name: /^prune$/i }).at(-1)!
+  const typedBox = () => screen.queryByRole('textbox', { name: /type prune to confirm/i })
+
+  function renderWithClient() {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: 0 }, mutations: { retry: false } },
+    })
+    render(<VolumesTab />, {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+      ),
+    })
+    return queryClient
+  }
+
+  async function openWithAll(user: ReturnType<typeof userEvent.setup>, firstOpen = true) {
+    if (firstOpen) await screen.findByText('app-data')
+    await user.click(screen.getAllByRole('button', { name: /^prune$/i })[0])
+    await screen.findByText('Prune Unused Volumes?')
+    if (firstOpen) await user.click(screen.getByRole('switch'))
+  }
+
+  it('keeps Prune disabled while the check is still running', async () => {
+    mockVolumePruneImpact.mockReturnValue(new Promise(() => {}))
+    const user = userEvent.setup()
+    renderWithClient()
+    await openWithAll(user)
+
+    expect(await screen.findByText(/checking which stacks this prune affects/i)).toBeInTheDocument()
+    expect(confirmButton()).toBeDisabled()
+  })
+
+  it('does not show the last answer as current while a reopened dialog re-checks', async () => {
+    const user = userEvent.setup()
+    renderWithClient()
+    await openWithAll(user)
+    expect(await screen.findByText(/no stack loses volumes/i)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    mockVolumePruneImpact.mockReturnValue(new Promise(() => {}))
+    await openWithAll(user, false)
+
+    expect(await screen.findByText(/checking which stacks this prune affects/i)).toBeInTheDocument()
+    expect(screen.queryByText(/no stack loses volumes/i)).not.toBeInTheDocument()
+    expect(confirmButton()).toBeDisabled()
+  })
+
+  it('clears the typed word when a re-check adds a stack', async () => {
+    mockVolumePruneImpact.mockResolvedValue({ stacks: [shop], uncheckedStacks: [] })
+    const user = userEvent.setup()
+    const queryClient = renderWithClient()
+    await openWithAll(user)
+    await screen.findByText(/pgdata/)
+    await user.type(typedBox()!, 'prune')
+    expect(confirmButton()).toBeEnabled()
+
+    // A window-focus refetch, say, finds a second stack.
+    mockVolumePruneImpact.mockResolvedValue({ stacks: [shop, { stack: 'blog', items: ['blog_db'] }], uncheckedStacks: [] })
+    await act(() => queryClient.refetchQueries({ queryKey: impactKey }))
+
+    expect(await screen.findByText(/blog_db/)).toBeInTheDocument()
+    expect(typedBox()).toHaveValue('')
+    expect(confirmButton()).toBeDisabled()
+  })
+
+  it('clears the typed word when a re-check fails', async () => {
+    mockVolumePruneImpact.mockResolvedValue({ stacks: [shop], uncheckedStacks: [] })
+    const user = userEvent.setup()
+    const queryClient = renderWithClient()
+    await openWithAll(user)
+    await screen.findByText(/pgdata/)
+    await user.type(typedBox()!, 'prune')
+    expect(confirmButton()).toBeEnabled()
+
+    mockVolumePruneImpact.mockRejectedValue(new Error('503'))
+    await act(() => queryClient.refetchQueries({ queryKey: impactKey }))
+
+    expect(await screen.findByText(/could not check which stacks this prune affects/i)).toBeInTheDocument()
+    expect(typedBox()).toHaveValue('')
+    expect(confirmButton()).toBeDisabled()
   })
 })

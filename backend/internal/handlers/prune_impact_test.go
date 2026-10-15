@@ -17,15 +17,25 @@ import (
 var pruneImpactPaths = []string{"/api/resources/volumes/prune-impact", "/api/resources/networks/prune-impact"}
 
 func TestPruneImpactRoutesServeTheImpact(t *testing.T) {
-	impact := &services.PruneImpact{
-		Stacks:          []services.PruneImpactStack{{Stack: "shop", Items: []string{"pgdata", "proxy"}}},
-		UncheckedStacks: []string{"broken"},
+	fake := &hostSpaceFake{
+		volumeImpact: &services.PruneImpact{
+			Stacks:          []services.PruneImpactStack{{Stack: "shop", Items: []string{"pgdata"}}},
+			UncheckedStacks: []string{"broken"},
+		},
+		networkImpact: &services.PruneImpact{
+			Stacks:          []services.PruneImpactStack{{Stack: "blog", Items: []string{"proxy"}}},
+			UncheckedStacks: []string{},
+		},
 	}
-	for _, path := range pruneImpactPaths {
+	cases := map[string]string{
+		"/api/resources/volumes/prune-impact":  `{"stacks":[{"stack":"shop","items":["pgdata"]}],"uncheckedStacks":["broken"]}`,
+		"/api/resources/networks/prune-impact": `{"stacks":[{"stack":"blog","items":["proxy"]}],"uncheckedStacks":[]}`,
+	}
+	for path, want := range cases {
 		t.Run(path, func(t *testing.T) {
-			w, _ := hostSpaceGet(hostSpaceRouter(t, &hostSpaceFake{impact: impact}), path)
+			w, _ := hostSpaceGet(hostSpaceRouter(t, fake), path)
 			require.Equal(t, http.StatusOK, w.Code, "body = %s", w.Body.String())
-			assert.JSONEq(t, `{"stacks":[{"stack":"shop","items":["pgdata","proxy"]}],"uncheckedStacks":["broken"]}`, w.Body.String())
+			assert.JSONEq(t, want, w.Body.String(), "the route served the other kind's impact")
 		})
 	}
 }
