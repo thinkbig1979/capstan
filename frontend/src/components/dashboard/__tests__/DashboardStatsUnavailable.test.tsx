@@ -102,6 +102,19 @@ describe('HostStrip — omitted stats', () => {
     expect(hostDetail('Images')).toBe('0 B')
     expect(screen.queryByText('unavailable')).not.toBeInTheDocument()
   })
+
+  // agent-os-rwik: an unmeasured volume (-1) is left out of the sum.
+  it('reads "at least" for volumes when Docker could not size every volume', () => {
+    const disk = { ...emptyHost.diskUsage!, volumes: 3 * 1024 ** 2 }
+    renderWithProviders(<HostStrip stats={{ ...emptyHost, diskUsage: { ...disk, volumesSizeKnown: false } }} onNavigate={() => {}} />)
+    expect(hostDetail('Volumes')).toBe('at least 3.00 MB')
+  })
+
+  it('reads the exact volumes figure when every volume was sized', () => {
+    const disk = { ...emptyHost.diskUsage!, volumes: 3 * 1024 ** 2 }
+    renderWithProviders(<HostStrip stats={{ ...emptyHost, diskUsage: disk }} onNavigate={() => {}} />)
+    expect(hostDetail('Volumes')).toBe('3.00 MB')
+  })
 })
 
 // DashboardPage passes runningContainers as `dashboardStats?.runningContainers

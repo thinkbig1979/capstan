@@ -40,11 +40,27 @@ describe('HeaderVitals — disk', () => {
   it('still shows 0 B for a host genuinely using no disk', async () => {
     statsMock.mockResolvedValue({
       totalStacks: 2,
-      diskUsage: { total: 0, images: 0, containers: 0, volumes: 0, buildCache: 0 },
+      diskUsage: { total: 0, images: 0, containers: 0, volumes: 0, buildCache: 0, volumesSizeKnown: true, containersSizeKnown: true },
     })
     renderWithProviders(<HeaderVitals />)
 
     expect(await screen.findByTestId('header-vitals')).toBeInTheDocument()
     expect(await diskVital()).toBe('disk0 B')
+  })
+
+  // agent-os-rwik: a size Docker did not measure (-1) is left out of the
+  // total, so the total is a floor and must say "at least".
+  it.each([
+    ['a volume', { volumesSizeKnown: false, containersSizeKnown: true }],
+    ['a container', { volumesSizeKnown: true, containersSizeKnown: false }],
+  ])('reads "at least" when Docker could not size %s', async (_what, flags) => {
+    statsMock.mockResolvedValue({
+      totalStacks: 2,
+      diskUsage: { total: 2048, images: 0, containers: 1024, volumes: 1024, buildCache: 0, ...flags },
+    })
+    renderWithProviders(<HeaderVitals />)
+
+    expect(await screen.findByTestId('header-vitals')).toBeInTheDocument()
+    expect(await diskVital()).toBe('diskat least 2.00 KB')
   })
 })
