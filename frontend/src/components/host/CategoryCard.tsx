@@ -3,7 +3,6 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import type { HostView } from './host-views'
 
-
 interface CategoryCardProps {
   category: HostView
   title: string
@@ -13,14 +12,16 @@ interface CategoryCardProps {
   /** What can be removed; absent means nothing can. */
   reclaim?: string
   viewHref: string
+  /** Opens the Free-up-space dialog; shown only when something can be removed. */
+  onCleanUp?: () => void
 }
 
 /**
  * One Docker host category: its headline figure, a line of detail, and either
- * what can be removed or "Nothing to clean up". The Clean up action returns
- * with agent-os-f9cf.
+ * what can be removed or "Nothing to clean up". Clean up opens the
+ * Free-up-space dialog (agent-os-f9cf).
  */
-export function CategoryCard({ category, title, value, detail, reclaim, viewHref }: CategoryCardProps) {
+export function CategoryCard({ category, title, value, detail, reclaim, viewHref, onCleanUp }: CategoryCardProps) {
   const testId = `host-card-${category}`
   return (
     <Card data-testid={testId} className="flex flex-col">
@@ -38,6 +39,11 @@ export function CategoryCard({ category, title, value, detail, reclaim, viewHref
           )}
         </div>
         <div className="flex items-center gap-2 pt-1">
+          {reclaim && onCleanUp && (
+            <Button size="sm" onClick={onCleanUp} aria-label={`Clean up ${title.toLowerCase()}`}>
+              Clean up
+            </Button>
+          )}
           <Button asChild variant="outline" size="sm">
             <Link to={viewHref} aria-label={`View all ${title.toLowerCase()}`}>
               View all

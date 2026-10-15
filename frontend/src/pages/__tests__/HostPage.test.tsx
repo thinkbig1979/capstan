@@ -34,6 +34,15 @@ vi.mock('@/components/dashboard/ImagesTab', () => ({ ImagesTab: () => <div data-
 vi.mock('@/components/dashboard/VolumesTab', () => ({ VolumesTab: () => <div data-testid="tab-volumes" /> }))
 vi.mock('@/components/dashboard/NetworksTab', () => ({ NetworksTab: () => <div data-testid="tab-networks" /> }))
 vi.mock('@/components/dashboard/BuildCacheTab', () => ({ BuildCacheTab: () => <div data-testid="tab-build-cache" /> }))
+// The dialog has its own file (FreeUpSpaceDialog.test.tsx); this one pins who opens it.
+vi.mock('@/components/host/FreeUpSpaceDialog', () => ({
+  FreeUpSpaceDialog: ({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) =>
+    open ? (
+      <div role="dialog" aria-label="Free up space">
+        <button onClick={() => onOpenChange(false)}>Close stub</button>
+      </div>
+    ) : null,
+}))
 
 import { HostPage } from '../HostPage'
 import { getBreadcrumbs } from '@/components/layout/breadcrumbs'
@@ -97,20 +106,20 @@ describe('HostPage overview', () => {
     expect(bar).toHaveAttribute('aria-label', '8.00 GB in use, 2.00 GB reclaimable')
   })
 
-  it('renders five category cards, each with a reclaim line or Nothing to clean up, and no Clean up action', async () => {
+  it('renders five category cards, each with a reclaim line and Clean up, or Nothing to clean up and no Clean up', async () => {
     renderHost()
     await screen.findByTestId('host-disk-bar')
     for (const c of CATEGORIES) {
       const card = screen.getByTestId(`host-card-${c}`)
       const reclaim = within(card).queryByTestId(`host-card-${c}-reclaim`)
-      // agent-os-f9cf adds the Clean up action; until then no card offers one.
-      expect(within(card).queryByRole('link', { name: /^Clean up/ })).toBeNull()
-      expect(within(card).queryByRole('button', { name: /^Clean up/ })).toBeNull()
+      const cleanUp = within(card).queryByRole('button', { name: /^Clean up/ })
       if (c === 'networks') {
         expect(reclaim).toBeNull()
+        expect(cleanUp).toBeNull()
         expect(within(card).getByText('Nothing to clean up')).toBeInTheDocument()
       } else {
         expect(reclaim).not.toBeNull()
+        expect(cleanUp).not.toBeNull()
         expect(within(card).queryByText('Nothing to clean up')).toBeNull()
       }
     }
@@ -133,21 +142,45 @@ describe('HostPage overview', () => {
     }
   })
 
-  // The Free up space dialog does not exist yet (agent-os-f9cf); a button that
-  // only appended ?free=1 to the URL was hidden rather than shipped.
-  it('offers no Free up space button, with or without something to reclaim', async () => {
-    const view = renderHost()
-    await screen.findByTestId('host-disk-bar')
-    expect(screen.queryByTestId('host-free-space-button')).toBeNull()
-    expect(screen.queryByRole('button', { name: /free up|nothing to free up/i })).toBeNull()
-    view.unmount()
+  it('offers "Free up <reclaimable>", which opens the dialog, and drops ?free=1 when it closes', async () => {
+    const user = userEvent.setup()
+    renderHost()
+    const button = await screen.findByTestId('host-free-space-button')
+    expect(button).toHaveTextContent('Free up 2.00 GB')
+    expect(button).toBeEnabled()
+    expect(screen.queryByRole('dialog')).toBeNull()
 
+    await user.click(button)
+    expect(screen.getByRole('dialog', { name: 'Free up space' })).toBeInTheDocument()
+    expect(window.location.search).toBe('?free=1')
+
+    await user.click(screen.getByRole('button', { name: 'Close stub' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(window.location.search).toBe('')
+  })
+
+  it('disables the button as "Nothing to free up" when nothing is reclaimable', async () => {
     hostSummary.mockResolvedValue(
       makeSummary({ disk: { total: 8 * GiB, inUse: 8 * GiB, reclaimable: 0, reclaimableAll: 0, volumesSizeKnown: true } }),
     )
     renderHost()
+    const button = await screen.findByTestId('host-free-space-button')
+    expect(button).toHaveTextContent('Nothing to free up')
+    expect(button).toBeDisabled()
+  })
+
+  it('opens the dialog from /host?free=1 and from a card\'s Clean up', async () => {
+    const user = userEvent.setup()
+    const view = renderHost('/host?free=1')
     await screen.findByTestId('host-disk-bar')
-    expect(screen.queryByTestId('host-free-space-button')).toBeNull()
+    expect(screen.getByRole('dialog', { name: 'Free up space' })).toBeInTheDocument()
+    view.unmount()
+
+    renderHost()
+    const card = await screen.findByTestId('host-card-images')
+    expect(screen.queryByRole('dialog')).toBeNull()
+    await user.click(within(card).getByRole('button', { name: 'Clean up images' }))
+    expect(screen.getByRole('dialog', { name: 'Free up space' })).toBeInTheDocument()
   })
 
   it('reads "size unknown" for volumes when Docker could not size them, never 0 B', async () => {

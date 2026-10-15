@@ -1,4 +1,5 @@
-import { Navigate, useParams } from 'react-router'
+import { Navigate, useParams, useSearchParams } from 'react-router'
+import { Button } from '@/components/ui/button'
 import { useQuery } from '@tanstack/react-query'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
@@ -7,6 +8,7 @@ import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 import { DiskBar } from '@/components/host/DiskBar'
 import { CategoryCard } from '@/components/host/CategoryCard'
 import { HostViewNav } from '@/components/host/HostViewNav'
+import { FreeUpSpaceDialog } from '@/components/host/FreeUpSpaceDialog'
 import { hostCards, isHostView, type HostView } from '@/components/host/host-views'
 import { ContainersOverviewTab } from '@/components/dashboard/ContainersOverviewTab'
 import { ImagesTab } from '@/components/dashboard/ImagesTab'
@@ -36,6 +38,20 @@ function HostOverviewSkeleton() {
 function HostOverview() {
   const summaryQuery = useHostSummary()
   const summary = summaryQuery.data
+  // ?free=1 (the dashboard alert's action) opens the dialog; closing it drops
+  // the parameter so a reload does not reopen it.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const freeOpen = searchParams.get('free') === '1'
+  const setFreeOpen = (open: boolean) =>
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        if (open) next.set('free', '1')
+        else next.delete('free')
+        return next
+      },
+      { replace: true },
+    )
 
   let body
   if (summaryQuery.isPending) {
@@ -74,6 +90,7 @@ function HostOverview() {
               key={c.category}
               {...c}
               viewHref={`/host/${c.category}`}
+              onCleanUp={() => setFreeOpen(true)}
             />
           ))}
         </div>
@@ -91,8 +108,18 @@ function HostOverview() {
             Everything Docker keeps on disk, what is in use, and what you can safely remove.
           </p>
         </div>
+        {summary && (
+          <Button
+            data-testid="host-free-space-button"
+            disabled={summary.disk.reclaimable <= 0}
+            onClick={() => setFreeOpen(true)}
+          >
+            {summary.disk.reclaimable > 0 ? `Free up ${formatBytes(summary.disk.reclaimable)}` : 'Nothing to free up'}
+          </Button>
+        )}
       </div>
       {body}
+      <FreeUpSpaceDialog open={freeOpen} onOpenChange={setFreeOpen} />
     </div>
   )
 }
