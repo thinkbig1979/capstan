@@ -11,11 +11,9 @@
 export const DASHBOARD_TABS = ['stacks', 'overview', 'directories', 'updates', 'backups'] as const
 export type DashboardTab = (typeof DASHBOARD_TABS)[number]
 
-/** Dashboard views reached through the host strip, not the tab row. */
+/** The Docker host page's lists, at /host/<view>. Not dashboard tabs: /?tab=<view> redirects there. */
 export const HOST_VIEWS = ['containers', 'images', 'volumes', 'networks', 'build-cache'] as const
 export type HostView = (typeof HOST_VIEWS)[number]
-
-export type DashboardView = DashboardTab | HostView
 
 /** The stack page's tabs, in display order. */
 export const STACK_TABS = ['overview', 'editor', 'logs', 'terminal', 'metrics', 'activity'] as const

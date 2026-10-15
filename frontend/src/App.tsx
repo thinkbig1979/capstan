@@ -20,6 +20,9 @@ const DashboardPage = lazy(() =>
 const StackPage = lazy(() =>
   import('@/pages/StackPage').then((m) => ({ default: m.StackPage }))
 )
+const HostPage = lazy(() =>
+  import('@/pages/HostPage').then((m) => ({ default: m.HostPage }))
+)
 const SettingsPage = lazy(() =>
   import('@/pages/SettingsPage').then((m) => ({ default: m.SettingsPage }))
 )
@@ -143,6 +146,8 @@ function App() {
                 <Route path="/" element={<DashboardPage />} />
                 <Route path="/stacks/:id" element={<StackPage />} />
                 <Route path="/stacks/:id/:tab" element={<StackPage />} />
+                <Route path="/host" element={<HostPage />} />
+                <Route path="/host/:view" element={<HostPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
                 <Route path="/settings/:section" element={<SettingsPage />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
@@ -202,6 +207,8 @@ function App() {
             <Route path="/" element={<DashboardPage />} />
             <Route path="/stacks/:id" element={<StackPage />} />
             <Route path="/stacks/:id/:tab" element={<StackPage />} />
+            <Route path="/host" element={<HostPage />} />
+            <Route path="/host/:view" element={<HostPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/settings/:section" element={<SettingsPage />} />
           </Route>

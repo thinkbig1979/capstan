@@ -74,6 +74,11 @@ export const queryKeys = {
      * tab and invalidated by every image removal there, not by a policy edit.
      */
     cleanupPreview: () => ['resources', 'cleanup-preview'] as const,
+    /**
+     * GET /resources/host/summary: counts, sizes and what can be freed. One
+     * key shared by every reader of the Docker host numbers.
+     */
+    hostSummary: () => ['resources', 'host-summary'] as const,
   },
 
   /** Applied-update history. `all` prefix-matches every filtered list. */

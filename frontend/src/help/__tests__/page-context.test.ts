@@ -19,11 +19,12 @@ const ALL_VIEWS: [string, PageContextKey][] = [
   ['/?tab=directories', 'dashboard:directories'],
   ['/?tab=updates', 'dashboard:updates'],
   ['/?tab=backups', 'dashboard:backups'],
-  ['/?tab=containers', 'dashboard:containers'],
-  ['/?tab=images', 'dashboard:images'],
-  ['/?tab=volumes', 'dashboard:volumes'],
-  ['/?tab=networks', 'dashboard:networks'],
-  ['/?tab=build-cache', 'dashboard:build-cache'],
+  ['/host/containers', 'host:containers'],
+  ['/host/images', 'host:images'],
+  ['/host/volumes', 'host:volumes'],
+  ['/host/networks', 'host:networks'],
+  ['/host/build-cache', 'host:build-cache'],
+  ['/host', 'host:overview'],
   ['/stacks/web', 'stack:overview'],
   ['/stacks/web/editor', 'stack:editor'],
   ['/stacks/web/logs', 'stack:logs'],
@@ -44,7 +45,7 @@ const ALL_VIEWS: [string, PageContextKey][] = [
 
 describe('usePageHelpContext', () => {
   it('covers every PAGE_HELP key exactly once', () => {
-    expect(ALL_VIEWS).toHaveLength(26)
+    expect(ALL_VIEWS).toHaveLength(27)
     expect(ALL_VIEWS.map(([, key]) => key).sort()).toEqual(Object.keys(PAGE_HELP).sort())
   })
 
@@ -56,6 +57,8 @@ describe('usePageHelpContext', () => {
     ['/?tab=stacks', 'dashboard:stacks'],
     ['/?tab=nope', 'dashboard:stacks'],
     ['/?tab=', 'dashboard:stacks'],
+    ['/host/nope', 'host:overview'],
+    ['/host/', 'host:overview'],
     ['/settings/nope', 'settings:account-security'],
     ['/stacks/web/activity?view=backups', 'stack:activity'],
     ['/stacks/web/logs?container=web-1', 'stack:logs'],
@@ -76,12 +79,24 @@ describe('usePageHelpContext', () => {
     expect(contextAt(url)).toBe(key)
   })
 
+  // DashboardPage redirects /?tab=<hostview> to /host/<view>; help follows it.
+  it.each([
+    ['/?tab=containers', 'host:containers'],
+    ['/?tab=images', 'host:images'],
+    ['/?tab=volumes', 'host:volumes'],
+    ['/?tab=networks', 'host:networks'],
+    ['/?tab=build-cache', 'host:build-cache'],
+  ])('legacy %s -> %s', (url, key) => {
+    expect(contextAt(url)).toBe(key)
+  })
+
   it.each(['/stacks/web/nope', '/login', '/setup', '/stacks'])('%s has no page topic', (url) => {
     expect(contextAt(url)).toBeNull()
   })
 
   it('pageContextFor reads the tab from the query string, not the path', () => {
-    expect(pageContextFor('/', '?tab=volumes')).toBe('dashboard:volumes')
+    expect(pageContextFor('/', '?tab=updates')).toBe('dashboard:updates')
+    expect(pageContextFor('/', '?tab=volumes')).toBe('host:volumes')
     expect(pageContextFor('/', '')).toBe('dashboard:stacks')
   })
 })
