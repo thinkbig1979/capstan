@@ -23,14 +23,14 @@ function renderVolumesCard(volumes: HostSummary['volumes']) {
   const model = hostCards(summary(volumes)).find((c) => c.category === 'volumes')!
   render(
     <MemoryRouter>
-      <CategoryCard {...model} viewHref="/host/volumes" cleanUpHref="/host/volumes" />
+      <CategoryCard {...model} viewHref="/host/volumes" />
     </MemoryRouter>,
   )
   return screen.getByTestId('host-card-volumes')
 }
 
 describe('CategoryCard', () => {
-  it('shows the reclaim line and a Clean up link when something can be removed', () => {
+  it('shows the reclaim line, View all and no Clean up action when something can be removed', () => {
     render(
       <MemoryRouter>
         <CategoryCard
@@ -40,19 +40,19 @@ describe('CategoryCard', () => {
           detail="48 images · 31 used by a container."
           reclaim="17 unused images · about 14.00 GB"
           viewHref="/host/images"
-          cleanUpHref="/host/images"
         />
       </MemoryRouter>,
     )
     const card = screen.getByTestId('host-card-images')
     expect(within(card).getByText('21.00 GB')).toBeInTheDocument()
     expect(screen.getByTestId('host-card-images-reclaim')).toHaveTextContent('17 unused images · about 14.00 GB')
-    expect(within(card).getByRole('link', { name: /^Clean up/ })).toHaveAttribute('href', '/host/images')
+    expect(within(card).queryByRole('link', { name: /^Clean up/ })).toBeNull()
+    expect(within(card).queryByRole('button', { name: /^Clean up/ })).toBeNull()
     expect(within(card).getByRole('link', { name: /^View all/ })).toHaveAttribute('href', '/host/images')
     expect(within(card).queryByText('Nothing to clean up')).toBeNull()
   })
 
-  it('shows "Nothing to clean up" and no Clean up link when nothing can be removed', () => {
+  it('shows "Nothing to clean up" when nothing can be removed', () => {
     render(
       <MemoryRouter>
         <CategoryCard
@@ -61,7 +61,6 @@ describe('CategoryCard', () => {
           value="3"
           detail="0 used by stacks · 3 built in."
           viewHref="/host/networks"
-          cleanUpHref="/host/networks"
         />
       </MemoryRouter>,
     )

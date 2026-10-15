@@ -13,15 +13,14 @@ interface CategoryCardProps {
   /** What can be removed; absent means nothing can. */
   reclaim?: string
   viewHref: string
-  /** Where "Clean up" leads. */
-  cleanUpHref: string
 }
 
 /**
  * One Docker host category: its headline figure, a line of detail, and either
- * what can be removed (with Clean up) or "Nothing to clean up".
+ * what can be removed or "Nothing to clean up". The Clean up action returns
+ * with agent-os-f9cf.
  */
-export function CategoryCard({ category, title, value, detail, reclaim, viewHref, cleanUpHref }: CategoryCardProps) {
+export function CategoryCard({ category, title, value, detail, reclaim, viewHref }: CategoryCardProps) {
   const testId = `host-card-${category}`
   return (
     <Card data-testid={testId} className="flex flex-col">
@@ -44,13 +43,6 @@ export function CategoryCard({ category, title, value, detail, reclaim, viewHref
               View all
             </Link>
           </Button>
-          {reclaim && (
-            <Button asChild size="sm">
-              <Link to={cleanUpHref} aria-label={`Clean up ${title.toLowerCase()}`}>
-                Clean up
-              </Link>
-            </Button>
-          )}
         </div>
       </CardContent>
     </Card>

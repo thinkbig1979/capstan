@@ -97,20 +97,20 @@ describe('HostPage overview', () => {
     expect(bar).toHaveAttribute('aria-label', '8.00 GB in use, 2.00 GB reclaimable')
   })
 
-  it('renders five category cards, each with a reclaim line and Clean up, or Nothing to clean up', async () => {
+  it('renders five category cards, each with a reclaim line or Nothing to clean up, and no Clean up action', async () => {
     renderHost()
     await screen.findByTestId('host-disk-bar')
     for (const c of CATEGORIES) {
       const card = screen.getByTestId(`host-card-${c}`)
       const reclaim = within(card).queryByTestId(`host-card-${c}-reclaim`)
-      const cleanUp = within(card).queryByRole('link', { name: /^Clean up/ })
+      // agent-os-f9cf adds the Clean up action; until then no card offers one.
+      expect(within(card).queryByRole('link', { name: /^Clean up/ })).toBeNull()
+      expect(within(card).queryByRole('button', { name: /^Clean up/ })).toBeNull()
       if (c === 'networks') {
         expect(reclaim).toBeNull()
-        expect(cleanUp).toBeNull()
         expect(within(card).getByText('Nothing to clean up')).toBeInTheDocument()
       } else {
         expect(reclaim).not.toBeNull()
-        expect(cleanUp).toHaveAttribute('href', `/host/${c}`)
         expect(within(card).queryByText('Nothing to clean up')).toBeNull()
       }
     }
@@ -133,24 +133,21 @@ describe('HostPage overview', () => {
     }
   })
 
-  it('offers "Free up <reclaimable>" and opens the dialog contract (?free=1)', async () => {
-    const user = userEvent.setup()
-    renderHost()
-    const button = await screen.findByTestId('host-free-space-button')
-    expect(button).toHaveTextContent('Free up 2.00 GB')
-    expect(button).toBeEnabled()
-    await user.click(button)
-    expect(window.location.search).toBe('?free=1')
-  })
+  // The Free up space dialog does not exist yet (agent-os-f9cf); a button that
+  // only appended ?free=1 to the URL was hidden rather than shipped.
+  it('offers no Free up space button, with or without something to reclaim', async () => {
+    const view = renderHost()
+    await screen.findByTestId('host-disk-bar')
+    expect(screen.queryByTestId('host-free-space-button')).toBeNull()
+    expect(screen.queryByRole('button', { name: /free up|nothing to free up/i })).toBeNull()
+    view.unmount()
 
-  it('disables the button and reads "Nothing to free up" at 0', async () => {
     hostSummary.mockResolvedValue(
       makeSummary({ disk: { total: 8 * GiB, inUse: 8 * GiB, reclaimable: 0, reclaimableAll: 0, volumesSizeKnown: true } }),
     )
     renderHost()
-    const button = await screen.findByTestId('host-free-space-button')
-    expect(button).toHaveTextContent('Nothing to free up')
-    expect(button).toBeDisabled()
+    await screen.findByTestId('host-disk-bar')
+    expect(screen.queryByTestId('host-free-space-button')).toBeNull()
   })
 
   it('reads "size unknown" for volumes when Docker could not size them, never 0 B', async () => {
@@ -199,7 +196,6 @@ describe('HostPage overview', () => {
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent('Could not refresh the Docker host summary.')
     expect(screen.getByTestId('host-disk-bar')).toHaveAttribute('aria-label', '8.00 GB in use, 2.00 GB reclaimable')
-    expect(screen.getByTestId('host-free-space-button')).toHaveTextContent('Free up 2.00 GB')
     expect(screen.queryByText(/Could not load/)).toBeNull()
   })
 

@@ -1,7 +1,5 @@
-import { Navigate, useParams, useSearchParams } from 'react-router'
+import { Navigate, useParams } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
-import { Sparkles } from 'lucide-react'
-import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { LoadFailedNotice } from '@/components/LoadFailedNotice'
@@ -37,9 +35,7 @@ function HostOverviewSkeleton() {
 
 function HostOverview() {
   const summaryQuery = useHostSummary()
-  const [, setSearchParams] = useSearchParams()
   const summary = summaryQuery.data
-  const reclaimable = summary?.disk.reclaimable ?? 0
 
   let body
   if (summaryQuery.isPending) {
@@ -81,7 +77,6 @@ function HostOverview() {
               key={c.category}
               {...c}
               viewHref={`/host/${c.category}`}
-              cleanUpHref={`/host/${c.category}`}
             />
           ))}
         </div>
@@ -99,17 +94,6 @@ function HostOverview() {
             Everything Docker keeps on disk, what is in use, and what you can safely remove.
           </p>
         </div>
-        {summary && (
-          // ?free=1 is the Free-up-space dialog's open contract (spec AC12b).
-          <Button
-            data-testid="host-free-space-button"
-            disabled={reclaimable <= 0}
-            onClick={() => setSearchParams({ free: '1' })}
-          >
-            <Sparkles className="mr-2 h-4 w-4" aria-hidden="true" />
-            {reclaimable > 0 ? `Free up ${formatBytes(reclaimable)}` : 'Nothing to free up'}
-          </Button>
-        )}
       </div>
       {body}
     </div>
