@@ -86,6 +86,6 @@ export const FIELD_HELP: Record<FieldHelpId, HelpRef> = {
   'git.https-token': { doc: SETTINGS, anchor: 'personal-access-token' },
   'directories.scan-depth': { doc: SETTINGS, anchor: 'directory-recursion-depth' },
   'directories.default-dir': { doc: SETTINGS, anchor: 'default-directory-for-new-stacks' },
-  'docker-cleanup.min-age': { doc: SETTINGS, anchor: 'age-floor' },
+  'docker-cleanup.min-age': { doc: DOCKER_HOST, anchor: 'age-floor' },
   'updates.schedule': { doc: SETTINGS, anchor: 'scan-interval-and-auto-update' },
 }

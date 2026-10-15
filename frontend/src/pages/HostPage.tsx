@@ -9,6 +9,7 @@ import { DiskBar } from '@/components/host/DiskBar'
 import { CategoryCard } from '@/components/host/CategoryCard'
 import { HostViewNav } from '@/components/host/HostViewNav'
 import { FreeUpSpaceDialog } from '@/components/host/FreeUpSpaceDialog'
+import { AutoCleanupPanel } from '@/components/host/AutoCleanupPanel'
 import { hostCards, isHostView, type HostView } from '@/components/host/host-views'
 import { ContainersOverviewTab } from '@/components/dashboard/ContainersOverviewTab'
 import { ImagesTab } from '@/components/dashboard/ImagesTab'
@@ -119,6 +120,9 @@ function HostOverview() {
         )}
       </div>
       {body}
+      {/* Outside {body}: the schedule has its own queries, and an unreadable
+          host summary is no reason to hide it. */}
+      <AutoCleanupPanel />
       <FreeUpSpaceDialog open={freeOpen} onOpenChange={setFreeOpen} />
     </div>
   )

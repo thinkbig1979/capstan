@@ -66,10 +66,49 @@ and unused networks. Tick the rows you want gone, then press **Remove selected**
 
 ## Automatic cleanup
 
-Capstan can remove dangling images and old build cache on a schedule. It is off until
-you turn it on. You set it in **Settings > Docker cleanup**: the schedule switch, the
-age floor in hours, how often it runs, a preview of what a run would remove, and a
-table of past runs. See [Settings help](settings.md#docker-cleanup).
+The **Automatic cleanup** panel on this page removes unused Docker data on a
+schedule. It is off until you turn it on. By default it runs every 24 h and removes
+dangling images and build cache older than 168 h. The panel reads its sentence from
+the saved schedule, so it always names what will actually be removed and what never is.
+
+**Common tasks**
+
+- **Turn it on:** use **Turn on**, check the settings in the dialog and save.
+- **Choose what it removes:** use **Edit schedule**. There is one switch each for
+  dangling images, unused tagged images, build cache, stopped containers outside any
+  stack, unattached volumes and unused networks. Dangling images and build cache are
+  on by default; the rest are off.
+- **Change timing:** in **Edit schedule**, set how often it runs and the age floor.
+- **Set the dashboard warning:** in **Edit schedule**, set how many GB must be
+  freeable before the dashboard warns you. 0 turns the warning off.
+- **See what the next run would remove:** use **Preview next run**. It removes nothing.
+- **Run it once now:** use **Run now** and confirm. It runs with the saved settings,
+  even when the schedule is off.
+- **Review past runs:** open **Run history** under the panel. Each run shows what it
+  removed and how much space it freed. A skipped or failed run says why.
+
+**Gotchas**
+
+- **Stack objects are never removed.** Anything a stack uses or owns is left alone,
+  the same rule as **Free up space**.
+- **Unused tagged images can include your rollback image.** An image's age is its
+  build time, not when it was pulled, so a just-pulled replacement of an old image
+  already counts as old. That is why this switch is off by default and warns you
+  when you turn it on. Images from a registry can be pulled again.
+- **Removed volumes cannot be recovered.** Turning volumes on asks you to confirm.
+- **A run can be skipped.** If a stack operation is running when it needs to remove
+  more than dangling images and build cache, the run removes nothing, says why in
+  the history, and tries again next time.
+- **A stack whose compose file cannot be read** blocks removal of tagged images,
+  containers, volumes and networks until Capstan can read it.
+
+### Age floor
+
+The minimum age, in hours, something must have before cleanup may remove it. It
+protects fresh builds and anything you just created.
+
+- **Age means creation time,** not last use.
+- **The form enforces a minimum** and tells you what it is.
 
 ## Containers
 
@@ -106,8 +145,8 @@ each one. The page also shows how much a scheduled cleanup would reclaim.
 - **Reclaim space in bulk:** use **Prune**. By default it removes dangling images,
   the untagged leftovers of rebuilds. Enable the "all unused" option to remove every
   image that no container uses, and set an age to spare recent ones.
-- **Schedule it:** follow the Cleanup settings link. See
-  [Settings help](settings.md#docker-cleanup).
+- **Schedule it:** follow the Automatic cleanup link. See
+  [Automatic cleanup](#automatic-cleanup).
 
 **Gotchas**
 

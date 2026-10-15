@@ -680,6 +680,16 @@ export type CreateStackResult = ActionResult<{
  */
 export type StackDeleteResult = ActionResult<{ id?: string; output?: string }>
 
+/** The cleanup policy PUT body. Every field is optional: an absent one keeps its stored value. */
+export interface DockerCleanupPolicyUpdate {
+  enabled?: boolean
+  minAgeHours?: number
+  intervalHours?: number
+  // Partial: an absent switch keeps its stored value.
+  categories?: Partial<DockerCleanupCategories>
+  alertThresholdBytes?: number
+}
+
 export const resourcesApi = {
   images: async () => {
     const response = await apiClient.get<{ images: DockerImage[] }>('/resources/images')
@@ -853,14 +863,7 @@ export const resourcesApi = {
    * read-back after its own floor checks. Returning it means the form refreshes
    * from what was actually stored rather than from what it hoped it sent.
    */
-  updateCleanupPolicy: async (data: {
-    enabled?: boolean
-    minAgeHours?: number
-    intervalHours?: number
-    // Partial: an absent switch keeps its stored value.
-    categories?: Partial<DockerCleanupCategories>
-    alertThresholdBytes?: number
-  }) => {
+  updateCleanupPolicy: async (data: DockerCleanupPolicyUpdate) => {
     const response = await apiClient.put<DockerCleanupPolicy>('/resources/cleanup/policy', data)
     return response.data
   },

@@ -44,6 +44,11 @@ vi.mock('@/components/host/FreeUpSpaceDialog', () => ({
     ) : null,
 }))
 
+// The panel has its own file (AutoCleanupPanel.test.tsx); this one pins where it mounts.
+vi.mock('@/components/host/AutoCleanupPanel', () => ({
+  AutoCleanupPanel: () => <section data-testid="auto-cleanup-panel-stub" id="automatic-cleanup" />,
+}))
+
 import { HostPage } from '../HostPage'
 import { getBreadcrumbs } from '@/components/layout/breadcrumbs'
 import { queryKeys } from '@/lib/query-keys'
@@ -232,6 +237,13 @@ describe('HostPage overview', () => {
     expect(screen.queryByText(/Could not load/)).toBeNull()
   })
 
+  it('mounts the automatic cleanup panel on the overview, even when the summary is unreadable', async () => {
+    hostSummary.mockRejectedValueOnce(new Error('boom'))
+    renderHost()
+    await screen.findByRole('alert')
+    expect(screen.getByTestId('auto-cleanup-panel-stub')).toBeInTheDocument()
+  })
+
   it('polls the summary every 60 s', async () => {
     const { queryClient } = renderHost()
     await screen.findByTestId('host-disk-bar')
@@ -259,6 +271,7 @@ describe('HostPage list views', () => {
     const nav = screen.getByRole('navigation', { name: 'Docker host' })
     expect(within(nav).getByRole('link', { name: 'Overview' })).toHaveAttribute('href', '/host')
     expect(screen.queryByTestId('host-disk-bar')).toBeNull()
+    expect(screen.queryByTestId('auto-cleanup-panel-stub')).toBeNull()
   })
 
   it('/host/containers feeds the dashboard stats and metrics status to the containers list', async () => {
