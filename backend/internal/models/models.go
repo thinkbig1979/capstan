@@ -203,11 +203,15 @@ type DashboardContainerInfo struct {
 }
 
 type DockerImage struct {
-	ID         string   `json:"id"`
-	RepoTags   []string `json:"repoTags"`
-	Size       int64    `json:"size"`
-	Created    int64    `json:"created"`
-	Containers int      `json:"containers"`
+	ID       string   `json:"id"`
+	RepoTags []string `json:"repoTags"`
+	Size     int64    `json:"size"`
+	// SharedSize is the bytes this image shares with other images, or -1
+	// when Docker did not compute it. Size minus SharedSize is what removing
+	// the image alone frees.
+	SharedSize int64 `json:"sharedSize"`
+	Created    int64 `json:"created"`
+	Containers int   `json:"containers"`
 	// ContainersKnown is false when Docker's disk-usage read failed or had no
 	// count for this image; Containers is then 0 and means nothing.
 	ContainersKnown bool `json:"containersKnown"`

@@ -689,6 +689,12 @@ export interface DockerImage {
   id: string;
   repoTags: string[];
   size: number /* int64 */;
+  /**
+   * SharedSize is the bytes this image shares with other images, or -1
+   * when Docker did not compute it. Size minus SharedSize is what removing
+   * the image alone frees.
+   */
+  sharedSize: number /* int64 */;
   created: number /* int64 */;
   containers: number /* int */;
   /**

@@ -203,9 +203,8 @@ export type UpdateHistoryEntry = Omit<WireUpdateHistoryEntry, 'status' | 'trigge
 }
 
 // narrows models.DockerCleanupRun.Trigger and .Status, both Go strings.
-// 'skipped' is reserved for a scheduled run that finds its turn held and
-// removes nothing (errorMessage names the holder). No run writes it yet; the
-// category runs that take that turn are agent-os-lr7x.
+// 'skipped' is a scheduled run that needed the exclusive stack turn, found it
+// held and removed nothing (errorMessage names the holder, agent-os-lr7x).
 export type DockerCleanupRun = Omit<WireDockerCleanupRun, 'trigger' | 'status'> & {
   trigger: 'scheduled' | 'manual'
   status: 'success' | 'failed' | 'skipped'

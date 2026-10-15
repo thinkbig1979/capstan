@@ -37,7 +37,7 @@ type updateScanner interface {
 // cleanup routes need. Declared here on the consumer side so the preview and
 // run handlers are testable without a Docker daemon.
 type dockerCleanupService interface {
-	Preview(ctx context.Context, minAgeHours int) (*services.DockerCleanupPreview, error)
+	PreviewCategories(ctx context.Context, minAgeHours int, categories services.DockerCleanupCategories) (*services.DockerCleanupPreview, error)
 	Execute(ctx context.Context, trigger string, minAgeHours int, categories services.DockerCleanupCategories) (*models.DockerCleanupRun, error)
 }
 

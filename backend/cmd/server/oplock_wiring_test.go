@@ -22,7 +22,7 @@ var mainSource string
 // so a missing setter call in main.go would silently drop the lock in
 // production while every unit test stayed green. This asserts that main.go
 // hands the one `opLock` to every consumer: the three constructors that take it
-// as an argument and the five components that take it by setter, each setter
+// as an argument and the six components that take it by setter, each setter
 // receiver bound to the constructor that built it.
 func TestMain_EveryOperationLockConsumerGetsTheSameLock(t *testing.T) {
 	fset := token.NewFileSet()
@@ -83,6 +83,7 @@ func TestMain_EveryOperationLockConsumerGetsTheSameLock(t *testing.T) {
 		"NewComposeHandler",
 		"NewGitService",
 		"NewResourcesHandlerWithJobManager",
+		"NewDockerCleanupService",
 	} {
 		if !gotSetters[want] {
 			t.Errorf("main.go never calls SetOperationLock(opLock) on the value %s returns", want)

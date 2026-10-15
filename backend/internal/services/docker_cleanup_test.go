@@ -9,8 +9,12 @@ import (
 	"testing"
 	"time"
 
+	dockertypes "github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/build"
+	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/api/types/volume"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -417,6 +421,10 @@ var runToPreview = map[string]string{
 	"ImagesDeleted":       "Candidates",
 	"BytesReclaimed":      "ReclaimableBytes",
 	"CacheBytesReclaimed": "CacheReclaimableBytes",
+	"ContainersDeleted":   "Containers",
+	"VolumesDeleted":      "Volumes",
+	"NetworksDeleted":     "Networks",
+	"OtherBytesReclaimed": "OtherReclaimableBytes",
 }
 
 var notReclaimFigures = map[string]string{
@@ -430,19 +438,6 @@ var notReclaimFigures = map[string]string{
 	"Categories":   "which categories the run acted on; not an amount reclaimed",
 }
 
-// pendingReclaimFigures are reclaim figures Execute does not produce yet: the
-// columns exist (migration 24, agent-os-8hdg) but removing containers, volumes
-// and networks is agent-os-lr7x. TestDockerCleanupPendingReclaimFiguresStayZero
-// pins that Execute leaves them at 0, so a figure cannot start being reported
-// while it sits here. agent-os-lr7x moves each one to runToPreview with a
-// Preview counterpart in the same change that makes Execute set it.
-var pendingReclaimFigures = map[string]string{
-	"ContainersDeleted":   "agent-os-lr7x",
-	"VolumesDeleted":      "agent-os-lr7x",
-	"NetworksDeleted":     "agent-os-lr7x",
-	"OtherBytesReclaimed": "agent-os-lr7x",
-}
-
 func TestDockerCleanupEveryRunFieldIsClassified(t *testing.T) {
 	runType := reflect.TypeOf(models.DockerCleanupRun{})
 	previewType := reflect.TypeOf(DockerCleanupPreview{})
@@ -452,13 +447,13 @@ func TestDockerCleanupEveryRunFieldIsClassified(t *testing.T) {
 		name := runType.Field(i).Name
 		seen[name] = true
 		classified := 0
-		for _, table := range []map[string]string{runToPreview, notReclaimFigures, pendingReclaimFigures} {
+		for _, table := range []map[string]string{runToPreview, notReclaimFigures} {
 			if _, ok := table[name]; ok {
 				classified++
 			}
 		}
 		assert.Equal(t, 1, classified,
-			"DockerCleanupRun.%s must be in exactly one of runToPreview / notReclaimFigures / pendingReclaimFigures: "+
+			"DockerCleanupRun.%s must be in exactly one of runToPreview / notReclaimFigures: "+
 				"if Execute reports it as a reclaim figure, Preview needs a counterpart (agent-os-q1kh)", name)
 	}
 
@@ -472,39 +467,11 @@ func TestDockerCleanupEveryRunFieldIsClassified(t *testing.T) {
 	for name := range notReclaimFigures {
 		assert.True(t, seen[name], "notReclaimFigures names DockerCleanupRun.%s, which does not exist", name)
 	}
-	for name := range pendingReclaimFigures {
-		assert.True(t, seen[name], "pendingReclaimFigures names DockerCleanupRun.%s, which does not exist", name)
-	}
-}
-
-// TestDockerCleanupPendingReclaimFiguresStayZero is what keeps
-// pendingReclaimFigures honest: with every category switched on, Execute still
-// reports 0 for each pending figure. A figure Execute starts setting fails here
-// until it moves to runToPreview with a Preview counterpart.
-func TestDockerCleanupPendingReclaimFiguresStayZero(t *testing.T) {
-	docker := &fn7x2FakeDocker{
-		images:         []models.DockerImage{{ID: "sha256:old", Size: 1000, Created: hoursAgo(100)}},
-		cacheReclaimed: 4096,
-	}
-	all := DockerCleanupCategories{DanglingImages: true, UnusedImages: true, BuildCache: true, Containers: true, Volumes: true, Networks: true}
-	run, err := NewDockerCleanupService(docker, &fn7x2FakeStore{}).Execute(context.Background(), TriggerManual, 24, all)
-	require.NoError(t, err)
-
-	require.Len(t, pendingReclaimFigures, 4)
-	runValue := reflect.ValueOf(*run)
-	for name := range pendingReclaimFigures {
-		assert.Zero(t, reclaimAmount(t, runValue.FieldByName(name)), "Execute now reports %s; move it to runToPreview with a Preview counterpart", name)
-	}
-	// Positive side on the same run: the figures Execute does produce are not
-	// zero, so the zeros above are not a run that did nothing.
-	assert.Positive(t, run.ImagesDeleted)
-	assert.Positive(t, run.CacheBytesReclaimed)
 }
 
 // TestDockerCleanupCategoriesSwitchOffPrunes: a category switched off is not
 // pruned and is not recorded, and the run records exactly what it ran
-// (agent-os-8hdg). The four categories Execute cannot run yet are never
-// recorded, even when switched on.
+// (agent-os-8hdg). The other four categories are TestDockerCleanupCategories*.
 func TestDockerCleanupCategoriesSwitchOffPrunes(t *testing.T) {
 	cases := []struct {
 		name           string
@@ -516,7 +483,6 @@ func TestDockerCleanupCategoriesSwitchOffPrunes(t *testing.T) {
 		{"defaults run both", DefaultDockerCleanupCategories(), 1, 1, "dangling_images,build_cache"},
 		{"dangling images off", DockerCleanupCategories{BuildCache: true}, 0, 1, "build_cache"},
 		{"build cache off", DockerCleanupCategories{DanglingImages: true}, 1, 0, "dangling_images"},
-		{"only unexecuted categories on", DockerCleanupCategories{UnusedImages: true, Containers: true, Volumes: true, Networks: true}, 0, 0, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -572,14 +538,28 @@ func TestDockerCleanupPreviewForecastsEveryReclaimFigure(t *testing.T) {
 		cacheReclaimed: cacheBytes,
 	}
 	svc := NewDockerCleanupService(docker, &fn7x2FakeStore{})
+	// The other categories come from the host service: one old candidate of
+	// each, and one too young that neither side may count.
+	old, young := hoursAgo(100), hoursAgo(1)
+	svc.SetHostSpaceService(&lr7xFakeHostSpace{cands: HostCandidates{
+		Images: []HostCandidateItem{
+			{ID: "sha256:unused-tagged", Label: "app:0", Size: ptr(300), Created: &old},
+			{ID: "sha256:young-tagged", Label: "app:9", Size: ptr(900), Created: &young},
+		},
+		Containers: []HostCandidateItem{{ID: "c-old", Size: ptr(70), Created: &old}},
+		Volumes:    []HostCandidateItem{{ID: "v-old", Size: ptr(500), Created: &old}},
+		Networks:   []HostCandidateItem{{ID: "n-old", Created: &old}},
+	}})
+	svc.SetOperationLock(NewOperationLock())
+	all := DockerCleanupCategories{DanglingImages: true, UnusedImages: true, BuildCache: true, Containers: true, Volumes: true, Networks: true}
 
-	run, err := svc.Execute(context.Background(), TriggerManual, 24, DefaultDockerCleanupCategories())
+	run, err := svc.Execute(context.Background(), TriggerManual, 24, all)
 	require.NoError(t, err)
-	preview, err := svc.Preview(context.Background(), 24)
+	preview, err := svc.PreviewCategories(context.Background(), 24, all)
 	require.NoError(t, err)
 
 	// A table of nothing passes every loop below, so its size is asserted first.
-	require.Len(t, runToPreview, 3)
+	require.Len(t, runToPreview, 7)
 	runValue, previewValue := reflect.ValueOf(*run), reflect.ValueOf(*preview)
 	for runField, previewField := range runToPreview {
 		executed := reclaimAmount(t, runValue.FieldByName(runField))
@@ -590,6 +570,11 @@ func TestDockerCleanupPreviewForecastsEveryReclaimFigure(t *testing.T) {
 
 	assert.Equal(t, int64(run.ImagesDeleted), int64(len(preview.Candidates)))
 	assert.Equal(t, run.BytesReclaimed, preview.ReclaimableBytes)
+	assert.Equal(t, run.ContainersDeleted, len(preview.Containers))
+	assert.Equal(t, run.VolumesDeleted, len(preview.Volumes))
+	assert.Equal(t, run.NetworksDeleted, len(preview.Networks))
+	assert.Equal(t, run.OtherBytesReclaimed, preview.OtherReclaimableBytes)
+	assert.Equal(t, int64(1000+2000+300), run.BytesReclaimed, "dangling plus tagged, the young one excluded")
 }
 
 // yicuBlockingPruner holds PruneImages open until released and counts how many
@@ -699,4 +684,337 @@ func TestDockerCleanupExecuteIsSingleFlight(t *testing.T) {
 	_, err := svc.Execute(context.Background(), TriggerManual, 24, DefaultDockerCleanupCategories())
 	require.NoError(t, err, "the guard was not released after the first run finished")
 	require.Equal(t, 2, store.count())
+}
+
+// agent-os-lr7x: the categories beyond dangling images and build cache.
+
+// lr7xFakeHostSpace serves a fixed candidate set and removes, in FreeSpace,
+// every requested ID that is in it, unless failIDs names it.
+type lr7xFakeHostSpace struct {
+	mu            sync.Mutex
+	cands         HostCandidates
+	candErr       error
+	candCalls     int
+	freeReqs      []HostFreeSpaceRequest
+	failIDs       map[string]string
+	invalidations int
+}
+
+func (f *lr7xFakeHostSpace) Candidates(context.Context) (*HostCandidates, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.candCalls++
+	if f.candErr != nil {
+		return nil, f.candErr
+	}
+	c := f.cands
+	return &c, nil
+}
+
+func (f *lr7xFakeHostSpace) FreeSpace(_ context.Context, req HostFreeSpaceRequest) (*HostFreeSpaceResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.freeReqs = append(f.freeReqs, req)
+	res := &HostFreeSpaceResult{Images: newCategoryResult(), Containers: newCategoryResult(), Volumes: newCategoryResult(), Networks: newCategoryResult()}
+	for _, k := range []struct {
+		ids   []string
+		cands []HostCandidateItem
+		out   *HostFreeSpaceCategoryResult
+	}{
+		{req.Images, f.cands.Images, &res.Images},
+		{req.Containers, f.cands.Containers, &res.Containers},
+		{req.Volumes, f.cands.Volumes, &res.Volumes},
+		{req.Networks, f.cands.Networks, &res.Networks},
+	} {
+		removeEach(k.ids, k.cands, k.out, func(id string) error {
+			if reason, ok := f.failIDs[id]; ok {
+				return errors.New(reason)
+			}
+			return nil
+		})
+	}
+	return res, nil
+}
+
+func (f *lr7xFakeHostSpace) Invalidate() {
+	f.mu.Lock()
+	f.invalidations++
+	f.mu.Unlock()
+}
+
+// lr7xCountingTurn is a real OperationLock that counts exclusive takes.
+type lr7xCountingTurn struct {
+	*OperationLock
+	mu       sync.Mutex
+	acquires int
+}
+
+func (l *lr7xCountingTurn) AcquireExclusive(kind string) (string, error) {
+	l.mu.Lock()
+	l.acquires++
+	l.mu.Unlock()
+	return l.OperationLock.AcquireExclusive(kind)
+}
+
+// lr7xCountingHostSpace forwards to a real HostSpaceService and counts the
+// invalidations made through it (FreeSpace's own internal one is not).
+type lr7xCountingHostSpace struct {
+	*HostSpaceService
+	invalidations int
+}
+
+func (h *lr7xCountingHostSpace) Invalidate() {
+	h.invalidations++
+	h.HostSpaceService.Invalidate()
+}
+
+func rfc3339HoursAgo(h int) string {
+	return time.Now().Add(-time.Duration(h) * time.Hour).UTC().Format(time.RFC3339)
+}
+
+// AC21 (a): at the defaults the run is today's: the two prunes, no turn, no
+// candidate read, no item removal.
+func TestDockerCleanupCategoriesDefaultsTakeNoTurn(t *testing.T) {
+	docker := &fn7x2FakeDocker{images: []models.DockerImage{
+		{ID: "sha256:old", RepoTags: []string{"<none>:<none>"}, Size: 100, Created: hoursAgo(48)},
+	}}
+	host := &lr7xFakeHostSpace{cands: HostCandidates{Containers: []HostCandidateItem{{ID: "c", Created: ptr(hoursAgo(100))}}}}
+	turn := &lr7xCountingTurn{OperationLock: NewOperationLock()}
+	svc := NewDockerCleanupService(docker, &fn7x2FakeStore{})
+	svc.SetHostSpaceService(host)
+	svc.turn = turn
+
+	run, err := svc.Execute(context.Background(), TriggerScheduled, 24, DefaultDockerCleanupCategories())
+	require.NoError(t, err)
+
+	require.Len(t, docker.imagePruneOpts, 1)
+	assert.False(t, docker.imagePruneOpts[0].All)
+	require.Len(t, docker.cachePruneOpts, 1)
+	assert.Zero(t, turn.acquires, "a default run took the exclusive turn")
+	assert.Zero(t, host.candCalls, "a default run read the host candidates")
+	assert.Empty(t, host.freeReqs, "a default run removed items")
+	assert.Equal(t, 1, run.ImagesDeleted, "positive side: the prune ran")
+	assert.Equal(t, 1, host.invalidations, "a run that pruned invalidates the host summary once")
+}
+
+// AC21 (b): containers and volumes on. Only the unlabelled stopped container
+// and the non-stack unattached volume created before the floor go, with
+// force=false; the rules are the dialog's (a real HostSpaceService).
+func TestDockerCleanupCategoriesContainersAndVolumes(t *testing.T) {
+	stackLabel := map[string]string{composeProjectLabel: "shop"}
+	hostDocker := &hostSpaceFakeDocker{
+		du: dockertypes.DiskUsage{
+			Containers: []*container.Summary{
+				{ID: "c-old", Names: []string{"/old"}, State: container.StateExited, SizeRw: 7, Created: hoursAgo(100)},
+				{ID: "c-young", Names: []string{"/young"}, State: container.StateExited, SizeRw: 7, Created: hoursAgo(1)},
+				{ID: "c-unknown-age", Names: []string{"/unknown"}, State: container.StateExited, SizeRw: 7},
+				{ID: "c-stack", Names: []string{"/shop-db-1"}, State: container.StateExited, Labels: stackLabel, Created: hoursAgo(100)},
+				{ID: "c-running", Names: []string{"/up"}, State: container.StateRunning, Created: hoursAgo(100)},
+			},
+			Volumes: []*volume.Volume{
+				{Name: "v-old", UsageData: usage(500, 0), CreatedAt: rfc3339HoursAgo(100)},
+				{Name: "shop_db", Labels: stackLabel, UsageData: usage(900, 0), CreatedAt: rfc3339HoursAgo(100)},
+				{Name: "v-attached", UsageData: usage(10, 1), CreatedAt: rfc3339HoursAgo(100)},
+				{Name: "v-young", UsageData: usage(10, 0), CreatedAt: rfc3339HoursAgo(1)},
+				{Name: "v-unknown-age", UsageData: usage(10, 0)},
+			},
+			Images: []*image.Summary{{ID: "sha256:tagged", RepoTags: []string{"app:1"}, Size: 50, Created: hoursAgo(100)}},
+		},
+		nets:    []network.Summary{{ID: "n-old", Name: "scratch", Created: time.Now().Add(-100 * time.Hour)}},
+		inspect: map[string]int{"n-old": 0},
+	}
+	hs, _ := newHostSpaceForTest(hostDocker, stoppedStack)
+	host := &lr7xCountingHostSpace{HostSpaceService: hs}
+	lock := NewOperationLock()
+	pruner := &fn7x2FakeDocker{}
+	store := &fn7x2FakeStore{}
+	svc := NewDockerCleanupService(pruner, store)
+	svc.SetHostSpaceService(host)
+	svc.SetOperationLock(lock)
+
+	run, err := svc.Execute(context.Background(), TriggerScheduled, 24, DockerCleanupCategories{Containers: true, Volumes: true})
+	require.NoError(t, err)
+
+	assert.Equal(t, []hostSpaceRemoval{
+		{kind: "container", id: "c-old", force: false},
+		{kind: "volume", id: "v-old", force: false},
+	}, hostDocker.removals, "only the old unlabelled stopped container and the old unattached non-stack volume may go")
+	assert.Empty(t, pruner.imagePruneOpts, "dangling images are off")
+	assert.Empty(t, pruner.cachePruneOpts, "build cache is off")
+	assert.Equal(t, 1, run.ContainersDeleted)
+	assert.Equal(t, 1, run.VolumesDeleted)
+	assert.Zero(t, run.ImagesDeleted, "unused images are off")
+	assert.Zero(t, run.NetworksDeleted, "networks are off")
+	assert.Equal(t, int64(7+500), run.OtherBytesReclaimed)
+	assert.Equal(t, "containers,volumes", run.Categories)
+	require.Len(t, store.runs, 1)
+	assert.Equal(t, "success", store.runs[0].Status)
+	assert.Equal(t, 1, host.invalidations, "a run that removed items invalidates the host summary exactly once")
+
+	// The turn was released when the run ended.
+	token, err := lock.AcquireExclusive("probe")
+	require.NoError(t, err, "the cleanup run did not release its exclusive turn")
+	lock.ReleaseExclusive(token)
+}
+
+// AC21 (c), service half: with the turn held by a stack operation, the run
+// returns ErrCleanupTurnBusy naming the holder, and removes and records
+// nothing, dangling images included.
+func TestDockerCleanupCategoriesBusyTurnRemovesNothing(t *testing.T) {
+	pruner := &fn7x2FakeDocker{images: []models.DockerImage{
+		{ID: "sha256:old", RepoTags: []string{"<none>:<none>"}, Size: 100, Created: hoursAgo(48)},
+	}}
+	host := &lr7xFakeHostSpace{cands: HostCandidates{Containers: []HostCandidateItem{{ID: "c", Created: ptr(hoursAgo(100))}}}}
+	lock := NewOperationLock()
+	held, err := lock.Acquire("s1", OpKindStart)
+	require.NoError(t, err)
+	store := &fn7x2FakeStore{}
+	svc := NewDockerCleanupService(pruner, store)
+	svc.SetHostSpaceService(host)
+	svc.SetOperationLock(lock)
+	cats := DockerCleanupCategories{DanglingImages: true, Containers: true}
+
+	run, err := svc.Execute(context.Background(), TriggerScheduled, 24, cats)
+	require.ErrorIs(t, err, ErrCleanupTurnBusy)
+	assert.Contains(t, err.Error(), "start in progress since", "the error names the holder")
+	assert.Nil(t, run)
+	assert.Empty(t, pruner.imagePruneOpts, "a busy turn must remove nothing, dangling images included")
+	assert.Empty(t, host.freeReqs)
+	assert.Empty(t, store.runs, "Execute records nothing; the scheduler writes the skipped row")
+	assert.Zero(t, host.invalidations)
+
+	// Positive side on the same service: once the stack releases, the run goes.
+	lock.Release("s1", held)
+	_, err = svc.Execute(context.Background(), TriggerScheduled, 24, cats)
+	require.NoError(t, err)
+	assert.Len(t, pruner.imagePruneOpts, 1)
+	require.Len(t, host.freeReqs, 1)
+	assert.Equal(t, []string{"c"}, host.freeReqs[0].Containers)
+}
+
+// AC21 (d): unused images on. An image a container uses (Docker counts a
+// stopped container too) and one whose use was not counted survive; a
+// dangling image is left to its own switch.
+func TestDockerCleanupCategoriesUnusedImagesSpareUsedOnes(t *testing.T) {
+	hostDocker := &hostSpaceFakeDocker{du: dockertypes.DiskUsage{Images: []*image.Summary{
+		{ID: "sha256:unused", RepoTags: []string{"app:1"}, Containers: 0, Size: 300, SharedSize: 100, Created: hoursAgo(100)},
+		{ID: "sha256:stopped-user", RepoTags: []string{"db:16"}, Containers: 1, Size: 300, Created: hoursAgo(100)},
+		{ID: "sha256:uncounted", RepoTags: []string{"x:1"}, Containers: -1, Size: 300, Created: hoursAgo(100)},
+		{ID: "sha256:dangling", RepoTags: []string{"<none>:<none>"}, Containers: 0, Size: 300, Created: hoursAgo(100)},
+		{ID: "sha256:young", RepoTags: []string{"app:2"}, Containers: 0, Size: 300, Created: hoursAgo(1)},
+	}}}
+	hs, _ := newHostSpaceForTest(hostDocker)
+	pruner := &fn7x2FakeDocker{}
+	svc := NewDockerCleanupService(pruner, &fn7x2FakeStore{})
+	svc.SetHostSpaceService(hs)
+	svc.SetOperationLock(NewOperationLock())
+
+	run, err := svc.Execute(context.Background(), TriggerScheduled, 24, DockerCleanupCategories{UnusedImages: true})
+	require.NoError(t, err)
+
+	assert.Equal(t, []hostSpaceRemoval{{kind: "image", id: "sha256:unused"}}, hostDocker.removals,
+		"an image a stopped container uses, an uncounted, a dangling or a young image was removed")
+	assert.Equal(t, 1, run.ImagesDeleted)
+	assert.Equal(t, int64(200), run.BytesReclaimed, "Size minus SharedSize")
+	assert.Empty(t, pruner.imagePruneOpts, "dangling images are off")
+}
+
+// A host category with no host service or lock refuses before removing
+// anything: the run is recorded failed and the prunes do not run either.
+func TestDockerCleanupCategoriesWithoutHostSpaceRefuse(t *testing.T) {
+	for name, configure := range map[string]func(*DockerCleanupService){
+		"no host service": func(s *DockerCleanupService) { s.SetOperationLock(NewOperationLock()) },
+		"no lock":         func(s *DockerCleanupService) { s.SetHostSpaceService(&lr7xFakeHostSpace{}) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			pruner := &fn7x2FakeDocker{images: []models.DockerImage{{ID: "sha256:old", Size: 1, Created: hoursAgo(100)}}}
+			store := &fn7x2FakeStore{}
+			svc := NewDockerCleanupService(pruner, store)
+			configure(svc)
+
+			_, err := svc.Execute(context.Background(), TriggerManual, 24, DockerCleanupCategories{DanglingImages: true, Volumes: true})
+			require.Error(t, err)
+			assert.Empty(t, pruner.imagePruneOpts, "a run that cannot do every category does none")
+			require.Len(t, store.runs, 1)
+			assert.Equal(t, "failed", store.runs[0].Status)
+		})
+	}
+}
+
+// An item Docker refuses makes the run failed, with the item named; what was
+// removed is still counted.
+func TestDockerCleanupCategoriesItemFailureFailsTheRun(t *testing.T) {
+	old := hoursAgo(100)
+	host := &lr7xFakeHostSpace{
+		cands:   HostCandidates{Volumes: []HostCandidateItem{{ID: "v-ok", Size: ptr(5), Created: &old}, {ID: "v-busy", Created: &old}}},
+		failIDs: map[string]string{"v-busy": "volume is in use"},
+	}
+	store := &fn7x2FakeStore{}
+	svc := NewDockerCleanupService(&fn7x2FakeDocker{}, store)
+	svc.SetHostSpaceService(host)
+	svc.SetOperationLock(NewOperationLock())
+
+	run, err := svc.Execute(context.Background(), TriggerManual, 24, DockerCleanupCategories{Volumes: true})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "v-busy")
+	assert.Equal(t, "failed", run.Status)
+	assert.Equal(t, 1, run.VolumesDeleted)
+	assert.Equal(t, int64(5), run.OtherBytesReclaimed)
+}
+
+// Addition 1 (agent-os-8hdg follow-up): the preview lists only the categories
+// switched on, and reads nothing for the others.
+func TestDockerCleanupPreviewFollowsCategories(t *testing.T) {
+	old := hoursAgo(100)
+	docker := &fn7x2FakeDocker{
+		images:       []models.DockerImage{{ID: "sha256:dangling", RepoTags: []string{"<none>:<none>"}, Size: 10, Created: old}},
+		cacheRecords: []*build.CacheRecord{{ID: "cache", Size: 99, CreatedAt: time.Now().Add(-100 * time.Hour)}},
+	}
+	host := &lr7xFakeHostSpace{cands: HostCandidates{
+		Containers: []HostCandidateItem{{ID: "c-old", Size: ptr(3), Created: &old}, {ID: "c-young", Size: ptr(3), Created: ptr(hoursAgo(1))}},
+		Volumes:    []HostCandidateItem{{ID: "v-old", Created: &old}},
+		Networks:   []HostCandidateItem{{ID: "n-old", Created: &old}},
+	}}
+	svc := NewDockerCleanupService(docker, &fn7x2FakeStore{})
+	svc.SetHostSpaceService(host)
+
+	preview, err := svc.PreviewCategories(context.Background(), 24, DockerCleanupCategories{Containers: true})
+	require.NoError(t, err)
+	assert.Empty(t, preview.Candidates, "dangling images are off")
+	assert.Zero(t, preview.ReclaimableBytes)
+	assert.Zero(t, preview.CacheReclaimableBytes, "build cache is off")
+	assert.Zero(t, docker.listCalls, "images were read for a category that is off")
+	assert.Zero(t, docker.cacheListCalls, "build cache was read for a category that is off")
+	assert.Equal(t, []string{"c-old"}, candidateIDs(preview.Containers), "the floor applies to the preview too")
+	assert.Empty(t, preview.Volumes)
+	assert.Empty(t, preview.Networks)
+	assert.Equal(t, int64(3), preview.OtherReclaimableBytes)
+
+	// Positive side: with dangling images and build cache on, both are listed.
+	preview, err = svc.PreviewCategories(context.Background(), 24, DefaultDockerCleanupCategories())
+	require.NoError(t, err)
+	assert.Len(t, preview.Candidates, 1)
+	assert.Equal(t, int64(99), preview.CacheReclaimableBytes)
+	assert.Equal(t, 1, host.candCalls, "a default preview does not read the host candidates")
+}
+
+// Addition 3 (agent-os-gkgr item 3): the dangling preview counts Size minus
+// SharedSize, and an image whose SharedSize Docker did not compute is counted
+// as unknown, never as its full Size.
+func TestDockerCleanupPreviewCountsSharedLayersOnce(t *testing.T) {
+	docker := &fn7x2FakeDocker{images: []models.DockerImage{
+		{ID: "sha256:a", RepoTags: []string{"<none>:<none>"}, Size: 100, SharedSize: 40, Created: hoursAgo(48)},
+		{ID: "sha256:b", RepoTags: []string{"<none>:<none>"}, Size: 100, SharedSize: 40, Created: hoursAgo(48)},
+		{ID: "sha256:c", RepoTags: []string{"<none>:<none>"}, Size: 500, SharedSize: -1, Created: hoursAgo(48)},
+	}}
+	preview, err := NewDockerCleanupService(docker, &fn7x2FakeStore{}).Preview(context.Background(), 24)
+	require.NoError(t, err)
+	require.Len(t, preview.Candidates, 3)
+	assert.Equal(t, int64(60+60), preview.ReclaimableBytes, "two images sharing 40 bytes free 60 each, not 100")
+	assert.Equal(t, 1, preview.UnknownSizeCount)
+	for _, c := range preview.Candidates {
+		if c.ID == "sha256:c" {
+			assert.Nil(t, c.ReclaimableSize, "an unknown SharedSize must not be reported as a size")
+		}
+	}
 }

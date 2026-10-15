@@ -356,8 +356,18 @@ func (h *ResourcesHandler) previewCleanup(c *gin.Context) {
 	if !ok {
 		return
 	}
+	// The preview lists the categories the stored policy has switched on,
+	// the ones a run would remove. An unreadable policy refuses, as the run
+	// does.
+	policy, err := services.ResolveDockerCleanupPolicy(h.db)
+	if err != nil {
+		slog.Error("Failed to read the Docker cleanup policy", "error", err)
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR",
+			"Failed to read the Docker cleanup policy", err))
+		return
+	}
 
-	preview, err := h.cleanup.Preview(c.Request.Context(), minAge)
+	preview, err := h.cleanup.PreviewCategories(c.Request.Context(), minAge, policy.Categories)
 	if err != nil {
 		slog.Error("Failed to preview the Docker cleanup", "error", err)
 		respondDockerErr(c, err, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to preview the Docker cleanup")
@@ -420,6 +430,13 @@ func (h *ResourcesHandler) runCleanup(c *gin.Context) {
 		handleError(c, models.NewAppError(http.StatusConflict, cleanupInProgressCode, cleanupInProgressMessage))
 		return
 	}
+	if errors.Is(err, services.ErrCleanupTurnBusy) {
+		// A stack operation holds the exclusive turn this run needs. Nothing
+		// was removed or recorded; the message names the holder, as the other
+		// exclusive-turn routes' 409 does.
+		handleError(c, models.NewAppError(http.StatusConflict, models.ErrOperationInProgress, err.Error()))
+		return
+	}
 	if err != nil {
 		// Execute records a failed run row before returning, so the history is
 		// already honest; this only turns the error into a response.
@@ -433,6 +450,10 @@ func (h *ResourcesHandler) runCleanup(c *gin.Context) {
 		"images_deleted":        run.ImagesDeleted,
 		"space_reclaimed":       run.BytesReclaimed,
 		"cache_space_reclaimed": run.CacheBytesReclaimed,
+		"containers_deleted":    run.ContainersDeleted,
+		"volumes_deleted":       run.VolumesDeleted,
+		"networks_deleted":      run.NetworksDeleted,
+		"other_space_reclaimed": run.OtherBytesReclaimed,
 		"min_age_hours":         run.MinAgeHours,
 		"categories":            run.Categories,
 	})

@@ -672,18 +672,26 @@ func main() {
 	var cleanupSched *services.DockerCleanupSchedulerService
 	if dockerService != nil {
 		cleanupSvc := services.NewDockerCleanupService(dockerService, db)
+		// A run of unused tagged images, containers, volumes or networks
+		// takes the exclusive stack turn (agent-os-lr7x); the wiring test
+		// checks it gets this same lock.
+		cleanupSvc.SetOperationLock(opLock)
+
+		// Same typed-nil rule: NewHostSpaceService returns nil when the
+		// client is missing; the host routes then answer 503 and a cleanup
+		// run of those categories refuses. Built before StartFromPolicy so
+		// the cleanup service has it before the first tick can fire.
+		if hostSpace := services.NewHostSpaceService(dockerService, db); hostSpace != nil {
+			resourcesHandler.SetHostSpaceService(hostSpace)
+			cleanupSvc.SetHostSpaceService(hostSpace)
+		}
+
 		cleanupSched = services.NewDockerCleanupScheduler(cleanupSvc, db, slog.Default())
 		resourcesHandler.SetCleanupService(cleanupSvc)
 		resourcesHandler.SetCleanupScheduler(cleanupSched)
 		// Arms only if an operator opted in; logs at ERROR and arms nothing if
 		// the policy cannot be read. Disabled is the default and stays silent.
 		cleanupSched.StartFromPolicy()
-
-		// Same typed-nil rule: NewHostSpaceService returns nil when the
-		// client is missing, and the host routes then answer 503.
-		if hostSpace := services.NewHostSpaceService(dockerService, db); hostSpace != nil {
-			resourcesHandler.SetHostSpaceService(hostSpace)
-		}
 	}
 
 	resourcesHandler.RegisterRoutes(protected)

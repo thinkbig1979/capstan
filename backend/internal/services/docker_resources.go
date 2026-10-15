@@ -34,7 +34,9 @@ func (s *DockerService) ListImages(ctx context.Context) ([]models.DockerImage, e
 		return nil, ErrDockerUnavailable
 	}
 
-	images, err := s.client.ImageList(ctx, image.ListOptions{})
+	// SharedSize lets the cleanup preview count only the bytes removing an
+	// image frees. A daemon too old to compute it reports -1 (unknown).
+	images, err := s.client.ImageList(ctx, image.ListOptions{SharedSize: true})
 	if err != nil {
 		return nil, fmt.Errorf("listing images: %w", err)
 	}
@@ -80,6 +82,7 @@ func toDockerImages(images []image.Summary, usage *dockertypes.DiskUsage) []mode
 			ID:              img.ID,
 			RepoTags:        repoTags,
 			Size:            img.Size,
+			SharedSize:      img.SharedSize,
 			Created:         img.Created,
 			Containers:      int(count),
 			ContainersKnown: known,

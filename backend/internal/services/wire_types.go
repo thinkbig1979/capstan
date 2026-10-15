@@ -110,11 +110,18 @@ type HostCandidates struct {
 
 // HostCandidateItem is one removable object. Size is omitted when Docker did
 // not report it, so an unknown size is never sent as a measured 0.
+//
+// Created is the creation time in Unix seconds, omitted when Docker did not
+// report one: the scheduled cleanup keeps an object of unknown age. Dangling
+// marks an untagged image, which the scheduled cleanup leaves to its own
+// dangling-images switch.
 type HostCandidateItem struct {
-	ID     string `json:"id"`
-	Label  string `json:"label"`
-	Size   *int64 `json:"size,omitempty"`
-	Detail string `json:"detail,omitempty"`
+	ID       string `json:"id"`
+	Label    string `json:"label"`
+	Size     *int64 `json:"size,omitempty"`
+	Detail   string `json:"detail,omitempty"`
+	Created  *int64 `json:"created,omitempty"`
+	Dangling bool   `json:"dangling,omitempty"`
 }
 
 // HostBuildCacheCandidates: build cache is removed as a whole, not per record.
@@ -174,26 +181,43 @@ type HostFreeSpaceBuildCacheResult struct {
 }
 
 // DockerCleanupCandidate is one image a run would remove. Repository is empty
-// for the fully-untagged form; see danglingRepository.
+// for the fully-untagged form; see danglingRepository. Tag is set for an
+// unused tagged image (the unused-images category) and empty for a dangling
+// one. ReclaimableSize is Size minus SharedSize, omitted when Docker did not
+// compute SharedSize.
 type DockerCleanupCandidate struct {
-	ID         string `json:"id"`
-	Repository string `json:"repository,omitempty"`
-	Size       int64  `json:"size"`
-	Created    int64  `json:"created"`
+	ID              string `json:"id"`
+	Repository      string `json:"repository,omitempty"`
+	Tag             string `json:"tag,omitempty"`
+	Size            int64  `json:"size"`
+	ReclaimableSize *int64 `json:"reclaimableSize,omitempty"`
+	Created         int64  `json:"created"`
 }
 
 // DockerCleanupPreview is what a run WOULD remove. Producing it must not remove
 // anything.
 //
-// ReclaimableBytes is the dangling images only; CacheReclaimableBytes is the
-// build cache a run would also prune. They are separate because the history
-// row records them separately (bytesReclaimed, cacheBytesReclaimed), and the
-// operator-facing figure is their sum.
+// It lists only the categories switched on. Candidates are the images
+// (dangling, then unused tagged) and ReclaimableBytes their bytes;
+// CacheReclaimableBytes is the build cache; Containers, Volumes and Networks
+// are the other categories, with OtherReclaimableBytes their container and
+// volume bytes. Each pairs with the history row figure it forecasts
+// (bytesReclaimed, cacheBytesReclaimed, otherBytesReclaimed). Byte totals sum
+// only known sizes: UnknownSizeCount counts the listed items whose size
+// Docker did not report, so a total is a floor whenever it is non-zero.
 type DockerCleanupPreview struct {
 	Candidates            []DockerCleanupCandidate `json:"candidates"`
 	ReclaimableBytes      int64                    `json:"reclaimableBytes"`
 	CacheReclaimableBytes int64                    `json:"cacheReclaimableBytes"`
-	MinAgeHours           int                      `json:"minAgeHours"`
+	Containers            []HostCandidateItem      `json:"containers"`
+	Volumes               []HostCandidateItem      `json:"volumes"`
+	Networks              []HostCandidateItem      `json:"networks"`
+	OtherReclaimableBytes int64                    `json:"otherReclaimableBytes"`
+	UnknownSizeCount      int                      `json:"unknownSizeCount"`
+	// WithheldStacks is HostCandidates.WithheldStacks: while it is non-empty
+	// the other categories list nothing.
+	WithheldStacks []string `json:"withheldStacks,omitempty"`
+	MinAgeHours    int      `json:"minAgeHours"`
 }
 
 // The three value sets below are served inside update-job payloads (Job,

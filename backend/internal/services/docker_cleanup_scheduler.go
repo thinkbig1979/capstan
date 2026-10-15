@@ -349,7 +349,7 @@ func (s *DockerCleanupSchedulerService) StartFromPolicy() {
 	if err != nil {
 		s.logger.Error("Docker cleanup scheduler not started: the cleanup policy could not be read, so it is unknown whether an operator opted in; nothing will be pruned until this is resolved",
 			"error", err)
-		s.recordUnstartedCycle(0, fmt.Errorf("the Docker cleanup scheduler was NOT armed: the cleanup policy could not be read, so no cleanup will run until it is readable: %w", err))
+		s.recordUnstartedCycle("failed", 0, fmt.Errorf("the Docker cleanup scheduler was NOT armed: the cleanup policy could not be read, so no cleanup will run until it is readable: %w", err))
 		return
 	}
 	if !policy.Enabled {
@@ -542,7 +542,7 @@ func (s *DockerCleanupSchedulerService) runCycle(ctx context.Context) {
 	if err != nil {
 		s.logger.Error("Docker cleanup skipped: the cleanup policy could not be read, so it is unknown whether an operator opted in and under which age floor; nothing was pruned this pass",
 			"error", err)
-		s.recordUnstartedCycle(0, fmt.Errorf("the cleanup policy could not be read, so nothing was pruned this pass: %w", err))
+		s.recordUnstartedCycle("failed", 0, fmt.Errorf("the cleanup policy could not be read, so nothing was pruned this pass: %w", err))
 		return
 	}
 	if !policy.Enabled {
@@ -560,10 +560,17 @@ func (s *DockerCleanupSchedulerService) runCycle(ctx context.Context) {
 		s.logger.Warn("Docker cleanup already running (manual run); skipping tick")
 		return
 	}
+	if errors.Is(err, ErrCleanupTurnBusy) {
+		// A stack operation holds the turn this run needs. Nothing was
+		// removed; the history says so, and the next tick tries again.
+		s.logger.Warn("Docker cleanup skipped: a stack operation holds the turn it needs", "error", err)
+		s.recordUnstartedCycle("skipped", policy.MinAgeHours, err)
+		return
+	}
 	if err != nil {
 		s.logger.Error("Scheduled Docker cleanup failed", "error", err)
 		if run == nil {
-			s.recordUnstartedCycle(policy.MinAgeHours, err)
+			s.recordUnstartedCycle("failed", policy.MinAgeHours, err)
 		}
 		return
 	}
@@ -574,14 +581,20 @@ func (s *DockerCleanupSchedulerService) runCycle(ctx context.Context) {
 			"images_deleted", run.ImagesDeleted,
 			"bytes_reclaimed", run.BytesReclaimed,
 			"cache_bytes_reclaimed", run.CacheBytesReclaimed,
+			"containers_deleted", run.ContainersDeleted,
+			"volumes_deleted", run.VolumesDeleted,
+			"networks_deleted", run.NetworksDeleted,
+			"other_bytes_reclaimed", run.OtherBytesReclaimed,
 			"min_age_hours", run.MinAgeHours,
 		)
 	}
 }
 
-// recordUnstartedCycle writes a finished 'failed' docker_cleanup_runs row for a
+// recordUnstartedCycle writes a finished docker_cleanup_runs row for a
 // scheduled pass that never produced one of its own (agent-os-8fw2), the
 // counterpart of BackupSchedulerService.recordUnstartedCycle (agent-os-4i7r).
+// status is 'failed', or 'skipped' when the exclusive turn was busy and the
+// pass removed nothing by design.
 //
 // minAgeHours is the floor the pass would have applied, or 0 when the policy
 // itself could not be read. 0 is never a floor a real run records, because
@@ -592,12 +605,12 @@ func (s *DockerCleanupSchedulerService) runCycle(ctx context.Context) {
 //
 // Best effort: if the write fails too, the database is probably what is broken
 // and the log line is all there is.
-func (s *DockerCleanupSchedulerService) recordUnstartedCycle(minAgeHours int, cause error) {
+func (s *DockerCleanupSchedulerService) recordUnstartedCycle(status string, minAgeHours int, cause error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	run := &models.DockerCleanupRun{
 		ID:           uuid.New().String(),
 		Trigger:      TriggerScheduled,
-		Status:       "failed",
+		Status:       status,
 		StartedAt:    now,
 		FinishedAt:   &now,
 		MinAgeHours:  minAgeHours,

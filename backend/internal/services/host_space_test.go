@@ -215,8 +215,8 @@ func TestHostSpaceImages(t *testing.T) {
 	}
 	assert.Equal(t, HostCandidateItem{ID: "sha256:unused", Label: "app:0", Size: ptr(200)}, byID["sha256:unused"],
 		"size is Size minus SharedSize")
-	assert.Equal(t, HostCandidateItem{ID: "sha256:0123456789abcdef0123456789", Label: "0123456789abcdef012"}, byID["sha256:0123456789abcdef0123456789"],
-		"an untagged image is labelled by its short ID, and SharedSize -1 leaves the size unknown")
+	assert.Equal(t, HostCandidateItem{ID: "sha256:0123456789abcdef0123456789", Label: "0123456789abcdef012", Dangling: true}, byID["sha256:0123456789abcdef0123456789"],
+		"an untagged image is labelled by its short ID, is marked dangling, and SharedSize -1 leaves the size unknown")
 
 	sum, err := svc.Summary(context.Background())
 	require.NoError(t, err)

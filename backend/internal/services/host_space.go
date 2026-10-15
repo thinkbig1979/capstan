@@ -243,7 +243,8 @@ func (s *HostSpaceService) fetch(ctx context.Context) (*hostSpaceSnapshot, error
 		if size != nil {
 			sum.Images.ReclaimableBytes += *size
 		}
-		cand.Images = append(cand.Images, HostCandidateItem{ID: img.ID, Label: imageLabel(img), Size: size})
+		_, dangling := danglingRepository(img.RepoTags)
+		cand.Images = append(cand.Images, HostCandidateItem{ID: img.ID, Label: imageLabel(img), Size: size, Created: knownUnix(img.Created), Dangling: dangling})
 	}
 
 	sum.BuildCache.Bytes = totals.BuildCache
@@ -274,7 +275,7 @@ func (s *HostSpaceService) fetch(ctx context.Context) (*hostSpaceSnapshot, error
 		if !containerIsCandidate(ctr) || refs.withholdsContainer(ctr) {
 			continue
 		}
-		item := HostCandidateItem{ID: ctr.ID, Label: containerLabel(ctr), Detail: ctr.Status}
+		item := HostCandidateItem{ID: ctr.ID, Label: containerLabel(ctr), Detail: ctr.Status, Created: knownUnix(ctr.Created)}
 		if ctr.SizeRw >= 0 {
 			size := ctr.SizeRw
 			item.Size = &size
@@ -297,7 +298,7 @@ func (s *HostSpaceService) fetch(ctx context.Context) (*hostSpaceSnapshot, error
 		if !volumeIsCandidate(vol, owned) || refs.withholdsVolume(vol) {
 			continue
 		}
-		item := HostCandidateItem{ID: vol.Name, Label: vol.Name, Detail: vol.Labels[composeProjectLabel]}
+		item := HostCandidateItem{ID: vol.Name, Label: vol.Name, Detail: vol.Labels[composeProjectLabel], Created: volumeCreated(vol)}
 		if vol.UsageData.Size >= 0 {
 			size := vol.UsageData.Size
 			item.Size = &size
@@ -327,7 +328,7 @@ func (s *HostSpaceService) fetch(ctx context.Context) (*hostSpaceSnapshot, error
 			continue
 		}
 		sum.Networks.ReclaimableCount++
-		cand.Networks = append(cand.Networks, HostCandidateItem{ID: n.ID, Label: n.Name, Detail: n.Driver})
+		cand.Networks = append(cand.Networks, HostCandidateItem{ID: n.ID, Label: n.Name, Detail: n.Driver, Created: knownTime(n.Created)})
 	}
 
 	sum.Disk.Total = totals.Total
@@ -359,6 +360,31 @@ func imageReclaimableSize(img *image.Summary) *int64 {
 	}
 	size := img.Size - img.SharedSize
 	return &size
+}
+
+// knownUnix is a Docker Unix creation time, nil when Docker sent none (0).
+func knownUnix(sec int64) *int64 {
+	if sec <= 0 {
+		return nil
+	}
+	return &sec
+}
+
+func knownTime(t time.Time) *int64 {
+	if t.IsZero() {
+		return nil
+	}
+	return knownUnix(t.Unix())
+}
+
+// volumeCreated parses the volume's RFC 3339 CreatedAt; empty or malformed is
+// unknown.
+func volumeCreated(vol *volume.Volume) *int64 {
+	t, err := time.Parse(time.RFC3339, vol.CreatedAt)
+	if err != nil {
+		return nil
+	}
+	return knownTime(t)
 }
 
 // imageLabel follows candidateLabel in DockerCleanupCard.tsx: the first real

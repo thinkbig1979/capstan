@@ -40,6 +40,13 @@ func TestListImagesContainerCount(t *testing.T) {
 		}
 	})
 
+	t.Run("SharedSize is carried through, -1 included", func(t *testing.T) {
+		got := toDockerImages([]image.Summary{{ID: "a", SharedSize: 40}, {ID: "b", SharedSize: -1}}, nil)
+		if got[0].SharedSize != 40 || got[1].SharedSize != -1 {
+			t.Errorf("SharedSize = %d, %d; want 40, -1", got[0].SharedSize, got[1].SharedSize)
+		}
+	})
+
 	t.Run("a DiskUsage failure gives containersKnown false, not 0", func(t *testing.T) {
 		got := toDockerImages(listed, nil)
 		for _, img := range got {
