@@ -68,9 +68,6 @@ function HostOverview() {
             </p>
           )}
         </section>
-        {/* Slot for the automatic-cleanup panel (agent-os-8y80 leaves it empty);
-            /settings/docker-cleanup links here by this id. */}
-        <section id="automatic-cleanup" aria-label="Automatic cleanup" />
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {hostCards(summary).map((c) => (
             <CategoryCard

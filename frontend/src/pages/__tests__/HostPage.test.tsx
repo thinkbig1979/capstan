@@ -206,12 +206,6 @@ describe('HostPage overview', () => {
     expect(observers.length).toBeGreaterThan(0)
     for (const o of observers) expect(o.options.refetchInterval).toBe(60_000)
   })
-
-  it('leaves an automatic-cleanup anchor for the panel', async () => {
-    renderHost()
-    await screen.findByTestId('host-disk-bar')
-    expect(document.getElementById('automatic-cleanup')).not.toBeNull()
-  })
 })
 
 describe('HostPage list views', () => {
