@@ -274,6 +274,7 @@ func (s *HostSpaceService) fetch(ctx context.Context) (*hostSpaceSnapshot, error
 		cand.BuildCache.Bytes += rec.Size
 	}
 
+	sum.Containers.ReclaimableBytesKnown = true
 	for _, ctr := range du.Containers {
 		if ctr == nil {
 			continue
@@ -293,6 +294,8 @@ func (s *HostSpaceService) fetch(ctx context.Context) (*hostSpaceSnapshot, error
 			size := ctr.SizeRw
 			item.Size = &size
 			sum.Containers.ReclaimableBytes += size
+		} else {
+			sum.Containers.ReclaimableBytesKnown = false
 		}
 		sum.Containers.ReclaimableCount++
 		cand.Containers = append(cand.Containers, item)
@@ -349,6 +352,7 @@ func (s *HostSpaceService) fetch(ctx context.Context) (*hostSpaceSnapshot, error
 
 	sum.Disk.Total = totals.Total
 	sum.Disk.VolumesSizeKnown = totals.VolumesSizeKnown
+	sum.Disk.ContainersSizeKnown = totals.ContainersSizeKnown
 	sum.Disk.Reclaimable = sum.Images.ReclaimableBytes + sum.BuildCache.ReclaimableBytes + sum.Containers.ReclaimableBytes
 	sum.Disk.ReclaimableAll = sum.Disk.Reclaimable + sum.Volumes.ReclaimableBytes
 	sum.Disk.InUse = max(0, sum.Disk.Total-sum.Disk.Reclaimable)

@@ -12,7 +12,7 @@ import (
 
 func TestSummarizeDiskUsage(t *testing.T) {
 	images := []*image.Summary{{ID: "a", Size: 300}, {ID: "b", Size: 250}}
-	containers := []*container.Summary{{SizeRw: 10}, {SizeRw: 0}, {SizeRw: -1}}
+	containers := []*container.Summary{{SizeRw: 10}, {SizeRw: 0}}
 	cache := []*build.CacheRecord{{Size: 7}, {Size: 3}}
 
 	t.Run("nil UsageData does not panic and marks volumes unknown", func(t *testing.T) {
@@ -58,15 +58,37 @@ func TestSummarizeDiskUsage(t *testing.T) {
 			BuildCache: cache,
 		})
 		want := DiskUsageBreakdown{
-			Images:           500,
-			Containers:       10,
-			Volumes:          40,
-			BuildCache:       10,
-			Total:            560,
-			VolumesSizeKnown: true,
+			Images:              500,
+			Containers:          10,
+			Volumes:             40,
+			BuildCache:          10,
+			Total:               560,
+			VolumesSizeKnown:    true,
+			ContainersSizeKnown: true,
 		}
 		if got != want {
 			t.Errorf("summarizeDiskUsage = %+v, want %+v", got, want)
+		}
+	})
+
+	// agent-os-rwik: Docker reports a writable layer it could not measure as
+	// SizeRw -1. Skipped silently, Containers read as exact while it was a floor.
+	t.Run("a -1 container size is excluded and marks containers unknown", func(t *testing.T) {
+		got := summarizeDiskUsage(types.DiskUsage{
+			Containers: []*container.Summary{{SizeRw: 10}, {SizeRw: -1}, nil},
+		})
+		if got.ContainersSizeKnown {
+			t.Errorf("ContainersSizeKnown = true, want false for a SizeRw -1 container")
+		}
+		if got.Containers != 10 || got.Total != 10 {
+			t.Errorf("Containers=%d Total=%d, want 10 and 10 (the -1 is not subtracted)", got.Containers, got.Total)
+		}
+	})
+
+	t.Run("no containers at all is a known zero", func(t *testing.T) {
+		got := summarizeDiskUsage(types.DiskUsage{})
+		if !got.ContainersSizeKnown || got.Containers != 0 {
+			t.Errorf("got Containers=%d ContainersSizeKnown=%v, want 0 and true", got.Containers, got.ContainersSizeKnown)
 		}
 	})
 

@@ -1,4 +1,4 @@
-import { formatBytes } from '@/lib/format'
+import { atLeastBytes, formatBytes } from '@/lib/format'
 import type { DashboardStats } from '@/types'
 import { HOST_VIEWS, type HostView } from '@/lib/app-views'
 
@@ -26,7 +26,11 @@ export function HostStrip({ stats, activeView, onNavigate }: HostStripProps) {
       detail: stats ? (stats.totalContainers === undefined ? UNAVAILABLE : String(stats.totalContainers)) : undefined,
     },
     images: { label: 'Images', detail: stats ? diskDetail(disk?.images) : undefined },
-    volumes: { label: 'Volumes', detail: stats ? diskDetail(disk?.volumes) : undefined },
+    // agent-os-rwik: an unmeasured volume (-1) is left out, so the sum is a floor.
+    volumes: {
+      label: 'Volumes',
+      detail: stats ? (disk ? atLeastBytes(disk.volumes, disk.volumesSizeKnown) : UNAVAILABLE) : undefined,
+    },
     networks: { label: 'Networks' },
     'build-cache': { label: 'Build cache', detail: stats ? diskDetail(disk?.buildCache) : undefined },
   }

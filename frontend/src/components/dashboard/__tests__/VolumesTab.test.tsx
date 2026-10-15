@@ -16,6 +16,7 @@ const mockGetVolumes = vi.fn()
 const mockDeleteVolume = vi.fn()
 const mockPruneVolumes = vi.fn()
 const mockVolumePruneImpact = vi.fn()
+const mockVolumePruneScope = vi.fn()
 
 vi.mock('@/lib/api', () => ({
   resourcesApi: {
@@ -23,6 +24,7 @@ vi.mock('@/lib/api', () => ({
     deleteVolume: (...a: unknown[]) => mockDeleteVolume(...a),
     pruneVolumes: (...a: unknown[]) => mockPruneVolumes(...a),
     volumePruneImpact: (...a: unknown[]) => mockVolumePruneImpact(...a),
+    volumePruneScope: (...a: unknown[]) => mockVolumePruneScope(...a),
   },
 }))
 
@@ -60,6 +62,7 @@ beforeEach(() => {
   mockDeleteVolume.mockResolvedValue({})
   mockPruneVolumes.mockResolvedValue({ outcome: 'no_change', reason: 'nothing to prune', details: { deleted: [] } })
   mockVolumePruneImpact.mockResolvedValue({ stacks: [], uncheckedStacks: [] })
+  mockVolumePruneScope.mockResolvedValue({ removesAllUnused: false })
 })
 
 describe('VolumesTab — loading and empty', () => {
@@ -374,10 +377,54 @@ describe('VolumesTab — prune warns about stacks that would lose volumes', () =
 
   it('does not check or ask for typing when only anonymous volumes are pruned', async () => {
     await openPruneWithAll(false)
+    expect(await screen.findByText(/by default only anonymous volumes are removed/i)).toBeInTheDocument()
 
     expect(typedBox()).not.toBeInTheDocument()
     expect(confirmButton()).toBeEnabled()
     expect(mockVolumePruneImpact).not.toHaveBeenCalled()
+  })
+})
+
+// agent-os-ny0c: below Docker API 1.42 (an old Engine, or DOCKER_API_VERSION
+// pinned) the daemon turns the default prune into "every unused volume", so
+// the stack check runs without "all unused" too, and the copy says so.
+describe('VolumesTab — default prune on a Docker API below 1.42', () => {
+  async function openDefaultPrune() {
+    const user = userEvent.setup()
+    renderTab()
+    await screen.findByText('app-data')
+    await user.click(screen.getByRole('button', { name: /^prune$/i }))
+    await screen.findByText('Prune Unused Volumes?')
+    return user
+  }
+  const confirmButton = () => screen.getAllByRole('button', { name: /^prune$/i }).at(-1)!
+  const typedBox = () => screen.queryByRole('textbox', { name: /type prune to confirm/i })
+
+  it('names the stacks the default prune would empty, and requires typing', async () => {
+    mockVolumePruneScope.mockResolvedValue({ removesAllUnused: true })
+    mockVolumePruneImpact.mockResolvedValue({ stacks: [{ stack: 'shop', items: ['pgdata'] }], uncheckedStacks: [] })
+    await openDefaultPrune()
+
+    expect(await screen.findByText(/removed \(down\) stacks would lose these volumes/i)).toBeInTheDocument()
+    expect(screen.getByText('shop')).toBeInTheDocument()
+    expect(mockVolumePruneImpact).toHaveBeenCalled()
+    expect(typedBox()).toBeInTheDocument()
+    expect(confirmButton()).toBeDisabled()
+    expect(
+      screen.getByText('This Docker version (API below 1.42) removes every volume not used by a container, named ones included, even without "all unused".'),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/only anonymous volumes are removed/i)).not.toBeInTheDocument()
+  })
+
+  it('runs the check when the Docker version could not be read', async () => {
+    mockVolumePruneScope.mockRejectedValue(new Error('500'))
+    mockVolumePruneImpact.mockResolvedValue({ stacks: [{ stack: 'shop', items: ['pgdata'] }], uncheckedStacks: [] })
+    await openDefaultPrune()
+
+    expect(await screen.findByText(/removed \(down\) stacks would lose these volumes/i)).toBeInTheDocument()
+    expect(mockVolumePruneImpact).toHaveBeenCalled()
+    expect(confirmButton()).toBeDisabled()
+    expect(screen.queryByText(/by default only anonymous volumes are removed/i)).not.toBeInTheDocument()
   })
 })
 

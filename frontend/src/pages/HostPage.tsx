@@ -84,6 +84,11 @@ function HostOverview() {
               Docker could not measure every volume, so the totals count only the volumes it could.
             </p>
           )}
+          {!summary.disk.containersSizeKnown && (
+            <p className="text-xs text-muted-foreground">
+              Docker could not measure every container, so the totals count only the containers it could.
+            </p>
+          )}
         </section>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {hostCards(summary).map((c) => (

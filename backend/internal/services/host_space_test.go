@@ -293,7 +293,7 @@ func TestHostSpaceContainers(t *testing.T) {
 
 	sum, err := svc.Summary(context.Background())
 	require.NoError(t, err)
-	assert.Equal(t, HostContainerSummary{Count: 10, Running: 1, Stopped: 6, ReclaimableCount: 3, ReclaimableBytes: 9}, sum.Containers)
+	assert.Equal(t, HostContainerSummary{Count: 10, Running: 1, Stopped: 6, ReclaimableCount: 3, ReclaimableBytes: 9, ReclaimableBytesKnown: true}, sum.Containers)
 }
 
 // (c) A volume owned by a stack (stack stopped), or whose reference count
@@ -408,13 +408,32 @@ func TestHostSpaceReclaimableTotals(t *testing.T) {
 	sum, err := svc.Summary(context.Background())
 	require.NoError(t, err)
 	// total = 900 layers + 3 container + 1000 volume + 22 cache
-	assert.Equal(t, HostDiskSummary{Total: 1925, InUse: 1925 - 113, Reclaimable: 113, ReclaimableAll: 1113, VolumesSizeKnown: true}, sum.Disk)
+	assert.Equal(t, HostDiskSummary{Total: 1925, InUse: 1925 - 113, Reclaimable: 113, ReclaimableAll: 1113, VolumesSizeKnown: true, ContainersSizeKnown: true}, sum.Disk)
 	assert.Equal(t, HostBuildCacheSummary{Count: 3, Bytes: 22, ReclaimableBytes: 10}, sum.BuildCache)
 	assert.Equal(t, time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC), sum.MeasuredAt)
 
 	cand, err := svc.Candidates(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, HostBuildCacheCandidates{Count: 1, Bytes: 10}, cand.BuildCache, "in-use or shared cache was counted")
+}
+
+// agent-os-rwik: a container whose writable layer Docker did not measure
+// (SizeRw -1) is still a candidate, but its size is unknown, so both the
+// containers' reclaimable bytes and the disk total are floors, and say so.
+func TestHostSpaceUnmeasuredContainerMakesFloors(t *testing.T) {
+	docker := &hostSpaceFakeDocker{du: dockertypes.DiskUsage{
+		Containers: []*container.Summary{
+			{ID: "measured", State: container.StateExited, SizeRw: 3},
+			{ID: "unmeasured", State: container.StateExited, SizeRw: -1},
+		},
+	}}
+	svc, _ := newHostSpaceForTest(docker)
+
+	sum, err := svc.Summary(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, HostContainerSummary{Count: 2, Stopped: 2, ReclaimableCount: 2, ReclaimableBytes: 3, ReclaimableBytesKnown: false}, sum.Containers)
+	assert.False(t, sum.Disk.ContainersSizeKnown, "a -1 writable layer left the disk total reading as exact")
+	assert.Equal(t, int64(3), sum.Disk.Total, "the -1 is skipped, not subtracted")
 }
 
 // (f) A failed read is an error, never a zero summary, and is not cached.

@@ -1,4 +1,4 @@
-import { formatBytes } from '@/lib/format'
+import { atLeastBytes, formatBytes } from '@/lib/format'
 import { HOST_VIEWS, type HostView } from '@/lib/app-views'
 import type { HostSummary } from '@/types/generated-services'
 
@@ -59,7 +59,7 @@ export function hostCards(s: HostSummary): HostCardModel[] {
       detail: `${s.containers.running} running · ${s.containers.stopped} stopped.`,
       reclaim:
         s.containers.reclaimableCount > 0
-          ? `${plural(s.containers.reclaimableCount, 'stopped container', 'stopped containers')} outside any stack · ${formatBytes(s.containers.reclaimableBytes)}`
+          ? `${plural(s.containers.reclaimableCount, 'stopped container', 'stopped containers')} outside any stack · ${atLeastBytes(s.containers.reclaimableBytes, s.containers.reclaimableBytesKnown)}`
           : undefined,
     },
     {

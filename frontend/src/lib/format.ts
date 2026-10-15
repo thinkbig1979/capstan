@@ -6,6 +6,14 @@ export function formatBytes(bytes: number): string {
   return `${(bytes / Math.pow(k, i)).toFixed(2)} ${sizes[i]}`
 }
 
+/**
+ * A byte sum that skipped sizes Docker did not measure (-1) is a floor:
+ * `known` false prefixes "at least" so it never reads as exact (agent-os-rwik).
+ */
+export function atLeastBytes(bytes: number, known: boolean): string {
+  return known ? formatBytes(bytes) : `at least ${formatBytes(bytes)}`
+}
+
 export function formatDurationShort(ms: number): string {
   if (ms < 1000) return `${ms}ms`
   return `${(ms / 1000).toFixed(1)}s`

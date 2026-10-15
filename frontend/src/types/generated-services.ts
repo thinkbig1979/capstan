@@ -23,6 +23,11 @@ export interface DiskUsageBreakdown {
    * known ones, so it is a floor, not a measurement.
    */
   volumesSizeKnown: boolean;
+  /**
+   * ContainersSizeKnown is the same for Containers: false when Docker
+   * reported at least one writable layer's size as -1 (agent-os-rwik).
+   */
+  containersSizeKnown: boolean;
 }
 /**
  * HostSummary is GET /resources/host/summary's body: per-category counts,
@@ -49,6 +54,11 @@ export interface HostDiskSummary {
   reclaimable: number /* int64 */;
   reclaimableAll: number /* int64 */;
   volumesSizeKnown: boolean;
+  /**
+   * ContainersSizeKnown: false when some container's writable layer was
+   * not measured, so Total counts only the ones Docker could (agent-os-rwik).
+   */
+  containersSizeKnown: boolean;
 }
 /**
  * HostContainerSummary: Stopped counts exited, created and dead containers, so
@@ -60,6 +70,11 @@ export interface HostContainerSummary {
   stopped: number /* int */;
   reclaimableCount: number /* int */;
   reclaimableBytes: number /* int64 */;
+  /**
+   * ReclaimableBytesKnown is false when some candidate's writable layer was
+   * not measured (SizeRw -1), so ReclaimableBytes is a floor (agent-os-rwik).
+   */
+  reclaimableBytesKnown: boolean;
 }
 /**
  * HostImageSummary: Bytes is LayersSize (shared layers counted once);
@@ -154,6 +169,15 @@ export interface PruneImpact {
    * data without it being listed under Stacks.
    */
   uncheckedStacks: string[];
+}
+/**
+ * VolumePruneScope is GET /resources/volumes/prune-scope's body
+ * (agent-os-ny0c). RemovesAllUnused is true when the request API version is
+ * below 1.42 (an old Engine, or DOCKER_API_VERSION pinned): Docker then
+ * removes every unused volume on a prune without "all", named ones included.
+ */
+export interface VolumePruneScope {
+  removesAllUnused: boolean;
 }
 /**
  * PruneImpactStack is one stack and the object names the prune would remove

@@ -10,8 +10,8 @@ const GiB = 1024 ** 3
 
 function summary(volumes: HostSummary['volumes'], images?: Partial<HostSummary['images']>): HostSummary {
   return {
-    disk: { total: GiB, inUse: GiB, reclaimable: 0, reclaimableAll: 0, volumesSizeKnown: volumes.sizeKnown },
-    containers: { count: 0, running: 0, stopped: 0, reclaimableCount: 0, reclaimableBytes: 0 },
+    disk: { total: GiB, inUse: GiB, reclaimable: 0, reclaimableAll: 0, volumesSizeKnown: volumes.sizeKnown, containersSizeKnown: true },
+    containers: { count: 0, running: 0, stopped: 0, reclaimableCount: 0, reclaimableBytes: 0, reclaimableBytesKnown: true },
     images: { count: 0, inUse: 0, inUseKnown: true, bytes: 0, reclaimableCount: 0, reclaimableBytes: 0, ...images },
     volumes,
     networks: { count: 3, builtIn: 3, stackOwned: 0, reclaimableCount: 0 },

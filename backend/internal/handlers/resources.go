@@ -64,6 +64,13 @@ type resourcePruner interface {
 	PruneImages(ctx context.Context, opts services.PruneOptions) (image.PruneReport, error)
 }
 
+// volumePruneScoper reads what a default volume prune removes on this daemon
+// (agent-os-ny0c). Kept off resourcePruner: the exclusive-gate guard reads
+// every method there as a removal, and this one only reads.
+type volumePruneScoper interface {
+	VolumePruneRemovesAllUnused(ctx context.Context) (bool, error)
+}
+
 // resourceDeleter is the slice of *services.DockerService the single network,
 // volume and image delete routes need (agent-os-qags.33). Probed against a real
 // daemon: a Created container does not hold its network, a volume compose has
@@ -123,6 +130,8 @@ type ResourcesHandler struct {
 	// runs free-space. Injected by SetHostSpaceService; nil on a Docker-less
 	// host, and the host routes then answer 503.
 	hostSpace hostSpaceService
+	// pruneScope is docker, seen through volumePruneScoper; nil means use docker.
+	pruneScope volumePruneScoper
 }
 
 // SetOperationLock installs the per-stack operation lock shared with the
@@ -204,6 +213,7 @@ func (h *ResourcesHandler) RegisterRoutes(r *gin.RouterGroup) {
 	r.DELETE("/resources/volumes/:name", h.deleteVolume)
 	r.POST("/resources/volumes/prune", h.pruneVolumes)
 	r.GET("/resources/volumes/prune-impact", h.getVolumePruneImpact)
+	r.GET("/resources/volumes/prune-scope", h.getVolumePruneScope)
 
 	r.GET("/resources/networks", h.listNetworks)
 	r.POST("/resources/networks", h.createNetwork)
@@ -422,4 +432,21 @@ func (h *ResourcesHandler) listBuildCache(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"entries": toBuildCacheEntries(records)})
+}
+
+// getVolumePruneScope tells the Volumes page whether the default volume prune
+// removes every unused volume on this daemon, so it can warn about that prune
+// too (agent-os-ny0c). A failed read is an error, never "anonymous only".
+func (h *ResourcesHandler) getVolumePruneScope(c *gin.Context) {
+	var scoper volumePruneScoper = h.docker
+	if h.pruneScope != nil {
+		scoper = h.pruneScope
+	}
+	all, err := scoper.VolumePruneRemovesAllUnused(c.Request.Context())
+	if err != nil {
+		slog.Error("Failed to read the Docker API version for the volume prune", "error", err)
+		respondDockerErr(c, err, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to check what a volume prune removes")
+		return
+	}
+	c.JSON(http.StatusOK, services.VolumePruneScope{RemovesAllUnused: all})
 }

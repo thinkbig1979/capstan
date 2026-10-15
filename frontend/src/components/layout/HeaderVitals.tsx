@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { dashboardApi } from '@/lib/api'
 import { queryKeys } from '@/lib/query-keys'
 import { useDashboardMetricsContext } from '@/hooks/DashboardMetricsContext'
-import { formatBytes } from '@/lib/format'
+import { atLeastBytes, formatBytes } from '@/lib/format'
 
 function Gauge({ percent, hot }: { percent: number; hot: boolean }) {
   const width = Math.max(0, Math.min(100, percent))
@@ -60,7 +60,14 @@ export function HeaderVitals() {
       )}
       {/* agent-os-p9e1: diskUsage is omitted when Docker could not report it. */}
       {stats && (
-        <Vital label="disk" value={stats.diskUsage ? formatBytes(stats.diskUsage.total) : 'unavailable'} />
+        <Vital
+          label="disk"
+          value={
+            stats.diskUsage
+              ? atLeastBytes(stats.diskUsage.total, stats.diskUsage.volumesSizeKnown && stats.diskUsage.containersSizeKnown)
+              : 'unavailable'
+          }
+        />
       )}
     </div>
   )
