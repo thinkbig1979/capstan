@@ -8,11 +8,11 @@ import type { HostSummary } from '@/types/generated-services'
 
 const GiB = 1024 ** 3
 
-function summary(volumes: HostSummary['volumes']): HostSummary {
+function summary(volumes: HostSummary['volumes'], images?: Partial<HostSummary['images']>): HostSummary {
   return {
     disk: { total: GiB, inUse: GiB, reclaimable: 0, reclaimableAll: 0, volumesSizeKnown: volumes.sizeKnown },
     containers: { count: 0, running: 0, stopped: 0, reclaimableCount: 0, reclaimableBytes: 0 },
-    images: { count: 0, inUse: 0, bytes: 0, reclaimableCount: 0, reclaimableBytes: 0 },
+    images: { count: 0, inUse: 0, inUseKnown: true, bytes: 0, reclaimableCount: 0, reclaimableBytes: 0, ...images },
     volumes,
     networks: { count: 3, builtIn: 3, stackOwned: 0, reclaimableCount: 0 },
     buildCache: { count: 0, bytes: 0, reclaimableBytes: 0 },
@@ -77,7 +77,7 @@ describe('CategoryCard', () => {
   // AC15: unknown is not zero.
   it('reads "size unknown" for volumes Docker could not size, never "0 B"', () => {
     const card = renderVolumesCard({
-      count: 4, attached: 4, bytes: 0, sizeKnown: false, reclaimableCount: 0, reclaimableBytes: 0,
+      count: 4, attached: 4, attachedKnown: true, bytes: 0, sizeKnown: false, reclaimableCount: 0, reclaimableBytes: 0,
     })
     expect(within(card).getByText('size unknown')).toBeInTheDocument()
     expect(card).not.toHaveTextContent('0 B')
@@ -86,10 +86,26 @@ describe('CategoryCard', () => {
 
   it('reads "0 B" next to the volume count when the size is a known 0', () => {
     const card = renderVolumesCard({
-      count: 0, attached: 0, bytes: 0, sizeKnown: true, reclaimableCount: 0, reclaimableBytes: 0,
+      count: 0, attached: 0, attachedKnown: true, bytes: 0, sizeKnown: true, reclaimableCount: 0, reclaimableBytes: 0,
     })
     expect(within(card).getByText('0 B')).toBeInTheDocument()
     expect(card).toHaveTextContent('0 volumes')
     expect(card).not.toHaveTextContent('size unknown')
+  })
+
+  // agent-os-m84q: a count Docker did not compute (-1) for some volume or
+  // image makes the in-use count a floor, not an exact figure.
+  it('reads the attached and in-use counts as a floor when Docker did not count them all', () => {
+    const volumes = { count: 4, attached: 1, attachedKnown: false, bytes: 0, sizeKnown: true, reclaimableCount: 0, reclaimableBytes: 0 }
+    const cards = hostCards(summary(volumes, { count: 5, inUse: 2, inUseKnown: false }))
+    expect(cards.find((c) => c.category === 'volumes')!.detail).toBe('4 volumes · at least 1 attached to a container.')
+    expect(cards.find((c) => c.category === 'images')!.detail).toBe('5 images · at least 2 used by a container.')
+  })
+
+  it('reads the attached and in-use counts as exact when Docker counted them all', () => {
+    const volumes = { count: 4, attached: 1, attachedKnown: true, bytes: 0, sizeKnown: true, reclaimableCount: 0, reclaimableBytes: 0 }
+    const cards = hostCards(summary(volumes, { count: 5, inUse: 2, inUseKnown: true }))
+    expect(cards.find((c) => c.category === 'volumes')!.detail).toBe('4 volumes · 1 attached to a container.')
+    expect(cards.find((c) => c.category === 'images')!.detail).toBe('5 images · 2 used by a container.')
   })
 })

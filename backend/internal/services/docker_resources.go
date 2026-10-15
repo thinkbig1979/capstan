@@ -247,9 +247,7 @@ func (s *DockerService) ListNetworks(ctx context.Context) ([]models.DockerNetwor
 		// NetworkList does not populate net.Containers, so inspect each network to
 		// get the real attachment count that the in-use delete guard relies on. A
 		// failed inspect is unknown, never the list's empty 0 (agent-os-gkgr).
-		containerCount := networkContainerCount(ctx, s.client, net.ID, -1)
-		containersKnown := containerCount >= 0
-		containerCount = max(containerCount, 0)
+		containerCount, containersKnown := networkContainerCount(ctx, s.client, net.ID)
 
 		result = append(result, models.DockerNetwork{
 			ID:              net.ID,
@@ -275,15 +273,16 @@ type networkInspector interface {
 }
 
 // networkContainerCount returns the number of containers attached to a network.
-// NetworkList does not populate the Containers map, so we inspect the network;
-// on inspect failure it returns listFallback. Callers pass -1 so a failure stays
-// distinguishable from a network with nothing attached.
-func networkContainerCount(ctx context.Context, inspector networkInspector, networkID string, listFallback int) int {
+// NetworkList does not populate the Containers map, so we inspect the network.
+// known is false when the inspect failed: the count is then 0 and means
+// nothing, so a caller cannot read a failure as "nothing attached" without
+// ignoring the flag (agent-os-m84q).
+func networkContainerCount(ctx context.Context, inspector networkInspector, networkID string) (count int, known bool) {
 	inspected, err := inspector.NetworkInspect(ctx, networkID, network.InspectOptions{})
 	if err != nil {
-		return listFallback
+		return 0, false
 	}
-	return len(inspected.Containers)
+	return len(inspected.Containers), true
 }
 
 func (s *DockerService) DeleteNetwork(ctx context.Context, networkID string) error {

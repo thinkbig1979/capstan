@@ -71,6 +71,14 @@ fix: file them.
    sort or compare as the instant does. A site that must stay raw carries
    `//timebind:ignore <reason>`. (CI-guarded: the timebind analyzer in the
    geterrors vettool.)
+22. **Docker's "not computed" values** are read through their helper, never
+    raw: a volume's `UsageData.Size`/`RefCount` through `volumeUsageOf`, a
+    network's attachments through `networkContainerCount`'s `known` flag
+    (both `backend/internal/services/docker_resources.go`). Docker reports
+    an uncounted value as -1 or nil, and read raw it passes for "0" or "not
+    in use". A count that skips unknowns ships a known flag beside it.
+    (CI-guarded for UsageData: the `forbidigo` rule in
+    `backend/.golangci.yml`, agent-os-m84q.)
 
 ## Trust and secrets
 

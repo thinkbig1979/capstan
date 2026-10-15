@@ -258,7 +258,8 @@ func TestHostSpaceImages(t *testing.T) {
 
 	sum, err := svc.Summary(context.Background())
 	require.NoError(t, err)
-	assert.Equal(t, HostImageSummary{Count: 4, InUse: 1, ReclaimableCount: 2, ReclaimableBytes: 200}, sum.Images)
+	assert.Equal(t, HostImageSummary{Count: 4, InUse: 1, InUseKnown: false, ReclaimableCount: 2, ReclaimableBytes: 200}, sum.Images,
+		"an image whose containers Docker did not count (-1) makes InUse a floor, not a count")
 }
 
 // (b) A stopped container with any compose project label is never a
@@ -325,7 +326,29 @@ func TestHostSpaceVolumes(t *testing.T) {
 
 	sum, err := svc.Summary(context.Background())
 	require.NoError(t, err)
-	assert.Equal(t, HostVolumeSummary{Count: 7, Attached: 1, Bytes: 1140, SizeKnown: false, ReclaimableCount: 3, ReclaimableBytes: 50}, sum.Volumes)
+	assert.Equal(t, HostVolumeSummary{Count: 7, Attached: 1, AttachedKnown: false, Bytes: 1140, SizeKnown: false, ReclaimableCount: 3, ReclaimableBytes: 50}, sum.Volumes,
+		"a volume whose references Docker did not count (RefCount -1, or no usage data) makes Attached a floor (agent-os-m84q)")
+}
+
+// With every count computed, the summary says its in-use counts are exact
+// (agent-os-m84q).
+func TestHostSpaceCountsKnownWhenDockerCountedAll(t *testing.T) {
+	docker := &hostSpaceFakeDocker{du: dockertypes.DiskUsage{
+		Images: []*image.Summary{
+			{ID: "sha256:used", RepoTags: []string{"app:1"}, Containers: 2, Size: 500, SharedSize: 100},
+			{ID: "sha256:unused", RepoTags: []string{"app:0"}, Containers: 0, Size: 300, SharedSize: 100},
+		},
+		Volumes: []*volume.Volume{
+			{Name: "attached", UsageData: usage(50, 1)},
+			{Name: "loose", UsageData: usage(20, 0)},
+		},
+	}}
+	svc, _ := newHostSpaceForTest(docker)
+
+	sum, err := svc.Summary(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, HostImageSummary{Count: 2, InUse: 1, InUseKnown: true, ReclaimableCount: 1, ReclaimableBytes: 200}, sum.Images)
+	assert.Equal(t, HostVolumeSummary{Count: 2, Attached: 1, AttachedKnown: true, Bytes: 70, SizeKnown: true, ReclaimableCount: 1, ReclaimableBytes: 20}, sum.Volumes)
 }
 
 // (d) Built-in and stack-owned networks are never candidates, and neither is

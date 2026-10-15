@@ -31,6 +31,11 @@ function plural(n: number, one: string, many: string) {
   return `${n} ${n === 1 ? one : many}`
 }
 
+/** A count Docker could not compute for every item is a floor (agent-os-m84q). */
+function atLeast(n: number, known: boolean) {
+  return known ? String(n) : `at least ${n}`
+}
+
 export interface HostCardModel {
   category: HostView
   title: string
@@ -61,7 +66,7 @@ export function hostCards(s: HostSummary): HostCardModel[] {
       category: 'images',
       title: 'Images',
       value: formatBytes(s.images.bytes),
-      detail: `${plural(s.images.count, 'image', 'images')} · ${s.images.inUse} used by a container.`,
+      detail: `${plural(s.images.count, 'image', 'images')} · ${atLeast(s.images.inUse, s.images.inUseKnown)} used by a container.`,
       // "about": per-image Size minus SharedSize is a lower bound.
       reclaim:
         s.images.reclaimableCount > 0
@@ -72,7 +77,7 @@ export function hostCards(s: HostSummary): HostCardModel[] {
       category: 'volumes',
       title: 'Volumes',
       value: volumeSize(s.volumes.bytes),
-      detail: `${plural(s.volumes.count, 'volume', 'volumes')} · ${s.volumes.attached} attached to a container.`,
+      detail: `${plural(s.volumes.count, 'volume', 'volumes')} · ${atLeast(s.volumes.attached, s.volumes.attachedKnown)} attached to a container.`,
       reclaim:
         s.volumes.reclaimableCount > 0
           ? `${plural(s.volumes.reclaimableCount, 'unattached volume', 'unattached volumes')} · ${volumeSize(s.volumes.reclaimableBytes)} (check before removing)`

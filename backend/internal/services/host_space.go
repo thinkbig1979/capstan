@@ -232,13 +232,18 @@ func (s *HostSpaceService) fetch(ctx context.Context) (*hostSpaceSnapshot, error
 	sum, cand := &snap.summary, &snap.candidates
 
 	sum.Images.Bytes = totals.Images
+	sum.Images.InUseKnown = true
 	for _, img := range du.Images {
 		if img == nil {
 			continue
 		}
 		sum.Images.Count++
-		if img.Containers > 0 {
+		switch {
+		case img.Containers > 0:
 			sum.Images.InUse++
+		case img.Containers < 0:
+			// Docker did not count this image's containers.
+			sum.Images.InUseKnown = false
 		}
 		if !imageIsCandidate(img) || refs.withholdsImage(img) {
 			continue
@@ -295,20 +300,24 @@ func (s *HostSpaceService) fetch(ctx context.Context) (*hostSpaceSnapshot, error
 
 	sum.Volumes.Bytes = totals.Volumes
 	sum.Volumes.SizeKnown = totals.VolumesSizeKnown
+	sum.Volumes.AttachedKnown = true
 	for _, vol := range du.Volumes {
 		if vol == nil {
 			continue
 		}
 		sum.Volumes.Count++
-		if vol.UsageData != nil && vol.UsageData.RefCount > 0 {
+		u := volumeUsageOf(vol)
+		if !u.refCountKnown {
+			sum.Volumes.AttachedKnown = false
+		} else if u.refCount > 0 {
 			sum.Volumes.Attached++
 		}
 		if !volumeIsCandidate(vol, owned) || refs.withholdsVolume(vol) {
 			continue
 		}
 		item := HostCandidateItem{ID: vol.Name, Label: vol.Name, Detail: vol.Labels[composeProjectLabel], Created: volumeCreated(vol)}
-		if vol.UsageData.Size >= 0 {
-			size := vol.UsageData.Size
+		if u.sizeKnown {
+			size := u.size
 			item.Size = &size
 			sum.Volumes.ReclaimableBytes += size
 		}
@@ -330,9 +339,8 @@ func (s *HostSpaceService) fetch(ctx context.Context) (*hostSpaceSnapshot, error
 			continue
 		}
 		// NetworkList leaves Containers empty, so the count comes from an
-		// inspect. A failed inspect falls back to -1, never to the list's 0:
-		// a network whose attachments are unknown is not listed.
-		if networkContainerCount(ctx, s.docker, n.ID, -1) != 0 {
+		// inspect. A network whose attachments are unknown is not listed.
+		if attached, known := networkContainerCount(ctx, s.docker, n.ID); !known || attached != 0 {
 			continue
 		}
 		sum.Networks.ReclaimableCount++
@@ -453,7 +461,7 @@ func containerLabel(ctr *container.Summary) string {
 // volumeIsCandidate: no container references it, Docker counted that
 // (RefCount -1 or no usage data is unknown, not unused), and no stack owns it.
 func volumeIsCandidate(vol *volume.Volume, owned map[string]bool) bool {
-	if vol.UsageData == nil || vol.UsageData.RefCount != 0 {
+	if u := volumeUsageOf(vol); !u.refCountKnown || u.refCount != 0 {
 		return false
 	}
 	return !isStackOwned(vol.Labels, owned)

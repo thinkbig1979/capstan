@@ -62,8 +62,9 @@ func (s *HostSpaceService) NetworkPruneImpact(ctx context.Context) (*PruneImpact
 			continue
 		}
 		b.addIf(n.Name, n.Labels, func(r stackReferences) bool { return r.networks[n.Name] }, func() bool {
-			// A failed inspect is -1: unknown attachments may be none.
-			return networkContainerCount(ctx, s.docker, n.ID, -1) <= 0
+			// Unknown attachments may be none.
+			attached, known := networkContainerCount(ctx, s.docker, n.ID)
+			return !known || attached == 0
 		})
 	}
 	return b.result(), nil

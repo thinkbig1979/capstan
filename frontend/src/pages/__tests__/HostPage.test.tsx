@@ -60,8 +60,8 @@ function makeSummary(overrides: Partial<HostSummary> = {}): HostSummary {
   return {
     disk: { total: 10 * GiB, inUse: 8 * GiB, reclaimable: 2 * GiB, reclaimableAll: 3 * GiB, volumesSizeKnown: true },
     containers: { count: 20, running: 14, stopped: 6, reclaimableCount: 3, reclaimableBytes: 420 * MiB },
-    images: { count: 48, inUse: 31, bytes: 21 * GiB, reclaimableCount: 17, reclaimableBytes: 14 * GiB },
-    volumes: { count: 22, attached: 19, bytes: 5 * GiB, sizeKnown: true, reclaimableCount: 3, reclaimableBytes: 1 * GiB },
+    images: { count: 48, inUse: 31, inUseKnown: true, bytes: 21 * GiB, reclaimableCount: 17, reclaimableBytes: 14 * GiB },
+    volumes: { count: 22, attached: 19, attachedKnown: true, bytes: 5 * GiB, sizeKnown: true, reclaimableCount: 3, reclaimableBytes: 1 * GiB },
     networks: { count: 11, builtIn: 3, stackOwned: 8, reclaimableCount: 0 },
     buildCache: { count: 40, bytes: 2 * GiB, reclaimableBytes: 2 * GiB },
     measuredAt: '2026-10-14T10:00:00Z',
@@ -192,7 +192,7 @@ describe('HostPage overview', () => {
     hostSummary.mockResolvedValue(
       makeSummary({
         disk: { total: 10 * GiB, inUse: 8 * GiB, reclaimable: 2 * GiB, reclaimableAll: 2 * GiB, volumesSizeKnown: false },
-        volumes: { count: 4, attached: 2, bytes: 0, sizeKnown: false, reclaimableCount: 2, reclaimableBytes: 0 },
+        volumes: { count: 4, attached: 2, attachedKnown: true, bytes: 0, sizeKnown: false, reclaimableCount: 2, reclaimableBytes: 0 },
       }),
     )
     renderHost()
