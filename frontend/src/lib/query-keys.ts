@@ -70,8 +70,9 @@ export const queryKeys = {
     updateJobs: () => ['resources', 'update-jobs'] as const,
     /**
      * What a scheduled cleanup would reclaim right now, at the STORED policy
-     * floor. A resource rather than a settings pane: it is read on the Images
-     * tab and invalidated by every image removal there, not by a policy edit.
+     * floor and categories. Read on the Images tab and in the automatic cleanup
+     * panel; invalidated by every image removal, by a cleanup run, and by a
+     * policy save (the categories it lists can change).
      */
     cleanupPreview: () => ['resources', 'cleanup-preview'] as const,
     /**

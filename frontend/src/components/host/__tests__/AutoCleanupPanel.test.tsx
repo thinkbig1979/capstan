@@ -226,6 +226,46 @@ describe('AutoCleanupPanel: status copy (AC8)', () => {
   })
 })
 
+describe('AutoCleanupPanel: no category switched on', () => {
+  const ALL_OFF = {
+    danglingImages: false,
+    unusedImages: false,
+    buildCache: false,
+    containers: false,
+    volumes: false,
+    networks: false,
+  }
+
+  it('says a run removes nothing, never "removes  older than"', async () => {
+    // The server refuses enabled + all off, but the panel must not render an
+    // empty list if it ever reads one.
+    mockGetCleanupPolicy.mockResolvedValue({ ...POLICY, categories: ALL_OFF })
+    renderPanel()
+    const copy = await screen.findByTestId('auto-cleanup-copy')
+    expect(copy).toHaveTextContent('No category is switched on, so a run removes nothing.')
+    expect(copy.textContent).not.toMatch(/removes\s+older than/)
+  })
+
+  it('offers no destructive Run now and says why', async () => {
+    mockGetCleanupPolicy.mockResolvedValue({ ...POLICY, enabled: false, nextRunAt: undefined, categories: ALL_OFF })
+    renderPanel()
+    const run = await screen.findByRole('button', { name: 'Run now' })
+    expect(run).toBeDisabled()
+    expect(screen.getByTestId('auto-cleanup-nothing-on')).toHaveTextContent('Run now has nothing to remove')
+    fireEvent.click(run)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(screen.queryByText('Run Docker cleanup now?')).toBeNull()
+    expect(mockRunCleanup).not.toHaveBeenCalled()
+  })
+
+  it('other side: one category on enables Run now and shows no note', async () => {
+    mockGetCleanupPolicy.mockResolvedValue({ ...POLICY, categories: { ...ALL_OFF, buildCache: true } })
+    renderPanel()
+    expect(await screen.findByRole('button', { name: 'Run now' })).toBeEnabled()
+    expect(screen.queryByTestId('auto-cleanup-nothing-on')).toBeNull()
+  })
+})
+
 describe('AutoCleanupPanel: last and next run (AC8)', () => {
   it('says "Never run" when there is no history', async () => {
     renderPanel()

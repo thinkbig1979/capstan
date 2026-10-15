@@ -97,7 +97,8 @@ export function AutoCleanupPanel() {
 
   const handleRun = async () => {
     const data = policy.data
-    if (!data) return
+    // Nothing to remove, so nothing to confirm: the button is disabled then.
+    if (!data || enabledCategoryNames(data.categories).length === 0) return
     // Built from the stored policy, which is what the server runs, and the
     // floor named here is the floor sent.
     const confirmed = await confirm(
@@ -146,6 +147,7 @@ export function AutoCleanupPanel() {
   } else {
     const data = policy.data
     const copy = policySentences(data)
+    const nothingOn = enabledCategoryNames(data.categories).length === 0
     body = (
       <div className="space-y-3">
         {policy.isError && (
@@ -183,7 +185,7 @@ export function AutoCleanupPanel() {
             type="button"
             variant="destructive"
             onClick={() => void handleRun()}
-            disabled={runCleanup.isPending}
+            disabled={runCleanup.isPending || nothingOn}
           >
             {runCleanup.isPending ? 'Running…' : 'Run now'}
           </Button>
@@ -191,6 +193,11 @@ export function AutoCleanupPanel() {
             Edit schedule
           </Button>
         </div>
+        {nothingOn && (
+          <p className="text-xs text-muted-foreground" data-testid="auto-cleanup-nothing-on">
+            No category is switched on, so Run now has nothing to remove. Switch one on in Edit schedule.
+          </p>
+        )}
       </div>
     )
   }

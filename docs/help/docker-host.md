@@ -145,8 +145,8 @@ each one. The page also shows how much a scheduled cleanup would reclaim.
 - **Reclaim space in bulk:** use **Prune**. By default it removes dangling images,
   the untagged leftovers of rebuilds. Enable the "all unused" option to remove every
   image that no container uses, and set an age to spare recent ones.
-- **Schedule it:** follow the Cleanup settings link. See
-  [Settings help](settings.md#docker-cleanup).
+- **Schedule it:** follow the Automatic cleanup link. See
+  [Automatic cleanup](#automatic-cleanup).
 
 **Gotchas**
 

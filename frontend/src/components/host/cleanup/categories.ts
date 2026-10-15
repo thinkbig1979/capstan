@@ -38,7 +38,10 @@ export function policySentences(policy: DockerCleanupPolicy): { removes: string;
   const on = enabledCategoryNames(policy.categories)
   const off = CLEANUP_CATEGORY_ORDER.filter((c) => !policy.categories[c]).map((c) => CLEANUP_CATEGORY_NAMES[c])
   return {
-    removes: `Every ${policy.intervalHours} h removes ${joinNames(on)} older than ${policy.minAgeHours} h.`,
+    // An empty list would read "removes  older than"; say what actually happens.
+    removes: on.length === 0
+      ? 'No category is switched on, so a run removes nothing.'
+      : `Every ${policy.intervalHours} h removes ${joinNames(on)} older than ${policy.minAgeHours} h.`,
     never: off.length > 0 ? `Never removed automatically: ${off.join(', ')}.` : null,
   }
 }
