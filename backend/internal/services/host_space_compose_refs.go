@@ -19,6 +19,7 @@ import (
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/volume"
 
+	"github.com/thinkbig1979/capstan/backend/internal/dockerenv"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
@@ -61,7 +62,8 @@ type stackReferenceResolver func(ctx context.Context, stacks []models.Stack) sta
 
 // composeStackReferences resolves each stack's compose file the way Capstan
 // runs it: `-f <ComposeFile> -p <ProjectName>` with the same --env-file
-// arguments buildComposeArgs passes, every profile active. It parses in
+// arguments buildComposeArgs passes and the same child environment
+// (composeEnvironment), every profile active. It parses in
 // process with compose-go rather than running `docker compose config`, because
 // it runs on every host summary fetch (one per hostSpaceSnapshotTTL) and a
 // process per stack per fetch is not worth what it would add.
@@ -191,8 +193,12 @@ func tolerantSubstitute(value string, mapping template.Mapping) (string, error) 
 // composeEnvironment is the interpolation environment `docker compose` sees
 // when Capstan runs it: the --env-file arguments buildComposeArgs passes
 // (global.env when it exists, then the stack's EnvFile), or the project
-// directory's .env when there are none, overridden by the process
-// environment. A file compose would fail to read fails here too.
+// directory's .env when there are none, overridden by the compose child's
+// own environment. That child gets dockerenv.Env() (exec_env.go dockerEnv),
+// not Capstan's process environment, so only those variables override a
+// file: a TAG set in Capstan's own env never reaches compose and must not
+// change a name here either. A file compose would fail to read fails here
+// too.
 func composeEnvironment(st models.Stack, globalEnvPath string) (map[string]string, error) {
 	var files []string
 	if globalEnvPath != "" {
@@ -215,7 +221,7 @@ func composeEnvironment(st models.Stack, globalEnvPath string) (map[string]strin
 	}
 
 	processEnv := map[string]string{}
-	for _, kv := range os.Environ() {
+	for _, kv := range dockerenv.Env() {
 		if k, v, ok := strings.Cut(kv, "="); ok {
 			processEnv[k] = v
 		}

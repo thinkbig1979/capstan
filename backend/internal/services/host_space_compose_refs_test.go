@@ -315,3 +315,28 @@ func TestHostSpaceComposeReferencesReadGlobalEnv(t *testing.T) {
 	refs = composeStackReferences("")(context.Background(), []models.Stack{shop})
 	assert.Equal(t, []string{"shop"}, refs.withheld, "without global.env the required variable has no value")
 }
+
+// The resolver interpolates with the environment the compose child actually
+// gets: the stack's env files, overridden only by the dockerenv allowlist. A
+// variable Capstan's own process sets but compose never sees must not change
+// a name (adversary B2: TAG=9.9 in Capstan's env would protect myapp:9.9
+// while compose runs myapp:1.0).
+func TestHostSpaceComposeReferencesUseTheComposeChildEnvironment(t *testing.T) {
+	shop := writeStack(t, "shop", map[string]string{
+		"compose.yaml": "services:\n  app:\n    image: myapp:${TAG}\n  tool:\n    image: tool:${DOCKER_API_VERSION}\nvolumes:\n  data:\n    external: true\n    name: ${DATAVOL}\n",
+		".env":         "TAG=1.0\nDATAVOL=pgdata\nDOCKER_API_VERSION=1.0\n",
+	})
+	t.Setenv("TAG", "9.9")
+	t.Setenv("DATAVOL", "other")
+	t.Setenv("DOCKER_API_VERSION", "1.45")
+
+	refs := composeStackReferences("")(context.Background(), []models.Stack{shop})
+	require.Empty(t, refs.withheld)
+	assert.True(t, refs.images["myapp:1.0"], "compose never sees Capstan's TAG, so the stack .env value names the image")
+	assert.False(t, refs.images["myapp:9.9"])
+	assert.True(t, refs.volumes["pgdata"], "compose never sees Capstan's DATAVOL")
+	assert.False(t, refs.volumes["other"])
+	// Positive side: an allowlisted variable does reach compose and overrides
+	// the file, as docker compose itself does.
+	assert.True(t, refs.images["tool:1.45"], "DOCKER_API_VERSION is passed to compose and wins over .env")
+}
