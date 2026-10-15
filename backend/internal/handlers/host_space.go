@@ -23,6 +23,9 @@ type hostSpaceReader interface {
 	// The stacks a volume or network prune would take (agent-os-8d8a).
 	VolumePruneImpact(ctx context.Context) (*services.PruneImpact, error)
 	NetworkPruneImpact(ctx context.Context) (*services.PruneImpact, error)
+	// The stacks an image or container prune would take (agent-os-tt94).
+	ImagePruneImpact(ctx context.Context) (*services.PruneImpact, error)
+	ContainerPruneImpact(ctx context.Context) (*services.PruneImpact, error)
 }
 
 // hostSpaceFreer is the free-space removal. Every method on it removes

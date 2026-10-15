@@ -179,6 +179,15 @@ export function ImagesTab() {
             options={{ all: { label: 'Remove all unused images, not just dangling' }, until: true }}
             confirmMessage="Prune Unused Images?"
             confirmDescription="By default only dangling (untagged) images are removed. Enable 'all unused' to remove every image not used by a container."
+            stackImpact={{
+              queryKey: queryKeys.resources.imagesPruneImpact(),
+              queryFn: () => resourcesApi.imagePruneImpact(),
+              // Without "all", Docker removes dangling images only, which no
+              // stack names.
+              when: ({ all }) => all,
+              noun: 'images',
+              heading: 'These stopped or removed stacks would lose these images:',
+            }}
             invalidateKeys={[
               queryKeys.resources.images(),
               queryKeys.dashboardStats(),
