@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -382,6 +383,38 @@ func (h *ResourcesHandler) deleteNetwork(c *gin.Context) {
 	renderResult(c, truth.Success("network deleted",
 		truth.KV("id", id),
 	))
+}
+
+// getVolumePruneImpact serves the stacks whose volumes a volume prune with
+// "all unused" would remove, and getNetworkPruneImpact the stacks whose
+// networks a network prune would (agent-os-8d8a). The prune dialogs read them
+// to warn before the prune. A failed read is an error response, never an empty
+// impact, which the dialog would read as "no stack affected".
+func (h *ResourcesHandler) getVolumePruneImpact(c *gin.Context) {
+	h.servePruneImpact(c, "volume", func(ctx context.Context) (*services.PruneImpact, error) {
+		return h.hostSpace.VolumePruneImpact(ctx)
+	})
+}
+
+func (h *ResourcesHandler) getNetworkPruneImpact(c *gin.Context) {
+	h.servePruneImpact(c, "network", func(ctx context.Context) (*services.PruneImpact, error) {
+		return h.hostSpace.NetworkPruneImpact(ctx)
+	})
+}
+
+func (h *ResourcesHandler) servePruneImpact(c *gin.Context, kind string, read func(context.Context) (*services.PruneImpact, error)) {
+	if h.hostSpace == nil {
+		respondDockerErr(c, services.ErrDockerUnavailable, http.StatusServiceUnavailable,
+			"DOCKER_UNAVAILABLE", DockerUnavailableMessage)
+		return
+	}
+	impact, err := read(c.Request.Context())
+	if err != nil {
+		slog.Error("Failed to read what a prune would remove from stacks", "kind", kind, "error", err)
+		respondDockerErr(c, err, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to check which stacks the "+kind+" prune affects")
+		return
+	}
+	c.JSON(http.StatusOK, impact)
 }
 
 func (h *ResourcesHandler) pruneNetworks(c *gin.Context) {

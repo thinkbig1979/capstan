@@ -20,6 +20,9 @@ import (
 type hostSpaceReader interface {
 	Summary(ctx context.Context) (*services.HostSummary, error)
 	Candidates(ctx context.Context) (*services.HostCandidates, error)
+	// The stacks a volume or network prune would take (agent-os-8d8a).
+	VolumePruneImpact(ctx context.Context) (*services.PruneImpact, error)
+	NetworkPruneImpact(ctx context.Context) (*services.PruneImpact, error)
 }
 
 // hostSpaceFreer is the free-space removal. Every method on it removes

@@ -143,6 +143,14 @@ export function VolumesTab() {
             options={{ all: { label: 'Remove all unused volumes, not just anonymous' } }}
             confirmMessage="Prune Unused Volumes?"
             confirmDescription="By default only anonymous volumes are removed. Enable 'all unused' to remove every volume not used by a container."
+            stackImpact={{
+              queryKey: queryKeys.resources.volumesPruneImpact(),
+              queryFn: () => resourcesApi.volumePruneImpact(),
+              // Without "all", Docker removes anonymous volumes only.
+              when: ({ all }) => all,
+              noun: 'volumes',
+              heading: 'These removed (down) stacks would lose these volumes:',
+            }}
             invalidateKeys={[queryKeys.resources.volumes(), queryKeys.dashboardStats()]}
           />
         }

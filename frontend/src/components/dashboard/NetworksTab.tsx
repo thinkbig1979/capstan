@@ -165,7 +165,15 @@ export function NetworksTab() {
               pruneFn={(opts) => resourcesApi.pruneNetworks(opts)}
               options={{ until: true }}
               confirmMessage="Prune Unused Networks?"
-              confirmDescription="All networks not referenced by any container will be permanently removed."
+              confirmDescription="Every network no running container is attached to will be permanently removed. A stopped container does not keep its network."
+              stackImpact={{
+                queryKey: queryKeys.resources.networksPruneImpact(),
+                queryFn: () => resourcesApi.networkPruneImpact(),
+                noun: 'networks',
+                // A stopped container does not hold its network, so a stopped
+                // stack loses its networks too, not only a removed one.
+                heading: 'These stopped or removed stacks would lose these networks:',
+              }}
               invalidateKeys={[queryKeys.resources.networks()]}
             />
           </>

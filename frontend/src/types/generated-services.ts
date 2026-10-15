@@ -133,6 +133,34 @@ export interface HostCandidateItem {
   dangling?: boolean;
 }
 /**
+ * PruneImpact is GET /resources/volumes/prune-impact's and
+ * GET /resources/networks/prune-impact's body: the stacks whose volumes or
+ * networks Docker's prune would remove (agent-os-8d8a). Docker's rule is
+ * "unused": a volume no container holds (`prune --all`), which covers a
+ * removed stack's volumes; a network no running container is attached to,
+ * which covers a stopped or removed stack's networks.
+ * Both slices are non-nil, so an empty answer sends [], never null.
+ */
+export interface PruneImpact {
+  stacks: PruneImpactStack[];
+  /**
+   * UncheckedStacks names the stacks whose compose file could not be read.
+   * Such a stack could name any unused object, so the prune may remove its
+   * data without it being listed under Stacks.
+   */
+  uncheckedStacks: string[];
+}
+/**
+ * PruneImpactStack is one stack and the object names the prune would remove
+ * from it: ones it owns by its compose project label or names in its compose
+ * file. An object whose usage Docker did not report is listed too: the prune
+ * may remove it.
+ */
+export interface PruneImpactStack {
+  stack: string;
+  items: string[];
+}
+/**
  * HostBuildCacheCandidates: build cache is removed as a whole, not per record.
  */
 export interface HostBuildCacheCandidates {

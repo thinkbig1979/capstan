@@ -47,7 +47,7 @@ import type {
   DockerCleanupHistory,
   DockerCleanupRun,
 } from '@/types'
-import type { HostSummary } from '@/types/generated-services'
+import type { HostSummary, PruneImpact } from '@/types/generated-services'
 
 /**
  * LifecycleResult is the wire type for stack start/stop/restart/pull responses.
@@ -773,6 +773,11 @@ export const resourcesApi = {
     const response = await apiClient.post<PruneResult>(`/resources/volumes/prune${pruneQuery(opts)}`)
     return response.data
   },
+  /** The stacks a volume prune with "all unused" would take volumes from (agent-os-8d8a). */
+  volumePruneImpact: async () => {
+    const response = await apiClient.get<PruneImpact>('/resources/volumes/prune-impact')
+    return response.data
+  },
 
   networks: async () => {
     const response = await apiClient.get<{ networks: DockerNetwork[] }>('/resources/networks')
@@ -788,6 +793,11 @@ export const resourcesApi = {
   },
   pruneNetworks: async (opts?: PruneOptions) => {
     const response = await apiClient.post<PruneResult>(`/resources/networks/prune${pruneQuery(opts)}`)
+    return response.data
+  },
+  /** The stacks a network prune would take networks from (agent-os-8d8a). */
+  networkPruneImpact: async () => {
+    const response = await apiClient.get<PruneImpact>('/resources/networks/prune-impact')
     return response.data
   },
 

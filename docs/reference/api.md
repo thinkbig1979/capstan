@@ -282,10 +282,23 @@ Direct Docker resource management, independent of any stack.
 - `GET /api/v1/resources/volumes` — list volumes
 - `DELETE /api/v1/resources/volumes/:name` — delete a volume
 - `POST /api/v1/resources/volumes/prune` — prune unused volumes
+- `GET /api/v1/resources/volumes/prune-impact` — the stacks whose volumes a
+  volume prune with `all=true` would remove: `{stacks: [{stack, items}],
+  uncheckedStacks}`. Docker's prune removes every volume no container holds,
+  which includes a removed (down) stack's named and external volumes. A stack
+  owns a volume by its compose project label or names it in its compose file;
+  a volume whose usage Docker did not report is listed too. `uncheckedStacks`
+  names stacks whose compose file could not be read. 503 when Docker is
+  unavailable and 500 on another read failure, never an empty answer
 - `GET /api/v1/resources/networks` — list networks
 - `POST /api/v1/resources/networks` — create a network
 - `DELETE /api/v1/resources/networks/:id` — delete a network
 - `POST /api/v1/resources/networks/prune` — prune unused networks
+- `GET /api/v1/resources/networks/prune-impact` — the same answer for a
+  network prune, which removes every network no running container is attached
+  to: a stopped stack's networks as well as a removed one's, external networks
+  included. The `until` filter is not applied, so the list can only be longer
+  than what the prune removes
 - `GET /api/v1/resources/build-cache` — inspect Docker build cache usage
 - `POST /api/v1/resources/build-cache/prune` — prune the build cache
 - `GET /api/v1/resources/host/summary` — per-category counts and sizes of what

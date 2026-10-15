@@ -23,6 +23,7 @@ import (
 type hostSpaceFake struct {
 	summary    *services.HostSummary
 	candidates *services.HostCandidates
+	impact     *services.PruneImpact
 	err        error
 
 	freeRes     *services.HostFreeSpaceResult
@@ -48,6 +49,14 @@ func (f *hostSpaceFake) Summary(context.Context) (*services.HostSummary, error) 
 
 func (f *hostSpaceFake) Candidates(context.Context) (*services.HostCandidates, error) {
 	return f.candidates, f.err
+}
+
+func (f *hostSpaceFake) VolumePruneImpact(context.Context) (*services.PruneImpact, error) {
+	return f.impact, f.err
+}
+
+func (f *hostSpaceFake) NetworkPruneImpact(context.Context) (*services.PruneImpact, error) {
+	return f.impact, f.err
 }
 
 func hostSpaceRouter(t *testing.T, svc hostSpaceService) *gin.Engine {
