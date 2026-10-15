@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	dockertypes "github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/volume"
 	"github.com/stretchr/testify/assert"
@@ -58,6 +60,54 @@ func TestPruneImpact_NetworksListsStackOwnedAndExternal(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []PruneImpactStack{{Stack: "shop", Items: []string{"proxy", "shop_default"}}}, impact.Stacks,
 		"a stack's unattached external and labelled networks must be listed; an attached one, an unrelated one and a built-in must not")
+	assert.Empty(t, impact.UncheckedStacks)
+}
+
+// agent-os-tt94: `docker image prune -a` removes every image no container
+// uses, which covers a stopped or removed stack's images. A dangling one is
+// not listed: nothing names it and the default prune removes it unasked.
+func TestPruneImpact_ImagesListsStackOwnedAndNamed(t *testing.T) {
+	shop := writeStack(t, "shop", map[string]string{"compose.yaml": shopCompose})
+	other := map[string]string{composeProjectLabel: "other"}
+	docker := &hostSpaceFakeDocker{du: dockertypes.DiskUsage{Images: []*image.Summary{
+		{ID: "sha256:pg", RepoTags: []string{"postgres:16"}},                                              // named in shop's compose
+		{ID: "sha256:api", RepoTags: []string{"shop-api:latest"}},                                         // shop's built service
+		{ID: "sha256:tool", RepoTags: []string{"acme/tool:1"}, Labels: shopLabel()},                       // label only
+		{ID: "sha256:uncounted", RepoTags: []string{"acme/cache:2"}, Labels: shopLabel(), Containers: -1}, // usage not counted
+		{ID: "sha256:busy", RepoTags: []string{"docker.io/library/busybox:latest"}, Containers: 1},        // a container uses it: kept
+		{ID: "sha256:old", RepoTags: []string{"<none>:<none>"}, Labels: shopLabel()},                      // dangling superseded build
+		{ID: "sha256:oldpull", RepoTags: []string{"postgres:<none>"}, Labels: shopLabel()},                // dangling superseded pull
+		{ID: "sha256:loose", RepoTags: []string{"redis:7"}},                                               // nothing names it
+		{ID: "sha256:other", RepoTags: []string{"other-web:latest"}, Labels: other},                       // not a Capstan stack
+	}}}
+	svc := newHostSpaceWithStacks(docker, shop)
+
+	impact, err := svc.ImagePruneImpact(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, []PruneImpactStack{{Stack: "shop", Items: []string{"acme/cache:2", "acme/tool:1", "postgres:16", "shop-api:latest"}}}, impact.Stacks,
+		"a stack's unused named, built, labelled and uncounted images must be listed; a used one, a dangling one, an unrelated one and a non-Capstan project's must not")
+	assert.Empty(t, impact.UncheckedStacks)
+}
+
+// agent-os-tt94: `docker container prune` removes every stopped container,
+// which covers a stopped stack's containers.
+func TestPruneImpact_ContainersListsStackOwnedAndNamed(t *testing.T) {
+	shop := writeStack(t, "shop", map[string]string{"compose.yaml": shopCompose})
+	docker := &hostSpaceFakeDocker{du: dockertypes.DiskUsage{Containers: []*container.Summary{
+		{ID: "c-db", Names: []string{"/shop-db-1"}, Labels: shopLabel(), State: container.StateExited},
+		{ID: "c-api", Names: []string{"/shop-api-1"}, Labels: shopLabel(), State: container.StateCreated},
+		{ID: "c-dead", Names: []string{"/shop-dead-1"}, Labels: shopLabel(), State: container.StateDead},
+		{ID: "c-vpn", Names: []string{"/vpn"}, State: container.StateExited}, // named by network_mode in shop's compose
+		{ID: "c-run", Names: []string{"/shop-worker-1"}, Labels: shopLabel(), State: container.StateRunning},
+		{ID: "c-pause", Names: []string{"/shop-tools-1"}, Labels: shopLabel(), State: container.StatePaused},
+		{ID: "c-stray", Names: []string{"/stray"}, State: container.StateExited},
+	}}}
+	svc := newHostSpaceWithStacks(docker, shop)
+
+	impact, err := svc.ContainerPruneImpact(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, []PruneImpactStack{{Stack: "shop", Items: []string{"shop-api-1", "shop-db-1", "shop-dead-1", "vpn"}}}, impact.Stacks,
+		"a stack's stopped labelled and named containers must be listed; a running, a paused and an unrelated one must not")
 	assert.Empty(t, impact.UncheckedStacks)
 }
 
@@ -130,6 +180,14 @@ func TestPruneImpact_ReadFailureIsAnError(t *testing.T) {
 			(*HostSpaceService).NetworkPruneImpact},
 		"networks: stacks": {&hostSpaceFakeDocker{}, &hostSpaceFakeStacks{err: boom},
 			(*HostSpaceService).NetworkPruneImpact},
+		"images: disk usage": {&hostSpaceFakeDocker{duErr: boom}, &hostSpaceFakeStacks{},
+			(*HostSpaceService).ImagePruneImpact},
+		"images: stacks": {&hostSpaceFakeDocker{}, &hostSpaceFakeStacks{err: boom},
+			(*HostSpaceService).ImagePruneImpact},
+		"containers: disk usage": {&hostSpaceFakeDocker{duErr: boom}, &hostSpaceFakeStacks{},
+			(*HostSpaceService).ContainerPruneImpact},
+		"containers: stacks": {&hostSpaceFakeDocker{}, &hostSpaceFakeStacks{err: boom},
+			(*HostSpaceService).ContainerPruneImpact},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -144,7 +202,9 @@ func TestPruneImpact_ReadFailureIsAnError(t *testing.T) {
 
 func TestPruneImpact_EmptySendsArrays(t *testing.T) {
 	svc, _ := newHostSpaceForTest(&hostSpaceFakeDocker{})
-	for _, read := range []func(context.Context) (*PruneImpact, error){svc.VolumePruneImpact, svc.NetworkPruneImpact} {
+	for _, read := range []func(context.Context) (*PruneImpact, error){
+		svc.VolumePruneImpact, svc.NetworkPruneImpact, svc.ImagePruneImpact, svc.ContainerPruneImpact,
+	} {
 		impact, err := read(context.Background())
 		require.NoError(t, err)
 		body, err := json.Marshal(impact)

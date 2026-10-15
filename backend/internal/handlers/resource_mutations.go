@@ -402,6 +402,21 @@ func (h *ResourcesHandler) getNetworkPruneImpact(c *gin.Context) {
 	})
 }
 
+// getImagePruneImpact serves the stacks whose images an image prune with
+// "all unused" would remove, and getContainerPruneImpact the stacks whose
+// stopped containers a container prune would (agent-os-tt94).
+func (h *ResourcesHandler) getImagePruneImpact(c *gin.Context) {
+	h.servePruneImpact(c, "image", func(ctx context.Context) (*services.PruneImpact, error) {
+		return h.hostSpace.ImagePruneImpact(ctx)
+	})
+}
+
+func (h *ResourcesHandler) getContainerPruneImpact(c *gin.Context) {
+	h.servePruneImpact(c, "container", func(ctx context.Context) (*services.PruneImpact, error) {
+		return h.hostSpace.ContainerPruneImpact(ctx)
+	})
+}
+
 func (h *ResourcesHandler) servePruneImpact(c *gin.Context, kind string, read func(context.Context) (*services.PruneImpact, error)) {
 	if h.hostSpace == nil {
 		respondDockerErr(c, services.ErrDockerUnavailable, http.StatusServiceUnavailable,

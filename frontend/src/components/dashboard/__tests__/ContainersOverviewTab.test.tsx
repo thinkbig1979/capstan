@@ -70,6 +70,7 @@ const { stacksMock, resourcesMock, autoUpdateMock } = vi.hoisted(() => ({
   resourcesMock: {
     deleteContainer: vi.fn(),
     pruneContainers: vi.fn(),
+    containerPruneImpact: vi.fn(),
     startContainer: vi.fn(),
     stopContainer: vi.fn(),
     restartContainer: vi.fn(),
@@ -142,6 +143,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   stacksMock.list.mockResolvedValue([])
   autoUpdateMock.getPolicies.mockResolvedValue({ policies: [] })
+  resourcesMock.containerPruneImpact.mockResolvedValue({ stacks: [], uncheckedStacks: [] })
 })
 
 describe('ContainersOverviewTab — ActionResult reasons reach the operator', () => {
@@ -691,5 +693,56 @@ describe('ContainersOverviewTab — the stack link stays inside the SPA (agent-o
     // A raw <a href> is a document navigation: jsdom does not follow it, so the
     // router location stays '/'. A <Link> pushes through history.
     expect(window.location.pathname).toBe('/stacks/stack-1')
+  })
+})
+
+// agent-os-tt94: a container prune removes every stopped container, so a
+// stopped stack loses its containers. The dialog names those stacks and asks
+// for the word "prune" before it removes anything.
+describe('ContainersOverviewTab — prune warns about stacks that would lose containers', () => {
+  async function openPrune() {
+    const user = userEvent.setup()
+    renderTab()
+    await user.click(screen.getByRole('button', { name: /^prune$/i }))
+    await screen.findByText('Prune Stopped Containers?')
+    return user
+  }
+  const confirmButton = () => screen.getAllByRole('button', { name: /^prune$/i }).at(-1)!
+  const typedBox = () => screen.queryByRole('textbox', { name: /type prune to confirm/i })
+
+  it('names the affected stack and keeps Prune disabled until "prune" is typed', async () => {
+    resourcesMock.containerPruneImpact.mockResolvedValue({
+      stacks: [{ stack: 'shop', items: ['shop-db-1', 'shop-web-1'] }],
+      uncheckedStacks: [],
+    })
+    resourcesMock.pruneContainers.mockResolvedValue({ outcome: 'success', details: { deleted: ['a', 'b'] } })
+    const user = await openPrune()
+
+    expect(await screen.findByText(/stopped stacks would lose these containers/i)).toBeInTheDocument()
+    expect(screen.getByText('shop')).toBeInTheDocument()
+    expect(screen.getByText(/shop-db-1, shop-web-1/)).toBeInTheDocument()
+    expect(confirmButton()).toBeDisabled()
+
+    await user.type(typedBox()!, 'prune')
+    expect(confirmButton()).toBeEnabled()
+    await user.click(confirmButton())
+    await waitFor(() => expect(resourcesMock.pruneContainers).toHaveBeenCalledTimes(1))
+  })
+
+  it('says no stack is affected and needs no typing when none is', async () => {
+    await openPrune()
+
+    expect(await screen.findByText(/no stack loses containers to this prune/i)).toBeInTheDocument()
+    expect(typedBox()).not.toBeInTheDocument()
+    expect(confirmButton()).toBeEnabled()
+  })
+
+  it('says it could not check, and still requires typing, when the check fails', async () => {
+    resourcesMock.containerPruneImpact.mockRejectedValue(new Error('500'))
+    await openPrune()
+
+    expect(await screen.findByText(/could not check which stacks this prune affects/i)).toBeInTheDocument()
+    expect(typedBox()).toBeInTheDocument()
+    expect(confirmButton()).toBeDisabled()
   })
 })

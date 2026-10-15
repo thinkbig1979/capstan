@@ -14,7 +14,10 @@ import (
 
 // agent-os-8d8a: the prune confirm dialogs read which stacks a volume or
 // network prune would take from these routes.
-var pruneImpactPaths = []string{"/api/resources/volumes/prune-impact", "/api/resources/networks/prune-impact"}
+var pruneImpactPaths = []string{
+	"/api/resources/volumes/prune-impact", "/api/resources/networks/prune-impact",
+	"/api/resources/images/prune-impact", "/api/resources/containers/prune-impact", // agent-os-tt94
+}
 
 func TestPruneImpactRoutesServeTheImpact(t *testing.T) {
 	fake := &hostSpaceFake{
@@ -26,10 +29,20 @@ func TestPruneImpactRoutesServeTheImpact(t *testing.T) {
 			Stacks:          []services.PruneImpactStack{{Stack: "blog", Items: []string{"proxy"}}},
 			UncheckedStacks: []string{},
 		},
+		imageImpact: &services.PruneImpact{
+			Stacks:          []services.PruneImpactStack{{Stack: "shop", Items: []string{"shop-api:latest"}}},
+			UncheckedStacks: []string{},
+		},
+		containerImpact: &services.PruneImpact{
+			Stacks:          []services.PruneImpactStack{{Stack: "blog", Items: []string{"blog-web-1"}}},
+			UncheckedStacks: []string{"broken"},
+		},
 	}
 	cases := map[string]string{
-		"/api/resources/volumes/prune-impact":  `{"stacks":[{"stack":"shop","items":["pgdata"]}],"uncheckedStacks":["broken"]}`,
-		"/api/resources/networks/prune-impact": `{"stacks":[{"stack":"blog","items":["proxy"]}],"uncheckedStacks":[]}`,
+		"/api/resources/volumes/prune-impact":    `{"stacks":[{"stack":"shop","items":["pgdata"]}],"uncheckedStacks":["broken"]}`,
+		"/api/resources/networks/prune-impact":   `{"stacks":[{"stack":"blog","items":["proxy"]}],"uncheckedStacks":[]}`,
+		"/api/resources/images/prune-impact":     `{"stacks":[{"stack":"shop","items":["shop-api:latest"]}],"uncheckedStacks":[]}`,
+		"/api/resources/containers/prune-impact": `{"stacks":[{"stack":"blog","items":["blog-web-1"]}],"uncheckedStacks":["broken"]}`,
 	}
 	for path, want := range cases {
 		t.Run(path, func(t *testing.T) {

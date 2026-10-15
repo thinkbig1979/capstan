@@ -24,9 +24,11 @@ type hostSpaceFake struct {
 	summary    *services.HostSummary
 	candidates *services.HostCandidates
 	// Each route has its own answer, so a route wired to the other read fails.
-	volumeImpact  *services.PruneImpact
-	networkImpact *services.PruneImpact
-	err           error
+	volumeImpact    *services.PruneImpact
+	networkImpact   *services.PruneImpact
+	imageImpact     *services.PruneImpact
+	containerImpact *services.PruneImpact
+	err             error
 
 	freeRes     *services.HostFreeSpaceResult
 	freeErr     error
@@ -59,6 +61,14 @@ func (f *hostSpaceFake) VolumePruneImpact(context.Context) (*services.PruneImpac
 
 func (f *hostSpaceFake) NetworkPruneImpact(context.Context) (*services.PruneImpact, error) {
 	return f.networkImpact, f.err
+}
+
+func (f *hostSpaceFake) ImagePruneImpact(context.Context) (*services.PruneImpact, error) {
+	return f.imageImpact, f.err
+}
+
+func (f *hostSpaceFake) ContainerPruneImpact(context.Context) (*services.PruneImpact, error) {
+	return f.containerImpact, f.err
 }
 
 func hostSpaceRouter(t *testing.T, svc hostSpaceService) *gin.Engine {

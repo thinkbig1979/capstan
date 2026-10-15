@@ -12,8 +12,8 @@ import (
 )
 
 // The Resources-page prune routes keep Docker's own rule (Edwin, 2026-10-15,
-// agent-os-8d8a): "unused" covers a stopped or removed stack's volumes and
-// networks. These reads name the stacks that would lose something, so the
+// agent-os-8d8a, agent-os-tt94): "unused" covers a stopped or removed stack's
+// volumes, networks, images and containers. These reads name the stacks that would lose something, so the
 // confirm dialog can say so before the user prunes.
 
 // VolumePruneImpact lists, per stack, the volumes `docker volume prune --all`
@@ -70,6 +70,62 @@ func (s *HostSpaceService) NetworkPruneImpact(ctx context.Context) (*PruneImpact
 	return b.result(), nil
 }
 
+// ImagePruneImpact lists, per stack, the images `docker image prune -a` would
+// remove: those no container uses, stopped ones included. An image whose
+// containers Docker did not count may be removed, so a stack's such image is
+// listed too. A dangling image is not: nothing names it, and the default
+// prune removes it without asking. It always applies the -a rule; the dialog
+// asks only when "all unused" is on. The `until` filter can only spare more.
+func (s *HostSpaceService) ImagePruneImpact(ctx context.Context) (*PruneImpact, error) {
+	b, err := s.newPruneImpactBuilder(ctx)
+	if err != nil {
+		return nil, err
+	}
+	du, err := s.docker.DiskUsage(ctx, dockertypes.DiskUsageOptions{
+		Types: []dockertypes.DiskUsageObject{dockertypes.ImageObject},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("reading Docker image usage: %w", err)
+	}
+	for _, img := range du.Images {
+		if img == nil || img.Containers > 0 {
+			continue
+		}
+		if _, dangling := danglingRepository(img.RepoTags); dangling {
+			continue
+		}
+		b.add(imageLabel(img), img.Labels, func(r stackReferences) bool {
+			return r.referencesImage(img.RepoTags, img.RepoDigests)
+		})
+	}
+	return b.result(), nil
+}
+
+// ContainerPruneImpact lists, per stack, the containers `docker container
+// prune` would remove: every stopped one, so a stopped stack loses its
+// containers. The `until` filter can only spare more.
+func (s *HostSpaceService) ContainerPruneImpact(ctx context.Context) (*PruneImpact, error) {
+	b, err := s.newPruneImpactBuilder(ctx)
+	if err != nil {
+		return nil, err
+	}
+	du, err := s.docker.DiskUsage(ctx, dockertypes.DiskUsageOptions{
+		Types: []dockertypes.DiskUsageObject{dockertypes.ContainerObject},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("reading Docker container usage: %w", err)
+	}
+	for _, ctr := range du.Containers {
+		if ctr == nil || !containerIsStopped(ctr.State) {
+			continue
+		}
+		b.add(containerLabel(ctr), ctr.Labels, func(r stackReferences) bool {
+			return r.referencesContainer(ctr.Names)
+		})
+	}
+	return b.result(), nil
+}
+
 // pruneImpactBuilder attributes unused objects to the stacks that own them by
 // label or name them in their compose file. Both are keyed by project name,
 // which Capstan lets two stacks share: their references are merged.
@@ -114,6 +170,12 @@ func (s *HostSpaceService) newPruneImpactBuilder(ctx context.Context) (*pruneImp
 		}
 		for name := range refs.networks {
 			merged.networks[name] = true
+		}
+		for name := range refs.images {
+			merged.images[name] = true
+		}
+		for name := range refs.containers {
+			merged.containers[name] = true
 		}
 	}
 	return b, nil

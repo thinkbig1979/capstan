@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router'
 import type { ReactNode } from 'react'
@@ -17,12 +18,15 @@ const mockGetImages = vi.fn()
 const mockDeleteImage = vi.fn()
 const mockPreviewCleanup = vi.fn()
 const mockGetCleanupPolicy = vi.fn()
+const mockPruneImages = vi.fn()
+const mockImagePruneImpact = vi.fn()
 
 vi.mock('@/lib/api', () => ({
   resourcesApi: {
     images: (...a: unknown[]) => mockGetImages(...a),
     deleteImage: (...a: unknown[]) => mockDeleteImage(...a),
-    pruneImages: vi.fn().mockResolvedValue({}),
+    pruneImages: (...a: unknown[]) => mockPruneImages(...a),
+    imagePruneImpact: (...a: unknown[]) => mockImagePruneImpact(...a),
     previewCleanup: (...a: unknown[]) => mockPreviewCleanup(...a),
     getCleanupPolicy: (...a: unknown[]) => mockGetCleanupPolicy(...a),
   },
@@ -85,6 +89,8 @@ beforeEach(() => {
   mockDeleteImage.mockResolvedValue({})
   mockPreviewCleanup.mockResolvedValue(EMPTY_PREVIEW)
   mockGetCleanupPolicy.mockResolvedValue(POLICY)
+  mockPruneImages.mockResolvedValue({ outcome: 'success', details: { imagesDeleted: 1 } })
+  mockImagePruneImpact.mockResolvedValue({ stacks: [], uncheckedStacks: [] })
 })
 
 describe('ImagesTab — the scheduled-cleanup readout', () => {
@@ -475,5 +481,58 @@ describe('ImagesTab — a failed Docker read is not an empty host (agent-os-v824
 
     expect(await screen.findByText('No Images')).toBeInTheDocument()
     expect(screen.queryByText(/Could not (load|refresh)/)).not.toBeInTheDocument()
+  })
+})
+
+// agent-os-tt94: "all unused" removes every image no container uses, a
+// stopped or removed stack's images included. The dialog names those stacks
+// and asks for the word "prune" before it removes anything.
+describe('ImagesTab — prune warns about stacks that would lose images', () => {
+  async function openPruneWithAll(all: boolean) {
+    const user = userEvent.setup()
+    renderTab()
+    await screen.findByText('nginx:latest')
+    await user.click(screen.getByRole('button', { name: /^prune$/i }))
+    await screen.findByText('Prune Unused Images?')
+    if (all) await user.click(screen.getByRole('switch'))
+    return user
+  }
+  const confirmButton = () => screen.getAllByRole('button', { name: /^prune$/i }).at(-1)!
+  const typedBox = () => screen.queryByRole('textbox', { name: /type prune to confirm/i })
+
+  it('names the affected stack and keeps Prune disabled until "prune" is typed', async () => {
+    mockImagePruneImpact.mockResolvedValue({
+      stacks: [{ stack: 'shop', items: ['postgres:16', 'shop-api:latest'] }],
+      uncheckedStacks: [],
+    })
+    const user = await openPruneWithAll(true)
+
+    expect(await screen.findByText(/stopped or removed stacks would lose these images/i)).toBeInTheDocument()
+    expect(screen.getByText('shop')).toBeInTheDocument()
+    expect(screen.getByText(/postgres:16, shop-api:latest/)).toBeInTheDocument()
+    expect(confirmButton()).toBeDisabled()
+
+    await user.type(typedBox()!, 'prune')
+    expect(confirmButton()).toBeEnabled()
+    await user.click(confirmButton())
+    await waitFor(() => expect(mockPruneImages).toHaveBeenCalledTimes(1))
+    expect(mockPruneImages.mock.calls[0][0]).toEqual({ all: true, until: undefined })
+  })
+
+  it('says it could not check, and still requires typing, when the check fails', async () => {
+    mockImagePruneImpact.mockRejectedValue(new Error('500'))
+    await openPruneWithAll(true)
+
+    expect(await screen.findByText(/could not check which stacks this prune affects/i)).toBeInTheDocument()
+    expect(typedBox()).toBeInTheDocument()
+    expect(confirmButton()).toBeDisabled()
+  })
+
+  it('does not check or ask for typing when only dangling images are pruned', async () => {
+    await openPruneWithAll(false)
+
+    expect(typedBox()).not.toBeInTheDocument()
+    expect(confirmButton()).toBeEnabled()
+    expect(mockImagePruneImpact).not.toHaveBeenCalled()
   })
 })

@@ -138,9 +138,9 @@ export interface HostCandidateItem {
   dangling?: boolean;
 }
 /**
- * PruneImpact is GET /resources/volumes/prune-impact's and
- * GET /resources/networks/prune-impact's body: the stacks whose volumes or
- * networks Docker's prune would remove (agent-os-8d8a). Docker's rule is
+ * PruneImpact is the body of GET /resources/{volumes,networks,images,containers}/prune-impact:
+ * the stacks whose volumes, networks, images or stopped containers Docker's
+ * prune would remove (agent-os-8d8a, agent-os-tt94). Docker's rule is
  * "unused": a volume no container holds (`prune --all`), which covers a
  * removed stack's volumes; a network no running container is attached to,
  * which covers a stopped or removed stack's networks.
