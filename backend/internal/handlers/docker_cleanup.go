@@ -206,9 +206,7 @@ func (h *ResourcesHandler) updateCleanupPolicy(c *gin.Context) {
 	// clamping: an operator who asked for 0 and was given 1 would believe 0 was
 	// stored. (The service clamps as well, as defence in depth — that clamp is
 	// fn7x.2's and is not the operator-facing contract.)
-	if req.MinAgeHours != nil && *req.MinAgeHours < services.MinCleanupAgeHours {
-		handleError(c, models.NewAppError(http.StatusBadRequest, models.ErrValidation,
-			"minAgeHours must be at least "+strconv.Itoa(services.MinCleanupAgeHours)))
+	if req.MinAgeHours != nil && !validCleanupMinAge(c, *req.MinAgeHours) {
 		return
 	}
 	if req.IntervalHours != nil && *req.IntervalHours < services.MinCleanupIntervalHours {
@@ -484,9 +482,7 @@ func (h *ResourcesHandler) cleanupMinAgeFromRequest(c *gin.Context) (int, bool) 
 	}
 
 	if req.MinAgeHours != nil {
-		if *req.MinAgeHours < services.MinCleanupAgeHours {
-			handleError(c, models.NewAppError(http.StatusBadRequest, models.ErrValidation,
-				"minAgeHours must be at least "+strconv.Itoa(services.MinCleanupAgeHours)))
+		if !validCleanupMinAge(c, *req.MinAgeHours) {
 			return 0, false
 		}
 		return *req.MinAgeHours, true
@@ -500,6 +496,20 @@ func (h *ResourcesHandler) cleanupMinAgeFromRequest(c *gin.Context) (int, bool) 
 		return 0, false
 	}
 	return policy.MinAgeHours, true
+}
+
+// validCleanupMinAge answers 400 and returns false for an age floor outside
+// [MinCleanupAgeHours, MaxCleanupAgeHours]. The ceiling exists because the
+// cutoff arithmetic overflows past it and the floor would then let everything
+// through (see MaxCleanupAgeHours); the service clamps too, but an operator
+// must not be told a value was stored or applied when it was not.
+func validCleanupMinAge(c *gin.Context, hours int) bool {
+	if hours < services.MinCleanupAgeHours || hours > services.MaxCleanupAgeHours {
+		handleError(c, models.NewAppError(http.StatusBadRequest, models.ErrValidation,
+			"minAgeHours must be between "+strconv.Itoa(services.MinCleanupAgeHours)+" and "+strconv.Itoa(services.MaxCleanupAgeHours)))
+		return false
+	}
+	return true
 }
 
 // getCleanupHistory serves GET /resources/cleanup/history: recorded runs, newest

@@ -184,7 +184,8 @@ type HostFreeSpaceBuildCacheResult struct {
 // for the fully-untagged form; see danglingRepository. Tag is set for an
 // unused tagged image (the unused-images category) and empty for a dangling
 // one. ReclaimableSize is Size minus SharedSize, omitted when Docker did not
-// compute SharedSize.
+// compute SharedSize. For a dangling image Size is the full size; for a tagged
+// one Size is already the reclaimable size (0 when unknown), so the two match.
 type DockerCleanupCandidate struct {
 	ID              string `json:"id"`
 	Repository      string `json:"repository,omitempty"`

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math"
 	"reflect"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -1017,4 +1018,95 @@ func TestDockerCleanupPreviewCountsSharedLayersOnce(t *testing.T) {
 			assert.Nil(t, c.ReclaimableSize, "an unknown SharedSize must not be reported as a size")
 		}
 	}
+}
+
+// Adversary B1: the floor has an upper bound. Without one,
+// time.Duration(h)*time.Hour overflows at h >= 2562048, the cutoff lands in
+// the future and a container created an hour ago passes the floor.
+func TestDockerCleanupAgeFloorHasAnUpperBound(t *testing.T) {
+	const overflow = 2562048 // math.MaxInt64 / int64(time.Hour) + 1
+	for _, asked := range []int{MaxCleanupAgeHours, MaxCleanupAgeHours + 1, overflow} {
+		t.Run(strconv.Itoa(asked), func(t *testing.T) {
+			young := hoursAgo(1)
+			host := &lr7xFakeHostSpace{cands: HostCandidates{Containers: []HostCandidateItem{{ID: "young", Created: &young}}}}
+			svc := NewDockerCleanupService(&fn7x2FakeDocker{}, &fn7x2FakeStore{})
+			svc.SetHostSpaceService(host)
+			svc.SetOperationLock(NewOperationLock())
+
+			run, err := svc.Execute(context.Background(), TriggerManual, asked, DockerCleanupCategories{Containers: true})
+			require.NoError(t, err)
+			assert.Empty(t, host.freeReqs, "a container created an hour ago passed a %dh floor", asked)
+			assert.Equal(t, min(asked, MaxCleanupAgeHours), run.MinAgeHours, "the row records the floor applied")
+
+			preview, err := svc.PreviewCategories(context.Background(), asked, DockerCleanupCategories{Containers: true})
+			require.NoError(t, err)
+			assert.Empty(t, preview.Containers, "the preview listed a container created an hour ago")
+
+			docker := &fn7x2FakeDocker{}
+			_, err = NewDockerCleanupService(docker, &fn7x2FakeStore{}).Execute(context.Background(), TriggerManual, asked, DefaultDockerCleanupCategories())
+			require.NoError(t, err, "Docker refuses an until filter past time.Duration's range")
+			require.Len(t, docker.imagePruneOpts, 1)
+			assert.Equal(t, strconv.Itoa(MaxCleanupAgeHours)+"h", docker.imagePruneOpts[0].Until)
+		})
+	}
+}
+
+// Adversary m2: the floor is strict. An object created exactly at the cutoff
+// is kept; one a second older goes.
+func TestDockerCleanupAgeFloorIsStrictAtTheCutoff(t *testing.T) {
+	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	cutoff := now.Add(-24 * time.Hour).Unix()
+	atCutoff, older := cutoff, cutoff-1
+	host := &lr7xFakeHostSpace{cands: HostCandidates{Containers: []HostCandidateItem{
+		{ID: "at-cutoff", Created: &atCutoff},
+		{ID: "older", Created: &older},
+	}}}
+	svc := NewDockerCleanupService(&fn7x2FakeDocker{}, &fn7x2FakeStore{})
+	svc.SetHostSpaceService(host)
+	svc.SetOperationLock(NewOperationLock())
+	svc.now = func() time.Time { return now }
+
+	_, err := svc.Execute(context.Background(), TriggerManual, 24, DockerCleanupCategories{Containers: true})
+	require.NoError(t, err)
+	require.Len(t, host.freeReqs, 1)
+	assert.Equal(t, []string{"older"}, host.freeReqs[0].Containers)
+}
+
+// Adversary M1: a run whose host categories were withheld because a stack's
+// compose file could not be read is a failure naming the stacks and the
+// categories kept, not a silent success. The dangling and cache prunes still
+// run and are counted.
+func TestDockerCleanupCategoriesWithheldStacksFailTheRun(t *testing.T) {
+	old := hoursAgo(100)
+	pruner := &fn7x2FakeDocker{
+		images:         []models.DockerImage{{ID: "sha256:old", RepoTags: []string{"<none>:<none>"}, Size: 100, Created: hoursAgo(48)}},
+		cacheReclaimed: 64,
+	}
+	host := &lr7xFakeHostSpace{cands: HostCandidates{
+		Networks:       []HostCandidateItem{{ID: "n-old", Created: &old}},
+		WithheldStacks: []string{"alpha", "beta"},
+	}}
+	store := &fn7x2FakeStore{}
+	svc := NewDockerCleanupService(pruner, store)
+	svc.SetHostSpaceService(host)
+	svc.SetOperationLock(NewOperationLock())
+
+	run, err := svc.Execute(context.Background(), TriggerScheduled, 24,
+		DockerCleanupCategories{DanglingImages: true, BuildCache: true, Containers: true, Volumes: true})
+	require.Error(t, err)
+	require.Len(t, store.runs, 1)
+	assert.Equal(t, "failed", store.runs[0].Status)
+	assert.Contains(t, store.runs[0].ErrorMessage, "kept containers, volumes")
+	assert.Contains(t, store.runs[0].ErrorMessage, "alpha, beta")
+	assert.Equal(t, 1, run.ImagesDeleted, "the dangling prune still ran")
+	assert.Equal(t, int64(64), run.CacheBytesReclaimed, "the cache prune still ran")
+	assert.Empty(t, host.freeReqs, "nothing of a withheld category is removed")
+
+	// Positive side: the same host with no withheld stacks is a success.
+	host.cands.WithheldStacks = nil
+	store.runs = nil
+	_, err = svc.Execute(context.Background(), TriggerScheduled, 24, DockerCleanupCategories{Networks: true})
+	require.NoError(t, err)
+	require.Len(t, store.runs, 1)
+	assert.Equal(t, "success", store.runs[0].Status)
 }

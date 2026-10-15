@@ -100,6 +100,10 @@ type HostSpaceService struct {
 type hostSpaceSnapshot struct {
 	summary    HostSummary
 	candidates HostCandidates
+	// multiTagged holds the tags of each candidate image with more than one.
+	// Docker refuses to remove such an image by ID without force, so
+	// FreeSpace removes it by its tags.
+	multiTagged map[string][]string
 }
 
 // NewHostSpaceService returns nil when Docker is unavailable, so main.go can
@@ -223,6 +227,7 @@ func (s *HostSpaceService) fetch(ctx context.Context) (*hostSpaceSnapshot, error
 			Networks:       []HostCandidateItem{},
 			WithheldStacks: refs.withheld,
 		},
+		multiTagged: map[string][]string{},
 	}
 	sum, cand := &snap.summary, &snap.candidates
 
@@ -244,6 +249,9 @@ func (s *HostSpaceService) fetch(ctx context.Context) (*hostSpaceSnapshot, error
 			sum.Images.ReclaimableBytes += *size
 		}
 		_, dangling := danglingRepository(img.RepoTags)
+		if tags := realTags(img.RepoTags); len(tags) > 1 {
+			snap.multiTagged[img.ID] = tags
+		}
 		cand.Images = append(cand.Images, HostCandidateItem{ID: img.ID, Label: imageLabel(img), Size: size, Created: knownUnix(img.Created), Dangling: dangling})
 	}
 
@@ -362,6 +370,17 @@ func imageReclaimableSize(img *image.Summary) *int64 {
 	return &size
 }
 
+// realTags drops the untagged placeholders Docker and ListImages report.
+func realTags(repoTags []string) []string {
+	var tags []string
+	for _, t := range repoTags {
+		if t != "" && t != "<none>" && t != "<none>:<none>" && !strings.HasSuffix(t, ":<none>") {
+			tags = append(tags, t)
+		}
+	}
+	return tags
+}
+
 // knownUnix is a Docker Unix creation time, nil when Docker sent none (0).
 func knownUnix(sec int64) *int64 {
 	if sec <= 0 {
@@ -474,13 +493,23 @@ func (s *HostSpaceService) FreeSpace(ctx context.Context, req HostFreeSpaceReque
 		return s.docker.ContainerRemove(ctx, id, container.RemoveOptions{Force: false})
 	})
 	removeEach(req.Images, cand.Images, &res.Images, func(id string) error {
-		resp, err := s.docker.ImageRemove(ctx, id, image.RemoveOptions{Force: false, PruneChildren: false})
-		if err != nil {
-			return err
+		// By ID, unless the image has several tags: Docker then refuses
+		// without force ("image is referenced in multiple repositories",
+		// moby daemon/images/image_delete.go, v28.5.2, read), so each tag
+		// is removed instead and the last one deletes the image.
+		refs := snap.multiTagged[id]
+		if len(refs) == 0 {
+			refs = []string{id}
 		}
-		for _, r := range resp {
-			if r.Deleted != "" {
-				return nil
+		for _, ref := range refs {
+			resp, err := s.docker.ImageRemove(ctx, ref, image.RemoveOptions{Force: false, PruneChildren: false})
+			if err != nil {
+				return err
+			}
+			for _, r := range resp {
+				if r.Deleted != "" {
+					return nil
+				}
 			}
 		}
 		return errors.New("only untagged; the image is still referenced")

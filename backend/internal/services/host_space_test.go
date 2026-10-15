@@ -42,9 +42,12 @@ type hostSpaceFakeDocker struct {
 	attempted bool
 	// removals records every removal call in order; removeErr fails the
 	// removal of the IDs it names.
-	removals    []hostSpaceRemoval
-	removeErr   map[string]error
-	imageResp   map[string][]image.DeleteResponse
+	removals  []hostSpaceRemoval
+	removeErr map[string]error
+	imageResp map[string][]image.DeleteResponse
+	// multiTags, when set, makes ImageRemove follow the daemon's tag rules
+	// for these image IDs (see multiTagRemove).
+	multiTags   map[string][]string
 	cachePrunes []build.CachePruneOptions
 	cacheReport *build.CachePruneReport
 	cacheErr    error
@@ -73,10 +76,45 @@ func (f *hostSpaceFakeDocker) ImageRemove(_ context.Context, id string, opts ima
 	if err := f.recordRemoval(hostSpaceRemoval{kind: "image", id: id, force: opts.Force, pruneChildren: opts.PruneChildren}); err != nil {
 		return nil, err
 	}
+	if resp, err, ok := f.multiTagRemove(id, opts.Force); ok {
+		return resp, err
+	}
 	if resp, ok := f.imageResp[id]; ok {
 		return resp, nil
 	}
 	return []image.DeleteResponse{{Deleted: id}}, nil
+}
+
+// multiTagRemove follows moby's ImageDelete (daemon/images/image_delete.go,
+// v28.5.2, read): by ID without force, an image with more than one tag is a
+// conflict, "image is referenced in multiple repositories"; by tag, the tag is
+// removed and the image is deleted with its last tag. ok is false for an ID
+// not in multiTags.
+func (f *hostSpaceFakeDocker) multiTagRemove(ref string, force bool) ([]image.DeleteResponse, error, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if tags, isID := f.multiTags[ref]; isID {
+		if len(tags) > 1 && !force {
+			return nil, errors.New("conflict: unable to delete " + ref + " (must be forced) - image is referenced in multiple repositories"), true
+		}
+		delete(f.multiTags, ref)
+		return []image.DeleteResponse{{Deleted: ref}}, nil, true
+	}
+	for id, tags := range f.multiTags {
+		for i, tag := range tags {
+			if tag != ref {
+				continue
+			}
+			rest := append(append([]string{}, tags[:i]...), tags[i+1:]...)
+			if len(rest) == 0 {
+				delete(f.multiTags, id)
+				return []image.DeleteResponse{{Untagged: ref}, {Deleted: id}}, nil, true
+			}
+			f.multiTags[id] = rest
+			return []image.DeleteResponse{{Untagged: ref}}, nil, true
+		}
+	}
+	return nil, nil, false
 }
 
 func (f *hostSpaceFakeDocker) NetworkRemove(_ context.Context, id string) error {
@@ -705,4 +743,28 @@ func TestHostSpaceFreeSpace_InvalidatesTheSnapshot(t *testing.T) {
 	_, err = svc.Summary(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, calls+1, docker.calls(), "Summary served the pre-run snapshot")
+}
+
+// Adversary m4: Docker refuses to remove an image with two tags by ID without
+// force ("referenced in multiple repositories"), so such an image would fail
+// every run. It is removed by its tags instead; the last one deletes it.
+func TestHostSpaceFreeSpace_RemovesAMultiTaggedImageByTag(t *testing.T) {
+	docker := &hostSpaceFakeDocker{
+		du: dockertypes.DiskUsage{Images: []*image.Summary{
+			{ID: "sha256:two", RepoTags: []string{"app:1.2", "app:latest"}, Containers: 0, Size: 10},
+			{ID: "sha256:one", RepoTags: []string{"tool:1"}, Containers: 0, Size: 10},
+		}},
+		multiTags: map[string][]string{"sha256:two": {"app:1.2", "app:latest"}, "sha256:one": {"tool:1"}},
+	}
+	svc, _ := newHostSpaceForTest(docker)
+
+	res, err := svc.FreeSpace(context.Background(), HostFreeSpaceRequest{Images: []string{"sha256:two", "sha256:one"}})
+	require.NoError(t, err)
+	assert.Empty(t, res.Images.Failed)
+	assert.ElementsMatch(t, []string{"sha256:two", "sha256:one"}, res.Images.Removed)
+	assert.Equal(t, []hostSpaceRemoval{
+		{kind: "image", id: "app:1.2"},
+		{kind: "image", id: "app:latest"},
+		{kind: "image", id: "sha256:one"},
+	}, docker.removals, "the two-tag image goes by its tags, force=false; a single-tag one by ID")
 }

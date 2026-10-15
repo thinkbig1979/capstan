@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -793,4 +794,33 @@ func TestDockerCleanupPreviewFollowsThePolicyCategories(t *testing.T) {
 	cleanup.mu.Lock()
 	defer cleanup.mu.Unlock()
 	require.Equal(t, []services.DockerCleanupCategories{{BuildCache: true, Volumes: true}}, cleanup.previewCats)
+}
+
+// Adversary B1: minAgeHours has a ceiling on every route that takes it. Past
+// it the service clamps, but the operator must not believe a larger value was
+// stored or applied.
+func TestDockerCleanupMinAgeHasAnUpperBound(t *testing.T) {
+	db := fn7x3MemoryDB(t)
+	r, cleanup, _ := fn7x3Router(t, db)
+	over := strconv.Itoa(services.MaxCleanupAgeHours + 1)
+	at := strconv.Itoa(services.MaxCleanupAgeHours)
+
+	for _, route := range []struct{ method, path string }{
+		{http.MethodPut, "/api/resources/cleanup/policy"},
+		{http.MethodPost, "/api/resources/cleanup/preview"},
+		{http.MethodPost, "/api/resources/cleanup/run"},
+	} {
+		for _, v := range []string{over, "2562048"} {
+			w := fn7x3Do(t, r, route.method, route.path, `{"minAgeHours":`+v+`}`)
+			require.Equal(t, http.StatusBadRequest, w.Code, "%s %s minAgeHours=%s: body = %s", route.method, route.path, v, w.Body.String())
+		}
+		w := fn7x3Do(t, r, route.method, route.path, `{"minAgeHours":`+at+`}`)
+		require.Equal(t, http.StatusOK, w.Code, "%s %s at the ceiling: body = %s", route.method, route.path, w.Body.String())
+	}
+	require.Equal(t, []int{services.MaxCleanupAgeHours}, cleanup.previewed(), "only the in-range preview reached the service")
+	require.Len(t, cleanup.executed(), 1, "only the in-range run reached the service")
+
+	stored, err := db.GetSetting(services.SettingDockerCleanupMinAgeHours)
+	require.NoError(t, err)
+	require.Equal(t, at, stored, "a refused PUT stored its value")
 }
