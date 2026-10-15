@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider, onlineManager } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router'
 import { toast } from 'sonner'
 import { queryKeys } from '@/lib/query-keys'
@@ -764,5 +764,43 @@ describe('AutoCleanupPanel: Run now (agent-os-1xo3)', () => {
       }),
     )
     expect(toast.success).not.toHaveBeenCalled()
+  })
+})
+
+// Moved from settings/__tests__/offlineFirstRender.test.tsx with the schedule.
+// Offline, a query is paused, not failed: the panel must say it is waiting,
+// never that the schedule or the run history could not be read.
+describe('AutoCleanupPanel: offline first render', () => {
+  afterEach(() => onlineManager.setOnline(true))
+
+  it('offline: waits for the schedule and the run history, and claims no failure', () => {
+    onlineManager.setOnline(false)
+    const { container } = renderPanel()
+
+    expect(screen.getByText('Loading...')).toBeInTheDocument()
+    expect(screen.queryByText(/Could not load the cleanup schedule/)).not.toBeInTheDocument()
+    expect(container.querySelector('.animate-spin')).not.toBeNull()
+    expect(screen.queryByText('Run history is unavailable.')).not.toBeInTheDocument()
+  })
+
+  it('offline over a loaded policy: the last run is still being checked, not unreadable', async () => {
+    onlineManager.setOnline(false)
+    const { container, queryClient } = renderPanel()
+    queryClient.setQueryData(queryKeys.settings.dockerCleanup(), POLICY)
+
+    expect(await screen.findByText('Checking the last run...')).toBeInTheDocument()
+    expect(screen.queryByText('The last run could not be read.')).not.toBeInTheDocument()
+    expect(container.querySelector('.animate-spin')).not.toBeNull()
+    expect(screen.queryByText('Run history is unavailable.')).not.toBeInTheDocument()
+  })
+
+  it('online with rejecting reads: says what could not be read, and shows no spinner', async () => {
+    mockGetCleanupPolicy.mockRejectedValue(new Error('down'))
+    mockGetCleanupHistory.mockRejectedValue(new Error('down'))
+    const { container } = renderPanel()
+
+    expect(await screen.findByText(/Could not load the cleanup schedule/)).toBeInTheDocument()
+    expect(await screen.findByText('Run history is unavailable.')).toBeInTheDocument()
+    expect(container.querySelector('.animate-spin')).toBeNull()
   })
 })

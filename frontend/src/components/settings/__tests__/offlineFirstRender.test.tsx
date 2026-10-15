@@ -16,10 +16,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import type { ReactElement } from 'react'
 import { screen, cleanup } from '@testing-library/react'
-import { onlineManager, QueryClient } from '@tanstack/react-query'
+import { onlineManager } from '@tanstack/react-query'
 import { renderWithProviders } from '@/test/utils'
-import { queryKeys } from '@/lib/query-keys'
-import { DockerCleanupCard } from '../DockerCleanupCard'
 import { HistoryRetentionSection } from '../HistoryRetentionSection'
 import { AboutContent } from '../AboutContent'
 import { BackupSettingsContent } from '../BackupSettingsContent'
@@ -63,7 +61,6 @@ interface Page {
 }
 
 const PAGES: Page[] = [
-  { name: 'DockerCleanupCard', element: <DockerCleanupCard />, failure: /could not be read/ },
   { name: 'HistoryRetentionSection', element: <HistoryRetentionSection />, failure: /could not be read/ },
   { name: 'AboutContent', element: <AboutContent />, failure: /Could not read the build identity/ },
   { name: 'BackupSettingsContent', element: <BackupSettingsContent />, failure: /Failed to load backup settings/ },
@@ -93,28 +90,5 @@ describe.each(PAGES)('$name — first render', ({ element, failure, spinner }) =
 
     expect(await screen.findByText(failure)).toBeInTheDocument()
     expect(hasSpinner(container, spinner)).toBe(false)
-  })
-})
-
-describe('DockerCleanupCard — run history, offline over a loaded policy', () => {
-  // The card reaches the history section only once the policy is on screen, so
-  // seed the policy and leave the history query as the paused one.
-  const POLICY = {
-    enabled: false,
-    minAgeHours: 168,
-    intervalHours: 24,
-    minAllowedAgeHours: 6,
-    minAllowedIntervalHours: 2,
-  }
-
-  it('shows a spinner, not "Run history is unavailable."', async () => {
-    onlineManager.setOnline(false)
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-    queryClient.setQueryData(queryKeys.settings.dockerCleanup(), POLICY)
-    const { container } = renderWithProviders(<DockerCleanupCard />, { queryClient })
-
-    expect(await screen.findByText('Recent runs')).toBeInTheDocument()
-    expect(hasSpinner(container)).toBe(true)
-    expect(screen.queryByText('Run history is unavailable.')).not.toBeInTheDocument()
   })
 })

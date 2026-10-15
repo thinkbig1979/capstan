@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef } from 'react'
 import { toast } from 'sonner'
-import { resourcesApi, settingsApi, autoUpdateApi } from '@/lib/api'
+import { resourcesApi, settingsApi, autoUpdateApi, type DockerCleanupPolicyUpdate } from '@/lib/api'
 import { useUpdateScanStore } from '@/stores/updateScanStore'
 import { useUpdateJobStore } from '@/stores/updateJobStore'
 import { presentFault } from '@/lib/error-handler'
@@ -464,7 +464,7 @@ export function useDockerCleanupPolicy() {
 export function useUpdateDockerCleanupPolicy() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (data: Parameters<typeof resourcesApi.updateCleanupPolicy>[0]) =>
+    mutationFn: (data: DockerCleanupPolicyUpdate) =>
       resourcesApi.updateCleanupPolicy(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.settings.dockerCleanup() })
