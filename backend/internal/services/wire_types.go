@@ -22,6 +22,9 @@ type DiskUsageBreakdown struct {
 	// size as unavailable (-1 or no usage data). Volumes then sums only the
 	// known ones, so it is a floor, not a measurement.
 	VolumesSizeKnown bool `json:"volumesSizeKnown"`
+	// ContainersSizeKnown is the same for Containers: false when Docker
+	// reported at least one writable layer's size as -1 (agent-os-rwik).
+	ContainersSizeKnown bool `json:"containersSizeKnown"`
 }
 
 // HostSummary is GET /resources/host/summary's body: per-category counts,
@@ -46,6 +49,9 @@ type HostDiskSummary struct {
 	Reclaimable      int64 `json:"reclaimable"`
 	ReclaimableAll   int64 `json:"reclaimableAll"`
 	VolumesSizeKnown bool  `json:"volumesSizeKnown"`
+	// ContainersSizeKnown: false when some container's writable layer was
+	// not measured, so Total counts only the ones Docker could (agent-os-rwik).
+	ContainersSizeKnown bool `json:"containersSizeKnown"`
 }
 
 // HostContainerSummary: Stopped counts exited, created and dead containers, so
@@ -56,6 +62,9 @@ type HostContainerSummary struct {
 	Stopped          int   `json:"stopped"`
 	ReclaimableCount int   `json:"reclaimableCount"`
 	ReclaimableBytes int64 `json:"reclaimableBytes"`
+	// ReclaimableBytesKnown is false when some candidate's writable layer was
+	// not measured (SizeRw -1), so ReclaimableBytes is a floor (agent-os-rwik).
+	ReclaimableBytesKnown bool `json:"reclaimableBytesKnown"`
 }
 
 // HostImageSummary: Bytes is LayersSize (shared layers counted once);

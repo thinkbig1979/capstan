@@ -38,7 +38,7 @@ const mockStats: DashboardStats = {
   totalContainers: 1,
   runningContainers: 1,
   imageDiskUsage: 0,
-  diskUsage: { images: 0, containers: 0, volumes: 0, buildCache: 0, total: 0, volumesSizeKnown: true },
+  diskUsage: { images: 0, containers: 0, volumes: 0, buildCache: 0, total: 0, volumesSizeKnown: true, containersSizeKnown: true },
   containers: [
     {
       id: 'c1',

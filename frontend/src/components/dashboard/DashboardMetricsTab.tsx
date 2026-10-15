@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import type { DashboardStats } from '@/types'
 import type { DashboardAggregateMetrics } from '@/hooks/useDashboardMetrics'
 import type { ContainerMetricHistory } from '@/hooks/useMetricsBase'
-import { formatBytes } from '@/lib/format'
+import { atLeastBytes, formatBytes } from '@/lib/format'
 
 // Lazy: recharts is only needed once the container rows actually render, so
 // keeping it off DashboardMetricsTab's static import graph lets the rest of
@@ -363,7 +363,7 @@ export function DashboardMetricsTab({
           <CardContent>
             <div className="space-y-4">
               {disk ? (
-                <div className="text-2xl font-bold">{formatBytes(disk.total)}</div>
+                <div className="text-2xl font-bold">{atLeastBytes(disk.total, disk.volumesSizeKnown && disk.containersSizeKnown)}</div>
               ) : (
                 <p className="text-sm text-muted-foreground">Disk usage is unavailable.</p>
               )}
@@ -376,11 +376,11 @@ export function DashboardMetricsTab({
                     </div>
                     <div className="flex justify-between">
                       <span className="text-muted-foreground flex items-center gap-1"><Box className="h-3 w-3" />Containers</span>
-                      <span className="font-medium">{formatBytes(disk.containers)}</span>
+                      <span className="font-medium">{atLeastBytes(disk.containers, disk.containersSizeKnown)}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-muted-foreground flex items-center gap-1"><Database className="h-3 w-3" />Volumes</span>
-                      <span className="font-medium">{formatBytes(disk.volumes)}</span>
+                      <span className="font-medium">{atLeastBytes(disk.volumes, disk.volumesSizeKnown)}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-muted-foreground flex items-center gap-1"><Archive className="h-3 w-3" />Build Cache</span>

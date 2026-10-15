@@ -59,7 +59,7 @@ const emptyHost: DashboardStats = {
   totalContainers: 0,
   runningContainers: 0,
   imageDiskUsage: 0,
-  diskUsage: { total: 0, images: 0, containers: 0, volumes: 0, buildCache: 0, volumesSizeKnown: true },
+  diskUsage: { total: 0, images: 0, containers: 0, volumes: 0, buildCache: 0, volumesSizeKnown: true, containersSizeKnown: true },
   containers: [],
 }
 
@@ -148,6 +148,37 @@ describe('DashboardMetricsTab — omitted stats', () => {
     expect(screen.getByText(/across 0 containers/)).toBeInTheDocument()
     expect(screen.queryByText('Disk usage is unavailable.')).not.toBeInTheDocument()
     expect(screen.queryByText('Host count unavailable')).not.toBeInTheDocument()
+  })
+})
+
+// agent-os-rwik: Docker reports a size it did not measure as -1, and the server
+// skips it, so the sum is a floor. A floor must read "at least", never exact.
+describe('DashboardMetricsTab — disk figures Docker could not fully measure', () => {
+  const MiB = 1024 ** 2
+  const withDisk = (known: boolean): DashboardStats => ({
+    ...emptyHost,
+    diskUsage: {
+      total: 5 * MiB, images: 0, containers: 2 * MiB, volumes: 3 * MiB, buildCache: 0,
+      volumesSizeKnown: known, containersSizeKnown: known,
+    },
+  })
+  const row = (label: string) => screen.getByText(label).closest('div')!.parentElement!
+
+  it('reads "at least" for the containers and volumes figures when some size was unmeasured', () => {
+    renderMetricsTab(withDisk(false))
+
+    expect(row('Containers')).toHaveTextContent('at least 2.00 MB')
+    expect(row('Volumes')).toHaveTextContent('at least 3.00 MB')
+    expect(screen.getByText('at least 5.00 MB')).toBeInTheDocument()
+  })
+
+  it('reads the exact figure when every size was measured', () => {
+    renderMetricsTab(withDisk(true))
+
+    expect(row('Containers')).toHaveTextContent('2.00 MB')
+    expect(row('Volumes')).toHaveTextContent('3.00 MB')
+    expect(screen.getByText('5.00 MB')).toBeInTheDocument()
+    expect(screen.queryByText(/at least/)).not.toBeInTheDocument()
   })
 })
 

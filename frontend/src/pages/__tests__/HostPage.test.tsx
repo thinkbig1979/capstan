@@ -58,8 +58,8 @@ const MiB = 1024 ** 2
 
 function makeSummary(overrides: Partial<HostSummary> = {}): HostSummary {
   return {
-    disk: { total: 10 * GiB, inUse: 8 * GiB, reclaimable: 2 * GiB, reclaimableAll: 3 * GiB, volumesSizeKnown: true },
-    containers: { count: 20, running: 14, stopped: 6, reclaimableCount: 3, reclaimableBytes: 420 * MiB },
+    disk: { total: 10 * GiB, inUse: 8 * GiB, reclaimable: 2 * GiB, reclaimableAll: 3 * GiB, volumesSizeKnown: true, containersSizeKnown: true },
+    containers: { count: 20, running: 14, stopped: 6, reclaimableCount: 3, reclaimableBytes: 420 * MiB, reclaimableBytesKnown: true },
     images: { count: 48, inUse: 31, inUseKnown: true, bytes: 21 * GiB, reclaimableCount: 17, reclaimableBytes: 14 * GiB },
     volumes: { count: 22, attached: 19, attachedKnown: true, bytes: 5 * GiB, sizeKnown: true, reclaimableCount: 3, reclaimableBytes: 1 * GiB },
     networks: { count: 11, builtIn: 3, stackOwned: 8, reclaimableCount: 0 },
@@ -166,7 +166,7 @@ describe('HostPage overview', () => {
 
   it('disables the button as "Nothing to free up" when nothing is reclaimable', async () => {
     hostSummary.mockResolvedValue(
-      makeSummary({ disk: { total: 8 * GiB, inUse: 8 * GiB, reclaimable: 0, reclaimableAll: 0, volumesSizeKnown: true } }),
+      makeSummary({ disk: { total: 8 * GiB, inUse: 8 * GiB, reclaimable: 0, reclaimableAll: 0, volumesSizeKnown: true, containersSizeKnown: true } }),
     )
     renderHost()
     const button = await screen.findByTestId('host-free-space-button')
@@ -191,7 +191,7 @@ describe('HostPage overview', () => {
   it('reads "size unknown" for volumes when Docker could not size them, never 0 B', async () => {
     hostSummary.mockResolvedValue(
       makeSummary({
-        disk: { total: 10 * GiB, inUse: 8 * GiB, reclaimable: 2 * GiB, reclaimableAll: 2 * GiB, volumesSizeKnown: false },
+        disk: { total: 10 * GiB, inUse: 8 * GiB, reclaimable: 2 * GiB, reclaimableAll: 2 * GiB, volumesSizeKnown: false, containersSizeKnown: true },
         volumes: { count: 4, attached: 2, attachedKnown: true, bytes: 0, sizeKnown: false, reclaimableCount: 2, reclaimableBytes: 0 },
       }),
     )
@@ -200,6 +200,36 @@ describe('HostPage overview', () => {
     expect(within(card).getByText('size unknown')).toBeInTheDocument()
     expect(screen.getByTestId('host-card-volumes-reclaim')).toHaveTextContent('2 unattached volumes · size unknown')
     expect(card).not.toHaveTextContent('0 B')
+  })
+
+  // agent-os-rwik: a container Docker could not measure (SizeRw -1) is skipped
+  // from the sums, so both the reclaim figure and the disk total are floors.
+  it('reads "at least" for containers and notes the total when Docker could not size every container', async () => {
+    hostSummary.mockResolvedValue(
+      makeSummary({
+        disk: { total: 10 * GiB, inUse: 8 * GiB, reclaimable: 2 * GiB, reclaimableAll: 3 * GiB, volumesSizeKnown: true, containersSizeKnown: false },
+        containers: { count: 20, running: 14, stopped: 6, reclaimableCount: 3, reclaimableBytes: 420 * MiB, reclaimableBytesKnown: false },
+      }),
+    )
+    renderHost()
+    await screen.findByTestId('host-card-containers')
+    expect(screen.getByTestId('host-card-containers-reclaim')).toHaveTextContent(
+      '3 stopped containers outside any stack · at least 420.00 MB',
+    )
+    expect(
+      screen.getByText('Docker could not measure every container, so the totals count only the containers it could.'),
+    ).toBeInTheDocument()
+  })
+
+  it('reads the containers figure as exact, with no note, when Docker sized every container', async () => {
+    hostSummary.mockResolvedValue(makeSummary())
+    renderHost()
+    await screen.findByTestId('host-card-containers')
+    expect(screen.getByTestId('host-card-containers-reclaim')).toHaveTextContent(
+      '3 stopped containers outside any stack · 420.00 MB',
+    )
+    expect(screen.getByTestId('host-card-containers-reclaim')).not.toHaveTextContent('at least')
+    expect(screen.queryByText(/could not measure every container/)).not.toBeInTheDocument()
   })
 
   it('shows a skeleton while the first fetch is pending', async () => {
