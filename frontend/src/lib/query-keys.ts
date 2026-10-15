@@ -71,6 +71,8 @@ export const queryKeys = {
      */
     volumesPruneImpact: () => ['resources', 'volumes', 'prune-impact'] as const,
     networksPruneImpact: () => ['resources', 'networks', 'prune-impact'] as const,
+    imagesPruneImpact: () => ['resources', 'images', 'prune-impact'] as const,
+    containersPruneImpact: () => ['resources', 'containers', 'prune-impact'] as const,
     buildCache: () => ['resources', 'build-cache'] as const,
     updates: () => ['resources', 'updates'] as const,
     updateJobs: () => ['resources', 'update-jobs'] as const,

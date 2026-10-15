@@ -256,6 +256,14 @@ Direct Docker resource management, independent of any stack.
 - `GET /api/v1/resources/images` — list images
 - `DELETE /api/v1/resources/images/:id` — delete an image
 - `POST /api/v1/resources/images/prune` — prune unused images
+- `GET /api/v1/resources/images/prune-impact` — the stacks whose images an
+  image prune with `all=true` would remove, in the volume prune-impact shape
+  below. Docker's prune removes every image no container uses, stopped ones
+  included, so a stopped or removed stack's images go too. A stack owns an
+  image by its compose project label or names it in its compose file (a
+  built service's default name counts); an image whose containers Docker did
+  not count is listed too. Dangling images are not listed: the default prune
+  removes them anyway. Same error rules as the volume route
 - `GET /api/v1/resources/containers` — list containers
 - `GET /api/v1/resources/containers/:id/inspect` — full inspect output for a
   container
@@ -264,6 +272,10 @@ Direct Docker resource management, independent of any stack.
 - `POST /api/v1/resources/containers/:id/restart` — restart a container
 - `DELETE /api/v1/resources/containers/:id` — delete a container
 - `POST /api/v1/resources/containers/prune` — prune stopped containers
+- `GET /api/v1/resources/containers/prune-impact` — the stacks whose stopped
+  (exited, created or dead) containers a container prune would remove, in the
+  volume prune-impact shape below. The `until` filter is not applied, so the
+  list can only be longer. Same error rules as the volume route
 - `GET /api/v1/resources/updates` — check for available image updates
 - `POST /api/v1/resources/containers/:id/update` — update a single container
   to its latest image

@@ -605,6 +605,12 @@ export function ContainersOverviewTab({ stats, latestMetrics, metricsStatus }: C
             options={{ until: true }}
             confirmMessage="Prune Stopped Containers?"
             confirmDescription="All stopped containers will be permanently removed."
+            stackImpact={{
+              queryKey: queryKeys.resources.containersPruneImpact(),
+              queryFn: () => resourcesApi.containerPruneImpact(),
+              noun: 'containers',
+              heading: 'These stopped stacks would lose these containers:',
+            }}
             invalidateKeys={[queryKeys.dashboardStats(), queryKeys.stacks()]}
           />
         }

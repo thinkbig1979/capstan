@@ -175,6 +175,7 @@ func (h *ResourcesHandler) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/resources/images", h.listImages)
 	r.DELETE("/resources/images/:id", h.deleteImage)
 	r.POST("/resources/images/prune", h.pruneImages)
+	r.GET("/resources/images/prune-impact", h.getImagePruneImpact)
 
 	r.GET("/resources/containers", h.listContainers)
 	r.GET("/resources/containers/:id/inspect", h.inspectContainer)
@@ -183,6 +184,7 @@ func (h *ResourcesHandler) RegisterRoutes(r *gin.RouterGroup) {
 	r.POST("/resources/containers/:id/restart", h.restartContainer)
 	r.DELETE("/resources/containers/:id", h.deleteContainer)
 	r.POST("/resources/containers/prune", h.pruneContainers)
+	r.GET("/resources/containers/prune-impact", h.getContainerPruneImpact)
 
 	r.GET("/resources/updates", h.checkUpdates)
 	r.POST("/resources/containers/:id/update", h.updateContainer)

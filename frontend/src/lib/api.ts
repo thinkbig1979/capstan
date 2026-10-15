@@ -703,6 +703,11 @@ export const resourcesApi = {
     const response = await apiClient.post<PruneResult>(`/resources/images/prune${pruneQuery(opts)}`)
     return response.data
   },
+  /** The stacks an image prune with "all unused" would take images from (agent-os-tt94). */
+  imagePruneImpact: async () => {
+    const response = await apiClient.get<PruneImpact>('/resources/images/prune-impact')
+    return response.data
+  },
 
   inspectContainer: async (id: string) => {
     const response = await apiClient.get<Record<string, unknown>>(`/resources/containers/${encodeURIComponent(id)}/inspect`)
@@ -727,6 +732,11 @@ export const resourcesApi = {
   },
   pruneContainers: async (opts?: PruneOptions) => {
     const response = await apiClient.post<PruneResult>(`/resources/containers/prune${pruneQuery(opts)}`)
+    return response.data
+  },
+  /** The stacks a container prune would take stopped containers from (agent-os-tt94). */
+  containerPruneImpact: async () => {
+    const response = await apiClient.get<PruneImpact>('/resources/containers/prune-impact')
     return response.data
   },
 
