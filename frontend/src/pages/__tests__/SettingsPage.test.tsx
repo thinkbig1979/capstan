@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react'
 import { MemoryRouter, Routes, Route } from 'react-router'
 import type { User } from '@/types'
 
@@ -52,9 +52,9 @@ vi.mock('@/components/settings/AuditLogContent', () => ({
 vi.mock('@/components/settings/GlobalEnvSettingsContent', () => ({
   GlobalEnvSettingsContent: () => <div data-testid="section-global-env" />,
 }))
-vi.mock('@/components/settings/DockerCleanupCard', () => ({
-  DockerCleanupCard: () => <div data-testid="section-docker-cleanup" />,
-}))
+// DockerCleanupCard is NOT stubbed: since agent-os-6qfz it is only the
+// "moved to the Docker host page" notice, with no data hooks, and the notice
+// itself is this page's contract for /settings/docker-cleanup (AC13).
 
 import { SettingsPage } from '../SettingsPage'
 
@@ -95,8 +95,30 @@ describe('SettingsPage', () => {
       // assertion alone is vacuous for the other half.
       renderPage('/settings/docker-cleanup')
 
-      expect(screen.getByTestId('section-docker-cleanup')).toBeInTheDocument()
+      expect(screen.getByTestId('settings-docker-cleanup-moved')).toBeInTheDocument()
       expect(screen.getByRole('link', { name: /Docker cleanup/ })).toBeInTheDocument()
+    })
+
+    it('says Docker cleanup moved, links to the host page panel, and renders no form (AC13)', () => {
+      renderPage('/settings/docker-cleanup')
+
+      const moved = screen.getByTestId('settings-docker-cleanup-moved')
+      expect(moved).toHaveTextContent('Docker cleanup moved to the Docker host page')
+      expect(within(moved).getByRole('link', { name: 'Open automatic cleanup' })).toHaveAttribute(
+        'href',
+        '/host#automatic-cleanup',
+      )
+      expect(screen.queryByLabelText('Age floor (hours)')).toBeNull()
+      expect(screen.queryByRole('button', { name: 'Save cleanup schedule' })).toBeNull()
+    })
+
+    it('finds exactly one link when searching for "cleanup"', () => {
+      renderPage('/settings')
+      fireEvent.change(screen.getByLabelText('Search settings'), { target: { value: 'cleanup' } })
+
+      const nav = screen.getByRole('navigation', { name: 'Settings sections' })
+      expect(within(nav).getAllByRole('link')).toHaveLength(1)
+      expect(within(nav).getByRole('link', { name: /Docker cleanup/ })).toBeInTheDocument()
     })
 
     it('falls back to Account Security for an unknown section id', () => {

@@ -464,27 +464,14 @@ export function useDockerCleanupPolicy() {
 export function useUpdateDockerCleanupPolicy() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (data: { enabled?: boolean; minAgeHours?: number; intervalHours?: number }) =>
+    mutationFn: (data: Parameters<typeof resourcesApi.updateCleanupPolicy>[0]) =>
       resourcesApi.updateCleanupPolicy(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.settings.dockerCleanup() })
+      // The stored-policy preview lists only the categories switched on, at
+      // the stored floor, so a saved change makes it stale.
+      queryClient.invalidateQueries({ queryKey: queryKeys.resources.cleanupPreview() })
     },
-  })
-}
-
-/**
- * The settings card's try-a-floor preview is a mutation rather than a query
- * because it takes a floor the OPERATOR is trying out: it runs when they press
- * Preview, at a number that is not the stored one, and must re-run on demand
- * rather than be served from cache — a stale candidate list is a list of images
- * that may already be gone. It invalidates nothing, because it changes nothing.
- *
- * The read at the STORED floor is a different thing and is a query. See
- * useScheduledCleanupPreview below.
- */
-export function usePreviewDockerCleanup() {
-  return useMutation({
-    mutationFn: (minAgeHours?: number) => resourcesApi.previewCleanup(minAgeHours),
   })
 }
 
@@ -507,7 +494,7 @@ export function useScheduledCleanupPreview() {
 }
 
 /**
- * Recorded cleanup runs for the settings card, newest first. The limit is fixed
+ * Recorded cleanup runs for the automatic cleanup panel, newest first. The limit is fixed
  * at the call site and is NOT part of the query key, which is correct while
  * there is one reader; a second reader at another limit would silently read
  * this one's cached page.
@@ -541,6 +528,11 @@ export function useRunDockerCleanup() {
         queryKeys.resources.cleanupPreview(),
         // A run prunes build cache as well as images.
         queryKeys.resources.buildCache(),
+        // With those categories switched on it also removes volumes, networks
+        // and stopped containers, and every one of them moves the host numbers.
+        queryKeys.resources.volumes(),
+        queryKeys.resources.networks(),
+        queryKeys.resources.hostSummary(),
       ]) {
         queryClient.invalidateQueries({ queryKey: key })
       }
