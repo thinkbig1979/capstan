@@ -65,6 +65,12 @@ export const queryKeys = {
     images: () => ['resources', 'images'] as const,
     volumes: () => ['resources', 'volumes'] as const,
     networks: () => ['resources', 'networks'] as const,
+    /**
+     * Which stacks a prune would take volumes / networks from. Under the
+     * list's prefix, so invalidating the list re-checks it too.
+     */
+    volumesPruneImpact: () => ['resources', 'volumes', 'prune-impact'] as const,
+    networksPruneImpact: () => ['resources', 'networks', 'prune-impact'] as const,
     buildCache: () => ['resources', 'build-cache'] as const,
     updates: () => ['resources', 'updates'] as const,
     updateJobs: () => ['resources', 'update-jobs'] as const,

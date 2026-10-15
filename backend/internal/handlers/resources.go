@@ -201,11 +201,13 @@ func (h *ResourcesHandler) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/resources/volumes", h.listVolumes)
 	r.DELETE("/resources/volumes/:name", h.deleteVolume)
 	r.POST("/resources/volumes/prune", h.pruneVolumes)
+	r.GET("/resources/volumes/prune-impact", h.getVolumePruneImpact)
 
 	r.GET("/resources/networks", h.listNetworks)
 	r.POST("/resources/networks", h.createNetwork)
 	r.DELETE("/resources/networks/:id", h.deleteNetwork)
 	r.POST("/resources/networks/prune", h.pruneNetworks)
+	r.GET("/resources/networks/prune-impact", h.getNetworkPruneImpact)
 
 	r.GET("/resources/build-cache", h.listBuildCache)
 	r.POST("/resources/build-cache/prune", h.pruneBuildCache)

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
-import type { QueryKey } from '@tanstack/react-query'
+import { useQuery, type QueryKey } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
@@ -9,6 +10,7 @@ import { cn } from '@/lib/utils'
 import { useActionMutation } from '@/hooks/useActionMutation'
 import { formatBytes } from '@/lib/format'
 import type { PruneOptions, PruneResult } from '@/lib/api'
+import type { PruneImpact } from '@/types/generated-services'
 
 /**
  * Extracts count and space from a prune ActionResult. A `no_change` result
@@ -59,6 +61,25 @@ export interface PruneOptionConfig {
   until?: boolean
 }
 
+/**
+ * A prune whose Docker rule can take a stack's objects (agent-os-8d8a): the
+ * dialog lists the stacks that would lose something and asks for
+ * PRUNE_CONFIRM_WORD. It also asks when it could not check, since the prune
+ * then may remove a stack's data unseen.
+ */
+interface PruneStackImpactConfig {
+  queryKey: QueryKey
+  queryFn: () => Promise<PruneImpact>
+  /** Whether the chosen options need the check; always when absent. */
+  when?: (opts: { all: boolean }) => boolean
+  /** What a stack loses, plural: "volumes". */
+  noun: string
+  /** Lead-in for the list of affected stacks. */
+  heading: string
+}
+
+const PRUNE_CONFIRM_WORD = 'prune'
+
 interface PruneButtonProps {
   label?: string
   resourceType: string
@@ -68,6 +89,7 @@ interface PruneButtonProps {
   /** Keys to invalidate once the prune settles — build these from `queryKeys`. */
   invalidateKeys: QueryKey[]
   options?: PruneOptionConfig
+  stackImpact?: PruneStackImpactConfig
   onPruneComplete?: () => void
 }
 
@@ -88,12 +110,14 @@ export function PruneButton({
   confirmDescription,
   invalidateKeys,
   options,
+  stackImpact,
   onPruneComplete,
 }: PruneButtonProps) {
   const [phase, setPhase] = useState<'idle' | 'pruning' | 'done' | 'error'>('idle')
   const [open, setOpen] = useState(false)
   const [all, setAll] = useState(false)
   const [until, setUntil] = useState('')
+  const [typed, setTyped] = useState('')
   const [result, setResult] = useState<PruneResult | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -129,8 +153,46 @@ export function PruneButton({
     },
   })
 
+  // Read fresh each time the dialog opens: the user is about to delete.
+  const checkImpact = open && !!stackImpact && (stackImpact.when?.({ all }) ?? true)
+  const impact = useQuery({
+    queryKey: stackImpact?.queryKey ?? ['prune-impact', 'none'],
+    queryFn: () => stackImpact!.queryFn(),
+    enabled: checkImpact,
+    staleTime: 0,
+    retry: false,
+  })
+  // An error wins over data a refetch kept: an old answer is not a check.
+  const impactState = !checkImpact
+    ? 'off'
+    : impact.isError
+      ? 'failed'
+      : impact.isFetching || !impact.data
+        ? 'checking'
+        : 'checked'
+  const affected = impactState === 'checked' ? impact.data!.stacks : []
+  const unchecked = impactState === 'checked' ? impact.data!.uncheckedStacks : []
+  const needsTyping = impactState === 'failed' || affected.length > 0 || unchecked.length > 0
+
+  // The typed word consents to the answer on screen. A new answer, or a
+  // failed re-check, clears it (adjusted during render, as ConfirmDialog does).
+  const answerVersion = `${impact.dataUpdatedAt}:${impact.errorUpdatedAt}`
+  const [consentedTo, setConsentedTo] = useState(answerVersion)
+  if (answerVersion !== consentedTo) {
+    setConsentedTo(answerVersion)
+    setTyped('')
+  }
+  const canConfirm = impactState !== 'checking' && (!needsTyping || typed === PRUNE_CONFIRM_WORD)
+
+  const handleOpenChange = (next: boolean) => {
+    setOpen(next)
+    setTyped('')
+  }
+
   const handleConfirm = () => {
+    if (!canConfirm) return
     setOpen(false)
+    setTyped('')
     setPhase('pruning')
     mutation.mutate({ all, until: until || undefined })
   }
@@ -185,7 +247,7 @@ export function PruneButton({
   }
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
         <Button
           variant="outline"
@@ -208,7 +270,14 @@ export function PruneButton({
               <Label htmlFor="prune-all" className="text-xs font-normal leading-snug text-foreground">
                 {options.all.label}
               </Label>
-              <Switch id="prune-all" checked={all} onCheckedChange={setAll} />
+              <Switch
+                id="prune-all"
+                checked={all}
+                onCheckedChange={(next) => {
+                  setAll(next)
+                  setTyped('')
+                }}
+              />
             </div>
           )}
 
@@ -235,11 +304,69 @@ export function PruneButton({
             </div>
           )}
 
+          {stackImpact && impactState !== 'off' && (
+            <div className="space-y-2 text-xs" data-testid="prune-stack-impact">
+              {impactState === 'checking' && (
+                <p className="flex items-center gap-1.5 text-muted-foreground">
+                  <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+                  Checking which stacks this prune affects…
+                </p>
+              )}
+              {impactState === 'failed' && (
+                <p role="alert" className="text-destructive">
+                  Could not check which stacks this prune affects. It may remove a stack&apos;s {stackImpact.noun}.
+                </p>
+              )}
+              {affected.length > 0 && (
+                <div role="alert" className="space-y-1 rounded border border-destructive/50 p-2">
+                  <p className="font-medium text-destructive">{stackImpact.heading}</p>
+                  <ul className="max-h-32 space-y-0.5 overflow-y-auto">
+                    {affected.map((s) => (
+                      <li key={s.stack} className="break-words">
+                        <span className="font-medium">{s.stack}</span>: {s.items.join(', ')}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {unchecked.length > 0 && (
+                <p role="alert" className="text-destructive">
+                  Could not read the compose file of: {unchecked.join(', ')}. The prune may remove their{' '}
+                  {stackImpact.noun}.
+                </p>
+              )}
+              {impactState === 'checked' && !needsTyping && (
+                <p className="text-muted-foreground">No stack loses {stackImpact.noun} to this prune.</p>
+              )}
+              {needsTyping && (
+                <div className="space-y-1">
+                  <Label htmlFor="prune-confirm-word" className="text-xs font-normal">
+                    Type <span className="font-mono font-semibold">{PRUNE_CONFIRM_WORD}</span> to confirm
+                  </Label>
+                  <Input
+                    id="prune-confirm-word"
+                    value={typed}
+                    onChange={(e) => setTyped(e.target.value)}
+                    autoComplete="off"
+                    className="h-7 text-xs"
+                    aria-label={`Type ${PRUNE_CONFIRM_WORD} to confirm`}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="flex justify-end gap-2 pt-1">
-            <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setOpen(false)}>
+            <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => handleOpenChange(false)}>
               Cancel
             </Button>
-            <Button size="sm" variant="destructive" className="h-7 text-xs" onClick={handleConfirm}>
+            <Button
+              size="sm"
+              variant="destructive"
+              className="h-7 text-xs"
+              onClick={handleConfirm}
+              disabled={!canConfirm}
+            >
               Prune
             </Button>
           </div>

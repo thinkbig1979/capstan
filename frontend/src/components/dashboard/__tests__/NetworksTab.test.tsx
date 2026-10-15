@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { NetworksTab } from '../NetworksTab'
@@ -14,12 +15,15 @@ import type { DockerNetwork } from '@/types'
 
 const mockGetNetworks = vi.fn()
 const mockDeleteNetwork = vi.fn()
+const mockPruneNetworks = vi.fn()
+const mockNetworkPruneImpact = vi.fn()
 
 vi.mock('@/lib/api', () => ({
   resourcesApi: {
     networks: (...a: unknown[]) => mockGetNetworks(...a),
     deleteNetwork: (...a: unknown[]) => mockDeleteNetwork(...a),
-    pruneNetworks: vi.fn().mockResolvedValue({}),
+    pruneNetworks: (...a: unknown[]) => mockPruneNetworks(...a),
+    networkPruneImpact: (...a: unknown[]) => mockNetworkPruneImpact(...a),
   },
 }))
 
@@ -61,6 +65,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   mockGetNetworks.mockResolvedValue([network()])
   mockDeleteNetwork.mockResolvedValue({})
+  mockPruneNetworks.mockResolvedValue({ outcome: 'no_change', reason: 'nothing to prune', details: { deleted: [] } })
+  mockNetworkPruneImpact.mockResolvedValue({ stacks: [], uncheckedStacks: [] })
 })
 
 describe('NetworksTab — loading and empty', () => {
@@ -309,5 +315,60 @@ describe('NetworksTab — a failed Docker read is not an empty host (agent-os-v8
 
     expect(await screen.findByText('No Networks')).toBeInTheDocument()
     expect(screen.queryByText(/Could not (load|refresh)/)).not.toBeInTheDocument()
+  })
+})
+
+// agent-os-8d8a: network prune removes every network no RUNNING container is
+// attached to, so a stopped stack loses its networks as well as a removed one
+// (an external network's loss fails the next up). The dialog names those
+// stacks and asks for the word "prune".
+describe('NetworksTab — prune warns about stacks that would lose networks', () => {
+  async function openPrune() {
+    const user = userEvent.setup()
+    renderTab()
+    await screen.findByText('web_default')
+    await user.click(screen.getByRole('button', { name: /^prune$/i }))
+    await screen.findByText('Prune Unused Networks?')
+    return user
+  }
+  const confirmButton = () => screen.getAllByRole('button', { name: /^prune$/i }).at(-1)!
+  const typedBox = () => screen.queryByRole('textbox', { name: /type prune to confirm/i })
+
+  it('names the affected stack as stopped or removed, and keeps Prune disabled until "prune" is typed', async () => {
+    mockNetworkPruneImpact.mockResolvedValue({
+      stacks: [{ stack: 'shop', items: ['proxy', 'shop_default'] }],
+      uncheckedStacks: [],
+    })
+    const user = await openPrune()
+
+    // Pinned copy: "down" alone would be false, a STOPPED stack loses its
+    // networks too (OBSERVED on Docker API 1.45).
+    expect(await screen.findByText(/stopped or removed stacks would lose these networks/i)).toBeInTheDocument()
+    expect(screen.getByText('shop')).toBeInTheDocument()
+    expect(screen.getByText(/proxy, shop_default/)).toBeInTheDocument()
+    expect(confirmButton()).toBeDisabled()
+
+    await user.type(typedBox()!, 'prune')
+    expect(confirmButton()).toBeEnabled()
+    await user.click(confirmButton())
+    await waitFor(() => expect(mockPruneNetworks).toHaveBeenCalledTimes(1))
+  })
+
+  it('says no stack is affected and needs no typing when none is', async () => {
+    await openPrune()
+
+    expect(await screen.findByText(/no stack loses networks to this prune/i)).toBeInTheDocument()
+    expect(typedBox()).not.toBeInTheDocument()
+    expect(confirmButton()).toBeEnabled()
+  })
+
+  it('says it could not check, and still requires typing, when the check fails', async () => {
+    mockNetworkPruneImpact.mockRejectedValue(new Error('503'))
+    const user = await openPrune()
+
+    expect(await screen.findByText(/could not check which stacks this prune affects/i)).toBeInTheDocument()
+    expect(confirmButton()).toBeDisabled()
+    await user.type(typedBox()!, 'prune')
+    expect(confirmButton()).toBeEnabled()
   })
 })
