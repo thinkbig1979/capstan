@@ -47,6 +47,10 @@ const (
 	// OpKindHostFreeSpace is the Free-up-space dialog's removal of a list of
 	// images, containers, networks and volumes across every stack.
 	OpKindHostFreeSpace = "free up space"
+	// OpKindDockerCleanup is a cleanup run (scheduled or manual) that removes
+	// unused tagged images, containers, volumes or networks. A run limited to
+	// dangling images and build cache takes no turn.
+	OpKindDockerCleanup = "docker cleanup"
 )
 
 // OperationLock is a per-stack try-lock: Acquire fails fast instead of waiting

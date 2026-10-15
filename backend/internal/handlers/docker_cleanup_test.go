@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -36,6 +37,7 @@ type fn7x3HandlerExecuteCall struct {
 type fn7x3FakeCleanup struct {
 	mu           sync.Mutex
 	previewCalls []int
+	previewCats  []services.DockerCleanupCategories
 	executeCalls []fn7x3HandlerExecuteCall
 
 	preview    *services.DockerCleanupPreview
@@ -48,10 +50,11 @@ type fn7x3FakeCleanup struct {
 	executeDeadline    time.Time
 }
 
-func (f *fn7x3FakeCleanup) Preview(_ context.Context, minAgeHours int) (*services.DockerCleanupPreview, error) {
+func (f *fn7x3FakeCleanup) PreviewCategories(_ context.Context, minAgeHours int, categories services.DockerCleanupCategories) (*services.DockerCleanupPreview, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.previewCalls = append(f.previewCalls, minAgeHours)
+	f.previewCats = append(f.previewCats, categories)
 	if f.previewErr != nil {
 		return nil, f.previewErr
 	}
@@ -755,4 +758,69 @@ func TestCleanupPolicyCategories(t *testing.T) {
 		require.Equal(t, services.DockerCleanupCategories{BuildCache: true, Networks: true}, calls[0].categories,
 			"the body supplied the floor; the categories still come from the policy")
 	})
+}
+
+// TestDockerCleanupRunRefusesWhileTheTurnIsHeld (agent-os-lr7x): a manual run
+// of the host categories that finds the exclusive stack turn held answers 409
+// OPERATION_IN_PROGRESS naming the holder, the shape every other exclusive-turn
+// route gives, and leaves no audit row.
+func TestDockerCleanupRunRefusesWhileTheTurnIsHeld(t *testing.T) {
+	db := fn7x3MemoryDB(t)
+	r, cleanup, _ := fn7x3Router(t, db)
+	cleanup.executeErr = fmt.Errorf("%w: start in progress since 2026-10-15T10:00:00Z", services.ErrCleanupTurnBusy)
+
+	w := fn7x3Do(t, r, http.MethodPost, "/api/resources/cleanup/run", "")
+	require.Equal(t, http.StatusConflict, w.Code, "body = %s", w.Body.String())
+	var body struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body), "body = %s", w.Body.String())
+	require.Equal(t, models.ErrOperationInProgress, body.Code)
+	require.Contains(t, body.Message, "start in progress since")
+	require.Empty(t, auditEntries(t, db, services.ActionPrune))
+}
+
+// TestDockerCleanupPreviewFollowsThePolicyCategories (agent-os-lr7x): the
+// preview asks for the categories the stored policy has switched on.
+func TestDockerCleanupPreviewFollowsThePolicyCategories(t *testing.T) {
+	db := fn7x3MemoryDB(t)
+	require.NoError(t, db.SetSetting(services.SettingDockerCleanupDanglingImages, "false"))
+	require.NoError(t, db.SetSetting(services.SettingDockerCleanupVolumes, "true"))
+	r, cleanup, _ := fn7x3Router(t, db)
+
+	w := fn7x3Do(t, r, http.MethodPost, "/api/resources/cleanup/preview", "")
+	require.Equal(t, http.StatusOK, w.Code, "body = %s", w.Body.String())
+	cleanup.mu.Lock()
+	defer cleanup.mu.Unlock()
+	require.Equal(t, []services.DockerCleanupCategories{{BuildCache: true, Volumes: true}}, cleanup.previewCats)
+}
+
+// Adversary B1: minAgeHours has a ceiling on every route that takes it. Past
+// it the service clamps, but the operator must not believe a larger value was
+// stored or applied.
+func TestDockerCleanupMinAgeHasAnUpperBound(t *testing.T) {
+	db := fn7x3MemoryDB(t)
+	r, cleanup, _ := fn7x3Router(t, db)
+	over := strconv.Itoa(services.MaxCleanupAgeHours + 1)
+	at := strconv.Itoa(services.MaxCleanupAgeHours)
+
+	for _, route := range []struct{ method, path string }{
+		{http.MethodPut, "/api/resources/cleanup/policy"},
+		{http.MethodPost, "/api/resources/cleanup/preview"},
+		{http.MethodPost, "/api/resources/cleanup/run"},
+	} {
+		for _, v := range []string{over, "2562048"} {
+			w := fn7x3Do(t, r, route.method, route.path, `{"minAgeHours":`+v+`}`)
+			require.Equal(t, http.StatusBadRequest, w.Code, "%s %s minAgeHours=%s: body = %s", route.method, route.path, v, w.Body.String())
+		}
+		w := fn7x3Do(t, r, route.method, route.path, `{"minAgeHours":`+at+`}`)
+		require.Equal(t, http.StatusOK, w.Code, "%s %s at the ceiling: body = %s", route.method, route.path, w.Body.String())
+	}
+	require.Equal(t, []int{services.MaxCleanupAgeHours}, cleanup.previewed(), "only the in-range preview reached the service")
+	require.Len(t, cleanup.executed(), 1, "only the in-range run reached the service")
+
+	stored, err := db.GetSetting(services.SettingDockerCleanupMinAgeHours)
+	require.NoError(t, err)
+	require.Equal(t, at, stored, "a refused PUT stored its value")
 }

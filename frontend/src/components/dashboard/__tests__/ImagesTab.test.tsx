@@ -53,6 +53,7 @@ const image = (over: Partial<DockerImage> = {}): DockerImage => ({
   id: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
   repoTags: ['nginx:latest'],
   size: 1024 * 1024,
+  sharedSize: 0,
   created: 1754640000,
   containers: 0,
   containersKnown: true,

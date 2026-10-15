@@ -67,6 +67,7 @@ internal/services/scanner.go|rootContainsPath|chooses WHICH configured root a sc
 internal/services/scanner.go|expectedStackID|filepath.Rel derives the stack ID path segment, not a containment verdict
 internal/services/scanner.go|scanDirectoryWithRoot|filepath.Rel derives the stack ID path segment, not a containment verdict
 internal/handlers/git.go|isValidLogFile|validates a git pathspec passed after "--"; no filesystem I/O, and git itself refuses paths outside the repository
+internal/services/host_space_compose_refs.go|normalizedImageRefs|strips the docker.io/ and library/ prefixes of an image REFERENCE (registry/repo:tag) to match RepoTags; no filesystem path, no I/O
 '
 
 usage() {
@@ -247,6 +248,16 @@ package handlers
 func isValidLogFile(file string) bool {
 	cleaned := filepath.Clean(file)
 	return cleaned != ".." && !strings.HasPrefix(cleaned, "../")
+}
+GO
+  cat > "$d/internal/services/host_space_compose_refs.go" <<'GO'
+package services
+
+func normalizedImageRefs(name string) []string {
+	if rest, ok := strings.CutPrefix(name, "library/"); ok && !strings.Contains(rest, "/") {
+		return []string{rest}
+	}
+	return []string{name}
 }
 GO
   cat > "$d/internal/pathutil/pathutil.go" <<'GO'

@@ -742,3 +742,52 @@ func TestDockerCleanupTickPassesThePolicyCategories(t *testing.T) {
 	require.Len(t, calls, 1)
 	assert.Equal(t, DockerCleanupCategories{Volumes: true}, calls[0].categories)
 }
+
+// TestDockerCleanupCategoriesBusyTurnRecordsOneSkippedRow is AC21 (c): a
+// scheduled run that needs the exclusive turn and finds it held records
+// exactly one 'skipped' row naming the holder, and removes nothing. The next
+// tick, with the turn free, runs.
+func TestDockerCleanupCategoriesBusyTurnRecordsOneSkippedRow(t *testing.T) {
+	db := fn7x3MemoryDB(t)
+	require.NoError(t, db.SetSetting(SettingDockerCleanupEnabled, "true"))
+	require.NoError(t, db.SetSetting(SettingDockerCleanupMinAgeHours, "24"))
+	require.NoError(t, db.SetSetting(SettingDockerCleanupContainers, "true"))
+
+	pruner := &fn7x2FakeDocker{images: []models.DockerImage{
+		{ID: "sha256:old", RepoTags: []string{"<none>:<none>"}, Size: 100, Created: hoursAgo(48)},
+	}}
+	old := hoursAgo(100)
+	host := &lr7xFakeHostSpace{cands: HostCandidates{Containers: []HostCandidateItem{{ID: "c-old", Created: &old}}}}
+	lock := NewOperationLock()
+	svc := NewDockerCleanupService(pruner, db)
+	svc.SetHostSpaceService(host)
+	svc.SetOperationLock(lock)
+	s, _ := fn7x3Scheduler(t, db, svc)
+
+	held, err := lock.AcquireExclusive(OpKindContainerPrune)
+	require.NoError(t, err)
+	s.runCycle(context.Background())
+
+	runs, err := db.GetDockerCleanupRuns(10)
+	require.NoError(t, err)
+	require.Len(t, runs, 1, "a busy turn must leave exactly one history row")
+	assert.Equal(t, "skipped", runs[0].Status)
+	assert.Equal(t, TriggerScheduled, runs[0].Trigger)
+	assert.Contains(t, runs[0].ErrorMessage, "container prune in progress since", "the row names the holder")
+	assert.Equal(t, 24, runs[0].MinAgeHours)
+	assert.Empty(t, runs[0].Categories, "nothing was attempted")
+	assert.Empty(t, pruner.imagePruneOpts, "a skipped run pruned dangling images")
+	assert.Empty(t, host.freeReqs, "a skipped run removed items")
+
+	// Positive side: with the turn free the next tick runs and records success.
+	lock.ReleaseExclusive(held)
+	s.runCycle(context.Background())
+	runs, err = db.GetDockerCleanupRuns(10)
+	require.NoError(t, err)
+	require.Len(t, runs, 2)
+	statuses := []string{runs[0].Status, runs[1].Status}
+	assert.ElementsMatch(t, []string{"skipped", "success"}, statuses)
+	require.Len(t, host.freeReqs, 1)
+	assert.Equal(t, []string{"c-old"}, host.freeReqs[0].Containers)
+	assert.Equal(t, 1, host.invalidations, "a scheduled run that removed items invalidates the host summary exactly once")
+}

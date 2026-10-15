@@ -109,16 +109,28 @@ export interface HostCandidates {
   containers: HostCandidateItem[];
   volumes: HostCandidateItem[];
   networks: HostCandidateItem[];
+  /**
+   * WithheldStacks names the stacks whose compose file could not be read.
+   * While it is non-empty no image, container, volume or network is listed:
+   * such a stack could name any of them (agent-os-3rr3). Omitted when empty.
+   */
+  withheldStacks?: string[];
 }
 /**
  * HostCandidateItem is one removable object. Size is omitted when Docker did
  * not report it, so an unknown size is never sent as a measured 0.
+ * Created is the creation time in Unix seconds, omitted when Docker did not
+ * report one: the scheduled cleanup keeps an object of unknown age. Dangling
+ * marks an untagged image, which the scheduled cleanup leaves to its own
+ * dangling-images switch.
  */
 export interface HostCandidateItem {
   id: string;
   label: string;
   size?: number /* int64 */;
   detail?: string;
+  created?: number /* int64 */;
+  dangling?: boolean;
 }
 /**
  * HostBuildCacheCandidates: build cache is removed as a whole, not per record.
@@ -186,26 +198,46 @@ export interface HostFreeSpaceBuildCacheResult {
 }
 /**
  * DockerCleanupCandidate is one image a run would remove. Repository is empty
- * for the fully-untagged form; see danglingRepository.
+ * for the fully-untagged form; see danglingRepository. Tag is set for an
+ * unused tagged image (the unused-images category) and empty for a dangling
+ * one. ReclaimableSize is Size minus SharedSize, omitted when Docker did not
+ * compute SharedSize. For a dangling image Size is the full size; for a tagged
+ * one Size is already the reclaimable size (0 when unknown), so the two match.
  */
 export interface DockerCleanupCandidate {
   id: string;
   repository?: string;
+  tag?: string;
   size: number /* int64 */;
+  reclaimableSize?: number /* int64 */;
   created: number /* int64 */;
 }
 /**
  * DockerCleanupPreview is what a run WOULD remove. Producing it must not remove
  * anything.
- * ReclaimableBytes is the dangling images only; CacheReclaimableBytes is the
- * build cache a run would also prune. They are separate because the history
- * row records them separately (bytesReclaimed, cacheBytesReclaimed), and the
- * operator-facing figure is their sum.
+ * It lists only the categories switched on. Candidates are the images
+ * (dangling, then unused tagged) and ReclaimableBytes their bytes;
+ * CacheReclaimableBytes is the build cache; Containers, Volumes and Networks
+ * are the other categories, with OtherReclaimableBytes their container and
+ * volume bytes. Each pairs with the history row figure it forecasts
+ * (bytesReclaimed, cacheBytesReclaimed, otherBytesReclaimed). Byte totals sum
+ * only known sizes: UnknownSizeCount counts the listed items whose size
+ * Docker did not report, so a total is a floor whenever it is non-zero.
  */
 export interface DockerCleanupPreview {
   candidates: DockerCleanupCandidate[];
   reclaimableBytes: number /* int64 */;
   cacheReclaimableBytes: number /* int64 */;
+  containers: HostCandidateItem[];
+  volumes: HostCandidateItem[];
+  networks: HostCandidateItem[];
+  otherReclaimableBytes: number /* int64 */;
+  unknownSizeCount: number /* int */;
+  /**
+   * WithheldStacks is HostCandidates.WithheldStacks: while it is non-empty
+   * the other categories list nothing.
+   */
+  withheldStacks?: string[];
   minAgeHours: number /* int */;
 }
 /**

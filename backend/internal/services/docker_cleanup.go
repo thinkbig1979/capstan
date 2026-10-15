@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -28,10 +29,24 @@ import (
 // trusting its argument.
 const MinCleanupAgeHours = 1
 
+// MaxCleanupAgeHours is the ceiling on the age floor: ten years. Any larger
+// value means "never by age" in practice, and an unbounded one breaks the
+// floor: time.Duration(h)*time.Hour overflows at h >= 2562048, the cutoff
+// lands in the future and everything passes it, including objects created a
+// minute ago. Docker itself refuses an until filter that large
+// (time.ParseDuration("2562048h") is an error).
+const MaxCleanupAgeHours = 87600
+
 // ErrCleanupInProgress means another cleanup run holds the single-flight guard.
 // It means "not now", not "something failed": nothing was pruned and no history
 // row was written, because no run happened (agent-os-yicu).
 var ErrCleanupInProgress = errors.New("a Docker cleanup is already running")
+
+// ErrCleanupTurnBusy means a run that needed the exclusive stack turn found it
+// held. Nothing was removed and no history row was written: the scheduler
+// records a 'skipped' row, the manual route answers 409. The wrapping error's
+// text names the holder.
+var ErrCleanupTurnBusy = errors.New("the Docker cleanup could not take its turn")
 
 // dockerCleanupPruner is the slice of DockerService this service needs, declared
 // here on the consumer side so tests can drive the cleanup paths without a
@@ -45,13 +60,32 @@ type dockerCleanupPruner interface {
 	PruneBuildCache(ctx context.Context, opts PruneOptions) (*build.CachePruneReport, error)
 }
 
+// cleanupHostSpace is the slice of *HostSpaceService a run of the categories
+// beyond dangling images and build cache uses. The candidate rules (stack
+// ownership, compose references, in-use checks) are HostSpaceService's, the
+// same ones the Free-up-space dialog applies; this service adds only the age
+// floor.
+type cleanupHostSpace interface {
+	Candidates(ctx context.Context) (*HostCandidates, error)
+	FreeSpace(ctx context.Context, req HostFreeSpaceRequest) (*HostFreeSpaceResult, error)
+	Invalidate()
+}
+
+// cleanupTurn is the slice of *OperationLock a run takes its exclusive turn on.
+type cleanupTurn interface {
+	AcquireExclusive(kind string) (string, error)
+	ReleaseExclusive(token string)
+}
+
 // dockerCleanupStore is the slice of *database.DB this service needs.
 type dockerCleanupStore interface {
 	CreateDockerCleanupRun(r *models.DockerCleanupRun) error
 }
 
-// DockerCleanupService prunes dangling images and build cache under an age
-// floor, and records what each run reclaimed.
+// DockerCleanupService runs a cleanup under an age floor and records what
+// each run reclaimed: dangling images and build cache through Docker's prunes,
+// and unused tagged images, containers, volumes and networks through
+// HostSpaceService under the exclusive stack turn.
 type DockerCleanupService struct {
 	docker dockerCleanupPruner
 	store  dockerCleanupStore
@@ -62,10 +96,45 @@ type DockerCleanupService struct {
 	// one caller left the other free to start a second prune (agent-os-yicu).
 	mu      sync.Mutex
 	running bool
+
+	// hostSpace and turn are set once by main.go before the scheduler is
+	// armed or a route is served, and never changed. Nil means a run of the
+	// host categories refuses.
+	hostSpace cleanupHostSpace
+	turn      cleanupTurn
+
+	// now is the clock the age floor's cutoff is taken from; tests replace it.
+	now func() time.Time
 }
 
 func NewDockerCleanupService(docker dockerCleanupPruner, store dockerCleanupStore) *DockerCleanupService {
-	return &DockerCleanupService{docker: docker, store: store}
+	return &DockerCleanupService{docker: docker, store: store, now: time.Now}
+}
+
+// SetHostSpaceService installs the candidate source and remover for unused
+// tagged images, containers, volumes and networks, and the summary cache a
+// run invalidates. main.go calls it only with a non-nil service: a typed nil
+// would make the nil check below pass.
+func (s *DockerCleanupService) SetHostSpaceService(h cleanupHostSpace) {
+	s.hostSpace = h
+}
+
+// SetOperationLock installs the lock whose exclusive turn a run of the host
+// categories takes, so it never removes an object a stack operation is
+// creating.
+func (s *DockerCleanupService) SetOperationLock(l *OperationLock) {
+	if l == nil {
+		return
+	}
+	s.turn = l
+}
+
+// usesHostSpace reports whether a run of these categories goes through
+// HostSpaceService and the exclusive turn. Dangling images and build cache
+// alone never do: a dangling image is untagged, so no pull in flight can be
+// waiting on it.
+func (c DockerCleanupCategories) usesHostSpace() bool {
+	return c.UnusedImages || c.Containers || c.Volumes || c.Networks
 }
 
 // cleanupPruneOptions is the ONLY place this service builds PruneOptions, so
@@ -100,11 +169,11 @@ func reclaimedBytes(v uint64) int64 {
 	return int64(v)
 }
 
+// clampCleanupAgeHours bounds a floor to [MinCleanupAgeHours,
+// MaxCleanupAgeHours]. The API refuses values outside it; the clamp is for a
+// value stored before the ceiling existed, or a caller that skipped the check.
 func clampCleanupAgeHours(h int) int {
-	if h < MinCleanupAgeHours {
-		return MinCleanupAgeHours
-	}
-	return h
+	return max(MinCleanupAgeHours, min(h, MaxCleanupAgeHours))
 }
 
 // danglingRepository reports whether an image is dangling and, if it carries a
@@ -169,53 +238,200 @@ func cacheReclaimableBytes(records []*build.CacheRecord, cutoff time.Time) int64
 //
 // The build-cache figure comes from a second Docker read. If that read fails
 // the preview fails: a 0 would read as "no cache to reclaim" when nobody looked.
+//
+// Preview is the forecast at the default categories; PreviewCategories is the
+// one that follows a policy.
 func (s *DockerCleanupService) Preview(ctx context.Context, minAgeHours int) (*DockerCleanupPreview, error) {
-	floor := clampCleanupAgeHours(minAgeHours)
-	images, err := s.docker.ListImages(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("listing images for cleanup preview: %w", err)
-	}
+	return s.PreviewCategories(ctx, minAgeHours, DefaultDockerCleanupCategories())
+}
 
+// PreviewCategories reports what a run of these categories would remove. A
+// category switched off lists nothing and reads nothing from Docker.
+func (s *DockerCleanupService) PreviewCategories(ctx context.Context, minAgeHours int, categories DockerCleanupCategories) (*DockerCleanupPreview, error) {
+	floor := clampCleanupAgeHours(minAgeHours)
 	// The same boundary the Until filter applies: created strictly before this
 	// instant. Computed once so every candidate is judged against one cutoff
 	// rather than against a clock that moves during the loop.
-	cutoffTime := time.Now().Add(-time.Duration(floor) * time.Hour)
+	cutoffTime := s.now().Add(-time.Duration(floor) * time.Hour)
 	cutoff := cutoffTime.Unix()
 
 	preview := &DockerCleanupPreview{
 		Candidates:  []DockerCleanupCandidate{},
+		Containers:  []HostCandidateItem{},
+		Volumes:     []HostCandidateItem{},
+		Networks:    []HostCandidateItem{},
 		MinAgeHours: floor,
 	}
-	for _, img := range images {
-		repo, dangling := danglingRepository(img.RepoTags)
-		if !dangling || img.Created >= cutoff {
-			continue
+
+	if categories.DanglingImages {
+		images, err := s.docker.ListImages(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("listing images for cleanup preview: %w", err)
 		}
-		preview.Candidates = append(preview.Candidates, DockerCleanupCandidate{
-			ID:         img.ID,
-			Repository: repo,
-			Size:       img.Size,
-			Created:    img.Created,
-		})
-		preview.ReclaimableBytes += img.Size
+		for _, img := range images {
+			repo, dangling := danglingRepository(img.RepoTags)
+			if !dangling || img.Created >= cutoff {
+				continue
+			}
+			size := reclaimableImageSize(img.Size, img.SharedSize)
+			preview.Candidates = append(preview.Candidates, DockerCleanupCandidate{
+				ID:              img.ID,
+				Repository:      repo,
+				Size:            img.Size,
+				ReclaimableSize: size,
+				Created:         img.Created,
+			})
+			preview.addImageBytes(size)
+		}
 	}
 
-	records, err := s.docker.ListBuildCache(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("listing build cache for cleanup preview: %w", err)
+	if categories.BuildCache {
+		records, err := s.docker.ListBuildCache(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("listing build cache for cleanup preview: %w", err)
+		}
+		preview.CacheReclaimableBytes = cacheReclaimableBytes(records, cutoffTime)
 	}
-	preview.CacheReclaimableBytes = cacheReclaimableBytes(records, cutoffTime)
+
+	if categories.usesHostSpace() {
+		if s.hostSpace == nil {
+			return nil, errCleanupHostSpaceMissing
+		}
+		cands, err := s.hostSpace.Candidates(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("listing cleanup candidates: %w", err)
+		}
+		picked := pickCleanupCandidates(cands, categories, cutoff)
+		preview.WithheldStacks = cands.WithheldStacks
+		for _, it := range picked.images {
+			// A tagged image's Size is what removing it frees (the
+			// dialog's Size minus SharedSize), 0 when unknown;
+			// ReclaimableSize is omitted then, which is the signal.
+			preview.Candidates = append(preview.Candidates, DockerCleanupCandidate{
+				ID:              it.ID,
+				Tag:             it.Label,
+				Size:            derefOr(it.Size, 0),
+				ReclaimableSize: it.Size,
+				Created:         derefOr(it.Created, 0),
+			})
+			preview.addImageBytes(it.Size)
+		}
+		preview.Containers = append(preview.Containers, picked.containers...)
+		preview.Volumes = append(preview.Volumes, picked.volumes...)
+		preview.Networks = append(preview.Networks, picked.networks...)
+		for _, it := range append(append([]HostCandidateItem{}, picked.containers...), picked.volumes...) {
+			if it.Size == nil {
+				preview.UnknownSizeCount++
+				continue
+			}
+			preview.OtherReclaimableBytes += *it.Size
+		}
+	}
 	return preview, nil
+}
+
+func (p *DockerCleanupPreview) addImageBytes(size *int64) {
+	if size == nil {
+		p.UnknownSizeCount++
+		return
+	}
+	p.ReclaimableBytes += *size
+}
+
+// reclaimableImageSize is Size minus SharedSize, the bytes only this image
+// holds, or nil when Docker did not compute SharedSize (-1). It never falls
+// back to Size: counting shared layers once per image overstates what a run
+// frees. imageReclaimableSize (host_space.go) applies the same rule.
+func reclaimableImageSize(size, shared int64) *int64 {
+	if shared < 0 || size < shared {
+		return nil
+	}
+	v := size - shared
+	return &v
+}
+
+func derefOr(v *int64, fallback int64) int64 {
+	if v == nil {
+		return fallback
+	}
+	return *v
+}
+
+var errCleanupHostSpaceMissing = errors.New("removing unused tagged images, containers, volumes or networks needs the Docker host service, which is not available")
+
+// hostCategoryNames lists the switched-on categories that go through
+// HostSpaceService, for a message.
+func hostCategoryNames(c DockerCleanupCategories) []string {
+	var names []string
+	for _, cat := range []struct {
+		on   bool
+		name string
+	}{
+		{c.UnusedImages, "unused images"},
+		{c.Containers, "containers"},
+		{c.Volumes, "volumes"},
+		{c.Networks, "networks"},
+	} {
+		if cat.on {
+			names = append(names, cat.name)
+		}
+	}
+	return names
+}
+
+// cleanupPick is what a run of the host categories removes: the candidates of
+// each switched-on category old enough to pass the floor.
+type cleanupPick struct {
+	images, containers, volumes, networks []HostCandidateItem
+}
+
+func (p cleanupPick) empty() bool {
+	return len(p.images)+len(p.containers)+len(p.volumes)+len(p.networks) == 0
+}
+
+// pickCleanupCandidates applies the categories and the age floor to the
+// dialog's candidates. The floor keeps an object unless its creation time is
+// known and strictly before cutoff: an object of unknown age is kept. Unused
+// images are the tagged ones only; dangling images belong to their own
+// switch and the prune path.
+func pickCleanupCandidates(c *HostCandidates, categories DockerCleanupCategories, cutoff int64) cleanupPick {
+	old := func(items []HostCandidateItem, keep func(HostCandidateItem) bool) []HostCandidateItem {
+		out := []HostCandidateItem{}
+		for _, it := range items {
+			if it.Created != nil && *it.Created < cutoff && keep(it) {
+				out = append(out, it)
+			}
+		}
+		return out
+	}
+	every := func(HostCandidateItem) bool { return true }
+	var p cleanupPick
+	if categories.UnusedImages {
+		p.images = old(c.Images, func(it HostCandidateItem) bool { return !it.Dangling })
+	}
+	if categories.Containers {
+		p.containers = old(c.Containers, every)
+	}
+	if categories.Volumes {
+		p.volumes = old(c.Volumes, every)
+	}
+	if categories.Networks {
+		p.networks = old(c.Networks, every)
+	}
+	return p
 }
 
 // Execute prunes dangling images and build cache under the age floor and
 // records the run. trigger is "scheduled" or "manual".
 //
-// Each prune runs only when its category is switched on, and the run records
-// exactly the categories it ran, so turning a category off is honoured even
-// though only these two are executed yet. The other four categories are
-// accepted by the policy but not executed here: removing them is agent-os-lr7x,
-// and until then they are neither run nor recorded.
+// Each category runs only when it is switched on, and the run records exactly
+// the categories it ran. Dangling images and build cache are Docker prunes
+// under the until filter. Unused tagged images, containers, volumes and
+// networks come from HostSpaceService's candidates (the Free-up-space
+// dialog's rules), are kept unless created before the floor, and are removed
+// one by one with force=false, all under the exclusive stack turn (taken for
+// the whole run, and only when one of those four is on). A busy turn returns
+// ErrCleanupTurnBusy with nothing removed and nothing recorded.
 //
 // A run that fails partway is recorded with whatever it had already reclaimed
 // rather than with zeroes: the bytes are gone either way, and a history row
@@ -239,6 +455,24 @@ func (s *DockerCleanupService) Execute(ctx context.Context, trigger string, minA
 		s.mu.Unlock()
 	}()
 
+	// The exclusive turn is taken before anything is removed and held for
+	// the whole run, so a busy turn removes nothing at all.
+	if categories.usesHostSpace() && s.turn != nil {
+		token, err := s.turn.AcquireExclusive(OpKindDockerCleanup)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrCleanupTurnBusy, err)
+		}
+		defer s.turn.ReleaseExclusive(token)
+	}
+	// Whatever is removed below changes the host summary. Execute invalidates
+	// it once per run, covering the prunes and the per-item removals alike
+	// (agent-os-yyat); FreeSpace and the manual route invalidate as well, which
+	// is harmless (Invalidate is idempotent), so "once" holds for this service,
+	// not per request.
+	if s.hostSpace != nil {
+		defer s.hostSpace.Invalidate()
+	}
+
 	opts := cleanupPruneOptions(minAgeHours)
 	run := &models.DockerCleanupRun{
 		ID:      uuid.New().String(),
@@ -251,6 +485,12 @@ func (s *DockerCleanupService) Execute(ctx context.Context, trigger string, minA
 		StartedAt:   time.Now().UTC().Format(time.RFC3339),
 		MinAgeHours: clampCleanupAgeHours(minAgeHours),
 		Categories:  executedCategories(categories),
+	}
+
+	// Refuse before removing anything: a run that cannot do every category
+	// it was asked for does none of them.
+	if categories.usesHostSpace() && (s.hostSpace == nil || s.turn == nil) {
+		return s.record(run, errCleanupHostSpaceMissing)
 	}
 
 	if categories.DanglingImages {
@@ -271,20 +511,105 @@ func (s *DockerCleanupService) Execute(ctx context.Context, trigger string, minA
 			run.CacheBytesReclaimed = reclaimedBytes(cacheReport.SpaceReclaimed)
 		}
 	}
+
+	if categories.usesHostSpace() {
+		return s.record(run, s.removeHostCandidates(ctx, run, categories, minAgeHours))
+	}
 	return s.record(run, nil)
 }
 
+// removeHostCandidates removes the old-enough candidates of the host
+// categories through FreeSpace, which rebuilds the candidate set under the
+// turn this run holds and removes each with force=false, and adds what it
+// removed to run. An item Docker refused is a failure of the run.
+func (s *DockerCleanupService) removeHostCandidates(ctx context.Context, run *models.DockerCleanupRun, categories DockerCleanupCategories, minAgeHours int) error {
+	cutoff := s.now().Add(-time.Duration(clampCleanupAgeHours(minAgeHours)) * time.Hour).Unix()
+	cands, err := s.hostSpace.Candidates(ctx)
+	if err != nil {
+		return fmt.Errorf("listing cleanup candidates: %w", err)
+	}
+	// A withheld stack could name any object, so HostSpaceService lists none
+	// of these kinds. A run that removed nothing for that reason is a
+	// failure the history must name, not a quiet "nothing to clean".
+	if len(cands.WithheldStacks) > 0 {
+		return fmt.Errorf("kept %s: could not read the compose file of stack(s) %s, so nothing a stack might use was removed",
+			strings.Join(hostCategoryNames(categories), ", "), strings.Join(cands.WithheldStacks, ", "))
+	}
+	pick := pickCleanupCandidates(cands, categories, cutoff)
+	if pick.empty() {
+		return nil
+	}
+
+	ids := func(items []HostCandidateItem) []string {
+		out := make([]string, 0, len(items))
+		for _, it := range items {
+			out = append(out, it.ID)
+		}
+		return out
+	}
+	res, err := s.hostSpace.FreeSpace(ctx, HostFreeSpaceRequest{
+		Images:     ids(pick.images),
+		Containers: ids(pick.containers),
+		Volumes:    ids(pick.volumes),
+		Networks:   ids(pick.networks),
+	})
+	if err != nil {
+		return fmt.Errorf("removing cleanup candidates: %w", err)
+	}
+
+	sizes := map[string]*int64{}
+	for _, items := range [][]HostCandidateItem{pick.images, pick.containers, pick.volumes} {
+		for _, it := range items {
+			sizes[it.ID] = it.Size
+		}
+	}
+	for _, id := range res.Images.Removed {
+		run.ImagesDeleted++
+		run.BytesReclaimed += derefOr(sizes[id], 0)
+	}
+	for _, id := range res.Containers.Removed {
+		run.ContainersDeleted++
+		run.OtherBytesReclaimed += derefOr(sizes[id], 0)
+	}
+	for _, id := range res.Volumes.Removed {
+		run.VolumesDeleted++
+		run.OtherBytesReclaimed += derefOr(sizes[id], 0)
+	}
+	run.NetworksDeleted = len(res.Networks.Removed)
+
+	var failed []string
+	for kind, cat := range map[string]HostFreeSpaceCategoryResult{
+		"image": res.Images, "container": res.Containers, "volume": res.Volumes, "network": res.Networks,
+	} {
+		for _, f := range cat.Failed {
+			failed = append(failed, fmt.Sprintf("%s %s: %s", kind, f.ID, f.Reason))
+		}
+	}
+	if len(failed) > 0 {
+		sort.Strings(failed)
+		return fmt.Errorf("%d item(s) could not be removed: %s", len(failed), strings.Join(failed, "; "))
+	}
+	return nil
+}
+
 // executedCategories is the docker_cleanup_runs.categories value for a run:
-// the categories Execute acts on, in the column's fixed order. Only the two it
-// can execute are listed, so a history row never claims a category nothing
-// removed.
+// the categories Execute acts on, in the column's fixed order.
 func executedCategories(c DockerCleanupCategories) string {
 	var names []string
-	if c.DanglingImages {
-		names = append(names, CleanupCategoryDanglingImages)
-	}
-	if c.BuildCache {
-		names = append(names, CleanupCategoryBuildCache)
+	for _, cat := range []struct {
+		on   bool
+		name string
+	}{
+		{c.DanglingImages, CleanupCategoryDanglingImages},
+		{c.UnusedImages, CleanupCategoryUnusedImages},
+		{c.BuildCache, CleanupCategoryBuildCache},
+		{c.Containers, CleanupCategoryContainers},
+		{c.Volumes, CleanupCategoryVolumes},
+		{c.Networks, CleanupCategoryNetworks},
+	} {
+		if cat.on {
+			names = append(names, cat.name)
+		}
 	}
 	return strings.Join(names, ",")
 }

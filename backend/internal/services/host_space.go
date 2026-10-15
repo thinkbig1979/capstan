@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -78,6 +79,9 @@ type HostSpaceService struct {
 	docker hostSpaceDocker
 	stacks hostSpaceStacks
 	now    func() time.Time
+	// refs resolves what the stacks' compose files name; fetch withholds
+	// every referenced object from the candidates (agent-os-3rr3).
+	refs stackReferenceResolver
 
 	// fetching is a one-slot semaphore held for a whole fetch, so concurrent
 	// callers make one Docker read between them. A channel rather than a mutex
@@ -96,6 +100,10 @@ type HostSpaceService struct {
 type hostSpaceSnapshot struct {
 	summary    HostSummary
 	candidates HostCandidates
+	// multiTagged holds the tags of each candidate image with more than one.
+	// Docker refuses to remove such an image by ID without force, so
+	// FreeSpace removes it by its tags.
+	multiTagged map[string][]string
 }
 
 // NewHostSpaceService returns nil when Docker is unavailable, so main.go can
@@ -104,7 +112,12 @@ func NewHostSpaceService(docker *DockerService, stacks hostSpaceStacks) *HostSpa
 	if docker == nil || docker.client == nil {
 		return nil
 	}
-	return newHostSpaceService(docker.client, stacks, time.Now)
+	svc := newHostSpaceService(docker.client, stacks, time.Now)
+	if docker.config != nil && docker.config.DataDir != "" {
+		// The same global.env buildComposeArgs hands compose.
+		svc.refs = composeStackReferences(filepath.Join(docker.config.DataDir, "global.env"))
+	}
+	return svc
 }
 
 func newHostSpaceService(docker hostSpaceDocker, stacks hostSpaceStacks, now func() time.Time) *HostSpaceService {
@@ -112,6 +125,7 @@ func newHostSpaceService(docker hostSpaceDocker, stacks hostSpaceStacks, now fun
 		docker:   docker,
 		stacks:   stacks,
 		now:      now,
+		refs:     composeStackReferences(""),
 		fetching: make(chan struct{}, 1),
 	}
 }
@@ -192,6 +206,8 @@ func (s *HostSpaceService) fetch(ctx context.Context) (*hostSpaceSnapshot, error
 		}
 	}
 
+	refs := s.refs(ctx, stacks)
+
 	du, err := s.docker.DiskUsage(ctx, dockertypes.DiskUsageOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("reading Docker disk usage: %w", err)
@@ -205,11 +221,13 @@ func (s *HostSpaceService) fetch(ctx context.Context) (*hostSpaceSnapshot, error
 	snap := &hostSpaceSnapshot{
 		summary: HostSummary{MeasuredAt: s.now().UTC()},
 		candidates: HostCandidates{
-			Images:     []HostCandidateItem{},
-			Containers: []HostCandidateItem{},
-			Volumes:    []HostCandidateItem{},
-			Networks:   []HostCandidateItem{},
+			Images:         []HostCandidateItem{},
+			Containers:     []HostCandidateItem{},
+			Volumes:        []HostCandidateItem{},
+			Networks:       []HostCandidateItem{},
+			WithheldStacks: refs.withheld,
 		},
+		multiTagged: map[string][]string{},
 	}
 	sum, cand := &snap.summary, &snap.candidates
 
@@ -222,7 +240,7 @@ func (s *HostSpaceService) fetch(ctx context.Context) (*hostSpaceSnapshot, error
 		if img.Containers > 0 {
 			sum.Images.InUse++
 		}
-		if !imageIsCandidate(img) {
+		if !imageIsCandidate(img) || refs.withholdsImage(img) {
 			continue
 		}
 		size := imageReclaimableSize(img)
@@ -230,7 +248,11 @@ func (s *HostSpaceService) fetch(ctx context.Context) (*hostSpaceSnapshot, error
 		if size != nil {
 			sum.Images.ReclaimableBytes += *size
 		}
-		cand.Images = append(cand.Images, HostCandidateItem{ID: img.ID, Label: imageLabel(img), Size: size})
+		_, dangling := danglingRepository(img.RepoTags)
+		if tags := realTags(img.RepoTags); len(tags) > 1 {
+			snap.multiTagged[img.ID] = tags
+		}
+		cand.Images = append(cand.Images, HostCandidateItem{ID: img.ID, Label: imageLabel(img), Size: size, Created: knownUnix(img.Created), Dangling: dangling})
 	}
 
 	sum.BuildCache.Bytes = totals.BuildCache
@@ -258,10 +280,10 @@ func (s *HostSpaceService) fetch(ctx context.Context) (*hostSpaceSnapshot, error
 		case containerIsStopped(ctr.State):
 			sum.Containers.Stopped++
 		}
-		if !containerIsCandidate(ctr) {
+		if !containerIsCandidate(ctr) || refs.withholdsContainer(ctr) {
 			continue
 		}
-		item := HostCandidateItem{ID: ctr.ID, Label: containerLabel(ctr), Detail: ctr.Status}
+		item := HostCandidateItem{ID: ctr.ID, Label: containerLabel(ctr), Detail: ctr.Status, Created: knownUnix(ctr.Created)}
 		if ctr.SizeRw >= 0 {
 			size := ctr.SizeRw
 			item.Size = &size
@@ -281,10 +303,10 @@ func (s *HostSpaceService) fetch(ctx context.Context) (*hostSpaceSnapshot, error
 		if vol.UsageData != nil && vol.UsageData.RefCount > 0 {
 			sum.Volumes.Attached++
 		}
-		if !volumeIsCandidate(vol, owned) {
+		if !volumeIsCandidate(vol, owned) || refs.withholdsVolume(vol) {
 			continue
 		}
-		item := HostCandidateItem{ID: vol.Name, Label: vol.Name, Detail: vol.Labels[composeProjectLabel]}
+		item := HostCandidateItem{ID: vol.Name, Label: vol.Name, Detail: vol.Labels[composeProjectLabel], Created: volumeCreated(vol)}
 		if vol.UsageData.Size >= 0 {
 			size := vol.UsageData.Size
 			item.Size = &size
@@ -304,7 +326,7 @@ func (s *HostSpaceService) fetch(ctx context.Context) (*hostSpaceSnapshot, error
 		case stackOwned:
 			sum.Networks.StackOwned++
 		}
-		if builtIn || stackOwned {
+		if builtIn || stackOwned || refs.withholdsNetwork(n) {
 			continue
 		}
 		// NetworkList leaves Containers empty, so the count comes from an
@@ -314,7 +336,7 @@ func (s *HostSpaceService) fetch(ctx context.Context) (*hostSpaceSnapshot, error
 			continue
 		}
 		sum.Networks.ReclaimableCount++
-		cand.Networks = append(cand.Networks, HostCandidateItem{ID: n.ID, Label: n.Name, Detail: n.Driver})
+		cand.Networks = append(cand.Networks, HostCandidateItem{ID: n.ID, Label: n.Name, Detail: n.Driver, Created: knownTime(n.Created)})
 	}
 
 	sum.Disk.Total = totals.Total
@@ -346,6 +368,42 @@ func imageReclaimableSize(img *image.Summary) *int64 {
 	}
 	size := img.Size - img.SharedSize
 	return &size
+}
+
+// realTags drops the untagged placeholders Docker and ListImages report.
+func realTags(repoTags []string) []string {
+	var tags []string
+	for _, t := range repoTags {
+		if t != "" && t != "<none>" && t != "<none>:<none>" && !strings.HasSuffix(t, ":<none>") {
+			tags = append(tags, t)
+		}
+	}
+	return tags
+}
+
+// knownUnix is a Docker Unix creation time, nil when Docker sent none (0).
+func knownUnix(sec int64) *int64 {
+	if sec <= 0 {
+		return nil
+	}
+	return &sec
+}
+
+func knownTime(t time.Time) *int64 {
+	if t.IsZero() {
+		return nil
+	}
+	return knownUnix(t.Unix())
+}
+
+// volumeCreated parses the volume's RFC 3339 CreatedAt; empty or malformed is
+// unknown.
+func volumeCreated(vol *volume.Volume) *int64 {
+	t, err := time.Parse(time.RFC3339, vol.CreatedAt)
+	if err != nil {
+		return nil
+	}
+	return knownTime(t)
 }
 
 // imageLabel follows candidateLabel in DockerCleanupCard.tsx: the first real
@@ -435,13 +493,23 @@ func (s *HostSpaceService) FreeSpace(ctx context.Context, req HostFreeSpaceReque
 		return s.docker.ContainerRemove(ctx, id, container.RemoveOptions{Force: false})
 	})
 	removeEach(req.Images, cand.Images, &res.Images, func(id string) error {
-		resp, err := s.docker.ImageRemove(ctx, id, image.RemoveOptions{Force: false, PruneChildren: false})
-		if err != nil {
-			return err
+		// By ID, unless the image has several tags: Docker then refuses
+		// without force ("image is referenced in multiple repositories",
+		// moby daemon/images/image_delete.go, v28.5.2, read), so each tag
+		// is removed instead and the last one deletes the image.
+		refs := snap.multiTagged[id]
+		if len(refs) == 0 {
+			refs = []string{id}
 		}
-		for _, r := range resp {
-			if r.Deleted != "" {
-				return nil
+		for _, ref := range refs {
+			resp, err := s.docker.ImageRemove(ctx, ref, image.RemoveOptions{Force: false, PruneChildren: false})
+			if err != nil {
+				return err
+			}
+			for _, r := range resp {
+				if r.Deleted != "" {
+					return nil
+				}
 			}
 		}
 		return errors.New("only untagged; the image is still referenced")
