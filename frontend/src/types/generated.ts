@@ -527,6 +527,13 @@ export interface Directory {
   gitSshKeyPath?: string;
   gitHttpsUser?: string;
   hasHttpsToken: boolean;
+  /**
+   * GitPushEnabled is the per-directory switch for the user-initiated commit
+   * and push action. Off by default; only SetDirectoryPushEnabled turns it on
+   * or off. A rescan that still finds the directory does not change it, but a
+   * deleted row (directory moved away, last stack removed) comes back off.
+   */
+  gitPushEnabled: boolean;
   scannedAt: string;
 }
 export interface Stack {

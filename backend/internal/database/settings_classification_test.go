@@ -53,6 +53,8 @@ var notSensitiveSettingKeys = map[string]string{
 	"docker_cleanup_networks":              "boolean flag (agent-os-8hdg)",
 	"docker_cleanup_unused_images":         "boolean flag (agent-os-8hdg)",
 	"docker_cleanup_volumes":               "boolean flag (agent-os-8hdg)",
+	"git_author_email":                     "email for commit author, not a credential",
+	"git_author_name":                      "person name for commit author, not a credential",
 	"git_https_user":                       "user name; the token is git_https_token",
 	"git_ssh_key":                          "path to a key file; key contents are refused on save (handlers/settings.go, looksLikePrivateKey)",
 	"max_backup_history_retention_days":    "days",

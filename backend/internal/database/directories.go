@@ -3,6 +3,7 @@ package database
 import (
 	"fmt"
 
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
@@ -106,7 +107,7 @@ func (d *DB) ListDirectories() ([]models.Directory, error) {
 // outside Capstan from failing rows.Scan and losing the whole list
 // (agent-os-d1c7). No Capstan writer stores one.
 const directoryColumns = `path, name, root_dir, is_git_repo, COALESCE(git_remote, ''), COALESCE(git_branch, ''), ` +
-	`git_auth_type, git_ssh_key_path, git_https_user, git_https_token, scanned_at`
+	`git_auth_type, git_ssh_key_path, git_https_user, git_https_token, git_push_enabled, scanned_at`
 
 // scanDirectory reads one row selected with directoryColumns, from *sql.Row or
 // *sql.Rows, and blanks the token as ListDirectories describes: only
@@ -114,7 +115,7 @@ const directoryColumns = `path, name, root_dir, is_git_repo, COALESCE(git_remote
 func scanDirectory(row interface{ Scan(dest ...any) error }) (models.Directory, error) {
 	var dir models.Directory
 	err := row.Scan(&dir.Path, &dir.Name, &dir.RootDir, &dir.IsGitRepo, &dir.GitRemote, &dir.GitBranch,
-		&dir.GitAuthType, &dir.GitSSHKeyPath, &dir.GitHTTPSUser, &dir.GitHTTPSToken, &dir.ScannedAt)
+		&dir.GitAuthType, &dir.GitSSHKeyPath, &dir.GitHTTPSUser, &dir.GitHTTPSToken, &dir.GitPushEnabled, &dir.ScannedAt)
 	dir.HasHTTPSToken = dir.GitHTTPSToken != ""
 	dir.GitHTTPSToken = ""
 	return dir, err
@@ -177,6 +178,33 @@ func (d *DB) UpdateDirectoryCredentials(path, authType, sshKeyPath, httpsUser, h
 	query := `UPDATE directories SET git_auth_type = ?, git_ssh_key_path = ?, git_https_user = ?, git_https_token = ? WHERE path = ?`
 	_, err := d.db.Exec(query, authType, sshKeyPath, httpsUser, httpsToken, path)
 	return err
+}
+
+// SetDirectoryPushEnabled writes the push switch and nothing else. It is the
+// only writer of git_push_enabled: UpsertDirectory, InsertDirectoryIfAbsent
+// and UpdateDirectoryCredentials leave the column out on purpose, so a rescan
+// that still finds the directory, or a credential save, can neither arm nor
+// disarm a later network write. A deleted row (DeleteDirectory, when a scan no
+// longer finds the directory) takes the switch with it and a re-created row
+// starts off. An unregistered path is errdefs.ErrNotFound rather than a silent
+// no-op.
+//
+// A reader that gates on the switch uses GetDirectory(path).GitPushEnabled and
+// treats the error as "not allowed": a read error must never read as false
+// and then be mistaken for a decision.
+func (d *DB) SetDirectoryPushEnabled(path string, enabled bool) error {
+	res, err := d.db.Exec(`UPDATE directories SET git_push_enabled = ? WHERE path = ?`, enabled, path)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return &errdefs.NotFoundError{Kind: "directory", Key: path}
+	}
+	return nil
 }
 
 func (d *DB) ClearDirectories() error {

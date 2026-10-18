@@ -71,6 +71,10 @@ var collapsedRoutes = []notFoundRoute{
 	{"backup.go", "runRestore", "GetStack", "stack", "Failed to load stack", models.ErrStackNotFound, "Stack not found"},
 	{"backup.go", "getRunDetail", "GetBackupRunByID", "backup run", "Failed to load backup run", models.ErrNotFound, "Backup run not found"},
 	{"directories.go", "UpdateCredentials", "GetDirectory", "directory", "Failed to load directory", models.ErrNotFound, "Directory not found"},
+	// agent-os-k81p.1: UpdatePushEnabled has two sites, the load and the write
+	// (a row deleted between them is the absent case for the second).
+	{"directories.go", "UpdatePushEnabled", "GetDirectory", "directory", "Failed to load directory", models.ErrNotFound, "Directory not found"},
+	{"directories.go", "UpdatePushEnabled", "SetDirectoryPushEnabled", "directory", "Failed to update push setting", models.ErrNotFound, "Directory not found"},
 	{"directories.go", "CredentialStatus", "GetDirectory", "directory", "Failed to load directory", models.ErrNotFound, "Directory not found"},
 	// agent-os-symj: these four answered NOT_FOUND for an absent stack while the
 	// fifteen stack rows above answered STACK_NOT_FOUND for the identical
@@ -108,8 +112,8 @@ func runHandleDBError(t *testing.T, err error, faultMsg string) (int, models.App
 // whole class is made of.
 func TestNotFoundWire_CollapsedRoutes(t *testing.T) {
 	t.Parallel()
-	if len(collapsedRoutes) != 23 {
-		t.Fatalf("table has %d rows, want 23 — one per collapsed route", len(collapsedRoutes))
+	if len(collapsedRoutes) != 25 {
+		t.Fatalf("table has %d rows, want 25 — one per collapsed route", len(collapsedRoutes))
 	}
 
 	fault := errors.New("sql: database is closed")
@@ -184,22 +188,21 @@ func TestNotFoundWire_RouteCensus(t *testing.T) {
 	// matched nothing would make every "expected site is present" check below
 	// fail loudly, but this states the corpus size so a silent narrowing of the
 	// embed list is visible too.
-	if total != 23 {
-		t.Fatalf("census found %d handleDBError/dbError call sites across %d embedded files, want 23 — the table and the source disagree", total, len(files))
+	if total != 25 {
+		t.Fatalf("census found %d handleDBError/dbError call sites across %d embedded files, want 25 — the table and the source disagree", total, len(files))
 	}
 
 	for _, r := range collapsedRoutes {
+		// A function with two sites (UpdatePushEnabled) has one row per site,
+		// told apart by the fault message, so a row hits a site on both.
 		hit := false
 		for _, s := range found[r.File] {
-			if s.fn == r.Function {
+			if s.fn == r.Function && s.msg == r.FaultMsg {
 				hit = true
-				if s.msg != r.FaultMsg {
-					t.Errorf("%s/%s calls handleDBError with %q, table says %q", r.File, r.Function, s.msg, r.FaultMsg)
-				}
 			}
 		}
 		if !hit {
-			t.Errorf("%s/%s is in the table but does not call handleDBError — it either kept a hand-built 404 or was renamed", r.File, r.Function)
+			t.Errorf("%s/%s is in the table but no handleDBError site there calls it with %q — it either kept a hand-built 404, was renamed, or changed its message", r.File, r.Function, r.FaultMsg)
 		}
 	}
 
@@ -209,12 +212,12 @@ func TestNotFoundWire_RouteCensus(t *testing.T) {
 		for _, s := range sites {
 			in := false
 			for _, r := range collapsedRoutes {
-				if r.File == file && r.Function == s.fn {
+				if r.File == file && r.Function == s.fn && r.FaultMsg == s.msg {
 					in = true
 				}
 			}
 			if !in {
-				t.Errorf("%s/%s calls handleDBError but has no row in collapsedRoutes — add one naming the wire code it must answer", file, s.fn)
+				t.Errorf("%s/%s calls handleDBError with %q but has no row in collapsedRoutes for that message — add one naming the wire code it must answer", file, s.fn, s.msg)
 			}
 		}
 	}

@@ -18,18 +18,23 @@ type Session struct {
 }
 
 type Directory struct {
-	Path          string    `json:"path"`
-	Name          string    `json:"name"`
-	RootDir       string    `json:"rootDir,omitempty"`
-	IsGitRepo     bool      `json:"isGitRepo"`
-	GitRemote     string    `json:"gitRemote"`
-	GitBranch     string    `json:"gitBranch"`
-	GitAuthType   string    `json:"gitAuthType"`
-	GitSSHKeyPath string    `json:"gitSshKeyPath,omitempty"`
-	GitHTTPSUser  string    `json:"gitHttpsUser,omitempty"`
-	GitHTTPSToken string    `json:"-"`
-	HasHTTPSToken bool      `json:"hasHttpsToken"`
-	ScannedAt     time.Time `json:"scannedAt"`
+	Path          string `json:"path"`
+	Name          string `json:"name"`
+	RootDir       string `json:"rootDir,omitempty"`
+	IsGitRepo     bool   `json:"isGitRepo"`
+	GitRemote     string `json:"gitRemote"`
+	GitBranch     string `json:"gitBranch"`
+	GitAuthType   string `json:"gitAuthType"`
+	GitSSHKeyPath string `json:"gitSshKeyPath,omitempty"`
+	GitHTTPSUser  string `json:"gitHttpsUser,omitempty"`
+	GitHTTPSToken string `json:"-"`
+	HasHTTPSToken bool   `json:"hasHttpsToken"`
+	// GitPushEnabled is the per-directory switch for the user-initiated commit
+	// and push action. Off by default; only SetDirectoryPushEnabled turns it on
+	// or off. A rescan that still finds the directory does not change it, but a
+	// deleted row (directory moved away, last stack removed) comes back off.
+	GitPushEnabled bool      `json:"gitPushEnabled"`
+	ScannedAt      time.Time `json:"scannedAt"`
 }
 
 type Stack struct {
