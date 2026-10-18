@@ -100,6 +100,43 @@ const (
 	// repository, which has none. 409: the server is fine, the repository is
 	// in a state that refuses the request (agent-os-00zg).
 	ErrGitBareRepo = "GIT_BARE_REPO"
+
+	// The commit and push refusals (agent-os-k81p.2). Every one is a 4xx or a
+	// 502 and none is a 401: the frontend logs the user out on a 401 whose
+	// body has no top-level code (agent-os-318), and these render through an
+	// ActionResult whose code sits in details.code.
+	//
+	// ErrGitPushDisabled: the directory's push switch is off, or it has no
+	// directories row. 403, nothing written.
+	ErrGitPushDisabled = "GIT_PUSH_DISABLED"
+	// ErrGitIdentityMissing: git_author_name or git_author_email is unset or
+	// blank. 400, nothing written.
+	ErrGitIdentityMissing = "GIT_IDENTITY_MISSING"
+	// ErrGitNoUpstream: the branch tracks nothing, or tracks the local
+	// repository itself (branch.<b>.remote "."). 409; Capstan never sets one.
+	ErrGitNoUpstream = "GIT_NO_UPSTREAM"
+	// ErrGitRemoteAhead: the remote has commits this branch lacks. 409, pull
+	// first; a commit made in the same request is kept.
+	ErrGitRemoteAhead = "GIT_REMOTE_AHEAD"
+	// ErrGitEnvConfirmRequired: the file list names an env file and the
+	// request did not set confirmEnv. 400, nothing written.
+	ErrGitEnvConfirmRequired = "GIT_ENV_CONFIRM_REQUIRED"
+	// ErrGitSSHUnsupported: the push would go over SSH, which nothing in
+	// Capstan supplies a key for (agent-os-z0gl). 409, refused before any git
+	// child runs when the directory's auth type is ssh.
+	ErrGitSSHUnsupported = "GIT_SSH_UNSUPPORTED"
+	// ErrGitDetachedHead: HEAD names no branch, so a commit would be
+	// reachable from HEAD alone and a push has no branch to send. 409.
+	ErrGitDetachedHead = "GIT_DETACHED_HEAD"
+	// ErrGitOperationInProgress: a merge, cherry-pick or revert is underway in
+	// the repository, or another git process holds its index lock. 409.
+	ErrGitOperationInProgress = "GIT_OPERATION_IN_PROGRESS"
+	// ErrGitPushRejected: the remote refused the update for a reason other
+	// than being ahead (a protected branch, a declining hook). 409.
+	ErrGitPushRejected = "GIT_PUSH_REJECTED"
+	// ErrGitPushURLUnsupported: the push URL uses a transport Capstan does not
+	// push over (git://, a <transport>:: helper). 409.
+	ErrGitPushURLUnsupported = "GIT_PUSH_URL_UNSUPPORTED"
 )
 
 type AppError struct {

@@ -495,6 +495,61 @@ export const ErrBackupRepoUninitialized = "BACKUP_REPO_UNINITIALIZED";
  * in a state that refuses the request (agent-os-00zg).
  */
 export const ErrGitBareRepo = "GIT_BARE_REPO";
+/**
+ * The commit and push refusals (agent-os-k81p.2). Every one is a 4xx or a
+ * 502 and none is a 401: the frontend logs the user out on a 401 whose
+ * body has no top-level code (agent-os-318), and these render through an
+ * ActionResult whose code sits in details.code.
+ * ErrGitPushDisabled: the directory's push switch is off, or it has no
+ * directories row. 403, nothing written.
+ */
+export const ErrGitPushDisabled = "GIT_PUSH_DISABLED";
+/**
+ * ErrGitIdentityMissing: git_author_name or git_author_email is unset or
+ * blank. 400, nothing written.
+ */
+export const ErrGitIdentityMissing = "GIT_IDENTITY_MISSING";
+/**
+ * ErrGitNoUpstream: the branch tracks nothing, or tracks the local
+ * repository itself (branch.<b>.remote "."). 409; Capstan never sets one.
+ */
+export const ErrGitNoUpstream = "GIT_NO_UPSTREAM";
+/**
+ * ErrGitRemoteAhead: the remote has commits this branch lacks. 409, pull
+ * first; a commit made in the same request is kept.
+ */
+export const ErrGitRemoteAhead = "GIT_REMOTE_AHEAD";
+/**
+ * ErrGitEnvConfirmRequired: the file list names an env file and the
+ * request did not set confirmEnv. 400, nothing written.
+ */
+export const ErrGitEnvConfirmRequired = "GIT_ENV_CONFIRM_REQUIRED";
+/**
+ * ErrGitSSHUnsupported: the push would go over SSH, which nothing in
+ * Capstan supplies a key for (agent-os-z0gl). 409, refused before any git
+ * child runs when the directory's auth type is ssh.
+ */
+export const ErrGitSSHUnsupported = "GIT_SSH_UNSUPPORTED";
+/**
+ * ErrGitDetachedHead: HEAD names no branch, so a commit would be
+ * reachable from HEAD alone and a push has no branch to send. 409.
+ */
+export const ErrGitDetachedHead = "GIT_DETACHED_HEAD";
+/**
+ * ErrGitOperationInProgress: a merge, cherry-pick or revert is underway in
+ * the repository, or another git process holds its index lock. 409.
+ */
+export const ErrGitOperationInProgress = "GIT_OPERATION_IN_PROGRESS";
+/**
+ * ErrGitPushRejected: the remote refused the update for a reason other
+ * than being ahead (a protected branch, a declining hook). 409.
+ */
+export const ErrGitPushRejected = "GIT_PUSH_REJECTED";
+/**
+ * ErrGitPushURLUnsupported: the push URL uses a transport Capstan does not
+ * push over (git://, a <transport>:: helper). 409.
+ */
+export const ErrGitPushURLUnsupported = "GIT_PUSH_URL_UNSUPPORTED";
 export interface AppError {
   code: string;
   message: string;
@@ -644,6 +699,74 @@ export interface PullResult {
   previousCommit: string;
   currentCommit: string;
   changedFiles: string[];
+}
+/**
+ * Settings keys for the commit author (agent-os-k81p.1). Exported here, once,
+ * because the settings handler writes them and the git service reads them.
+ * Neither is a credential, so neither joins sensitiveSettingKeys.
+ */
+export const SettingGitAuthorName = "git_author_name";
+/**
+ * Settings keys for the commit author (agent-os-k81p.1). Exported here, once,
+ * because the settings handler writes them and the git service reads them.
+ * Neither is a credential, so neither joins sensitiveSettingKeys.
+ */
+export const SettingGitAuthorEmail = "git_author_email";
+/**
+ * GitChange is one tracked file with uncommitted changes inside a stack's
+ * folder (GET /git/changes, agent-os-k81p.2).
+ */
+export interface GitChange {
+  /**
+   * Path is relative to the repository top level, exactly as git reports
+   * it, which may differ from the stack folder when the repository holds
+   * several stacks. A commit request names files by this value.
+   */
+  path: string;
+  /**
+   * OrigPath is the old path of a staged rename. Committing the rename
+   * commits both paths.
+   */
+  origPath?: string;
+  /**
+   * Status is git's two-letter porcelain v2 code: index then work tree, '.'
+   * for unchanged (".M" modified and not staged, "M." staged, "R." renamed).
+   */
+  status: string;
+  /**
+   * IsEnv marks a file that looks like an env file; committing one needs
+   * confirmEnv.
+   */
+  isEnv: boolean;
+}
+/**
+ * GitChangesResult is GET /git/changes: what a commit from this stack's
+ * folder could include, and whether a push could run.
+ */
+export interface GitChangesResult {
+  branch: string;
+  /**
+   * Detached is true when HEAD names no branch; commit and push refuse.
+   */
+  detached: boolean;
+  trackingBranch: string;
+  /**
+   * HasUpstream is read from @{upstream} alone. TrackingBranch, Ahead and
+   * Behind can be measured against origin/<branch> when no upstream is
+   * configured, so they do not mean a push can run.
+   */
+  hasUpstream: boolean;
+  ahead: number /* int */;
+  behind: number /* int */;
+  /**
+   * PushEnabled is this folder's push switch. It gates commit as well.
+   */
+  pushEnabled: boolean;
+  /**
+   * IdentityConfigured is true when both author settings are set.
+   */
+  identityConfigured: boolean;
+  changes: GitChange[];
 }
 export interface LogResult {
   commits: GitCommit[];

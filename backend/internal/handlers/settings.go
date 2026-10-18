@@ -863,12 +863,9 @@ func looksLikePrivateKey(s string) bool {
 		strings.ContainsAny(s, "\n\r")
 }
 
-// Settings keys for the commit author. Neither is a credential, so neither
-// joins sensitiveSettingKeys.
+// Limits for the commit author settings (models.SettingGitAuthorName and
+// models.SettingGitAuthorEmail, shared with the git service).
 const (
-	gitAuthorNameKey  = "git_author_name"
-	gitAuthorEmailKey = "git_author_email"
-
 	maxGitAuthorNameLen  = 200
 	maxGitAuthorEmailLen = 254
 )
@@ -951,13 +948,13 @@ func (h *SettingsHandler) GetGitSettings(c *gin.Context) {
 	// not read as "not configured": the commit action refuses on a missing
 	// author and would report the wrong reason. Known gap: no test pins these
 	// two arms individually (agent-os-k81p.1 report).
-	authorName, err := settingOrFault(h.db, gitAuthorNameKey)
+	authorName, err := settingOrFault(h.db, models.SettingGitAuthorName)
 	if err != nil {
 		slog.Error("Failed to read the git author name setting", "error", err)
 		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to read git settings", err))
 		return
 	}
-	authorEmail, err := settingOrFault(h.db, gitAuthorEmailKey)
+	authorEmail, err := settingOrFault(h.db, models.SettingGitAuthorEmail)
 	if err != nil {
 		slog.Error("Failed to read the git author email setting", "error", err)
 		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to read git settings", err))
@@ -1058,10 +1055,10 @@ func (h *SettingsHandler) UpdateGitSettings(c *gin.Context) {
 		values = append(values, database.SettingValue{Key: "git_https_token", Value: req.HTTPSToken})
 	}
 	if req.AuthorName != "" {
-		values = append(values, database.SettingValue{Key: gitAuthorNameKey, Value: strings.TrimSpace(req.AuthorName)})
+		values = append(values, database.SettingValue{Key: models.SettingGitAuthorName, Value: strings.TrimSpace(req.AuthorName)})
 	}
 	if req.AuthorEmail != "" {
-		values = append(values, database.SettingValue{Key: gitAuthorEmailKey, Value: strings.TrimSpace(req.AuthorEmail)})
+		values = append(values, database.SettingValue{Key: models.SettingGitAuthorEmail, Value: strings.TrimSpace(req.AuthorEmail)})
 	}
 
 	// One transaction, so a storage fault cannot leave a new user paired with

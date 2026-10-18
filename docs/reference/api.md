@@ -255,6 +255,72 @@ With a live token, all four behave exactly as they did before.
   commit) answers **404 `NOT_FOUND` "Commit not found"**; it answered 500
   before 2026-09-24 (agent-os-tyl6). Other git failures stay 500
 
+### Commit and push
+
+Nothing commits or pushes on its own: saving a file never touches git. These
+three routes take a stack by `stackId` only (no `dir` fallback). One
+repository can hold several stack folders; the change list and the push switch
+are this stack's folder's, the lock covers every stack in the repository, and a
+push sends the whole branch, including commits made outside Capstan. Refusals
+are 4xx or 502, never 401. Commit and push results are action results
+(`outcome`, `reason`, `details`) with the error code in `details.code`.
+
+- `GET /api/v1/git/changes` — `?stackId=<id>`. The tracked files with uncommitted
+  changes in the stack's folder: `{branch, detached, trackingBranch,
+  hasUpstream, ahead, behind, pushEnabled, identityConfigured, changes}`, each
+  change `{path, origPath?, status, isEnv}`. `path` is relative to the
+  repository top level and is the value a commit request names. `status` is
+  git's porcelain v2 code (`.M` modified, `M.` staged, `R.` renamed).
+  `hasUpstream` comes from `@{upstream}` alone; `ahead`/`behind` can be counted
+  against `origin/<branch>` when none is set. Untracked files are not listed.
+  `isEnv` marks `.env`, `.env.*`, `*.env` and the stack's own env file; it does
+  not see a compose `env_file:` with another name. A push switch or author
+  setting that cannot be read is a 500, never `false`. Unresolved conflicts in
+  the folder answer 409 `GIT_OPERATION_IN_PROGRESS`
+- `POST /api/v1/git/commit` — body `{stackId, message, files, confirmEnv,
+  push}`. Commits exactly `files` (paths as `/changes` lists them; a rename
+  commits its old path too) with literal pathspecs, as the author in Settings >
+  Git. No repository hook, fsmonitor program or commit signing runs during the
+  request. The audit row's file count is the paths committed. With `push: true` it
+  then pushes as `POST /git/push` does, under the same lock. Answers:
+  - 400 `VALIDATION_ERROR`: blank message, no files, or a file that is not a
+    changed tracked file of this stack's folder (including a sibling folder's)
+  - 400 `GIT_ENV_CONFIRM_REQUIRED`: an env file without `confirmEnv: true`
+  - 400 `GIT_IDENTITY_MISSING`: author name or email unset
+  - 403 `GIT_PUSH_DISABLED`: the folder's push switch is off (it gates commit
+    too)
+  - 409 `GIT_DETACHED_HEAD`, `GIT_OPERATION_IN_PROGRESS` (merge, cherry-pick or
+    revert underway, or another git process holds the index),
+    `OPERATION_IN_PROGRESS` (a stack in the repository is busy)
+  - with `push: true`, every push refusal below that can be predicted is
+    checked before the commit, so nothing is written
+  - 207 `partial`: the commit landed and the push failed; `details.commit`,
+    `details.pushCode`, `details.pushReason`. The commit is kept
+  - each commit writes one `git_commit` audit row (path, commit, file count)
+- `POST /api/v1/git/push` — body `{stackId}`. Pushes the current branch to its
+  upstream (`branch.<b>.remote`, `HEAD:<branch.<b>.merge>`): no force, no tags,
+  no submodules, no new upstream, hooks off. 200 `success` with
+  `details.range`, or `no_change` when the remote already has it. Answers:
+  - 403 `GIT_PUSH_DISABLED`, checked first
+  - 409 `GIT_SSH_UNSUPPORTED`: the directory's git auth is SSH (refused before
+    any git runs), or the push URL is SSH-shaped (`ssh://`, `git+ssh://`,
+    `user@host:path`, `host:path`); Capstan does not push over SSH yet
+  - 409 `GIT_PUSH_URL_UNSUPPORTED`: `git://`, another scheme, or a
+    `<transport>::` helper; more than one push URL (Capstan pushes to exactly
+    one); or a remote whose name is a URL. Allowed: `https://`, `http://`,
+    `file://`, a local path
+  - 409 `GIT_DETACHED_HEAD`; 409 `GIT_NO_UPSTREAM` (no upstream, one in the
+    same repository (remote `.`), or more than one `branch.<b>.remote` or
+    `branch.<b>.merge` value)
+  - 409 `GIT_REMOTE_AHEAD`: the remote has commits this branch lacks; pull
+    first
+  - 409 `GIT_PUSH_REJECTED`: the remote refused for another reason
+  - 502 `GIT_REMOTE_UNREACHABLE`: unreachable, or the credentials were refused.
+    git's own (redacted) message for any failed push is logged at WARN as
+    "git push failed"; it is the only place the two causes differ
+  - each push that runs writes one `git_push` audit row (path, remote name,
+    branch, outcome); the remote URL is never recorded
+
 ## Monitoring & Dashboard
 
 - `GET /api/v1/dashboard/stats` — aggregate counts (stacks, containers, images,

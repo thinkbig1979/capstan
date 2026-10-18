@@ -43,24 +43,35 @@ func (h *GitHandler) RegisterRoutes(group *gin.RouterGroup) {
 	group.POST("/pull", h.Pull)
 	group.GET("/log", h.GetLog)
 	group.GET("/diff/:hash", h.GetDiff)
+	group.GET("/changes", h.GetChanges)
+	group.POST("/commit", h.Commit)
+	group.POST("/push", h.Push)
+}
+
+// stackDir loads a stack and returns its directory as an absolute path.
+func (h *GitHandler) stackDir(stackID string) (string, error) {
+	stack, err := h.db.GetStack(stackID)
+	if err != nil {
+		// agent-os-7lg1: db.GetStack maps ANY error to a silent 404 unless
+		// the non-not-found case is split out and logged with its cause.
+		// Returned upward to callers that pass straight to handleError(c, err)
+		// with no errors.Is/As in between — safe to attach the cause here
+		// (models/errors.go's NewAppErrorWithCause hazard note).
+		return "", dbError(err, "Failed to load stack")
+	}
+	normalizedDir, err := filepath.Abs(stack.Directory)
+	if err != nil {
+		return "", models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to resolve stack directory", err)
+	}
+	return normalizedDir, nil
 }
 
 func (h *GitHandler) resolvePathFromStack(c *gin.Context) (string, string, error) {
 	stackID := c.Query("stackId")
 	if stackID != "" {
-		stack, err := h.db.GetStack(stackID)
+		normalizedDir, err := h.stackDir(stackID)
 		if err != nil {
-			// agent-os-7lg1: db.GetStack maps ANY error to a silent 404 unless
-			// the non-not-found case is split out and logged with its cause.
-			// Returned upward to the four callers below, which all pass
-			// straight to handleError(c, err) with no errors.Is/As in
-			// between — safe to attach the cause here (models/errors.go's
-			// NewAppErrorWithCause hazard note).
-			return "", "", dbError(err, "Failed to load stack")
-		}
-		normalizedDir, err := filepath.Abs(stack.Directory)
-		if err != nil {
-			return "", "", models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to resolve stack directory", err)
+			return "", "", err
 		}
 		return normalizedDir, stackID, nil
 	}
@@ -246,11 +257,16 @@ func (h *GitHandler) Pull(c *gin.Context) {
 		h.logGitAction(c, absPath, "pull", h.formatPullDetail(pullResult))
 	}
 
-	// PullVerified wraps every pullCLI error in truth.Failed, which renders as
-	// 500, so the answers pullCLI classifies (400 GIT_DIRTY, 409 GIT_BARE_REPO,
-	// 409 GIT_CONFLICT, 502 GIT_REMOTE_UNREACHABLE) all reached the client as
-	// a 500 "git pull failed" (agent-os-x0xl). A classified failure keeps its
-	// own status, message and code; anything else is still the 500 it was.
+	renderGitResult(c, ar)
+}
+
+// renderGitResult renders a git ActionResult. The services wrap every
+// classified error in truth.Failed, which renders as 500, so the answers they
+// classify (400 GIT_DIRTY, 409 GIT_BARE_REPO, 409 GIT_CONFLICT, 502
+// GIT_REMOTE_UNREACHABLE, and the commit and push refusals) all reached the
+// client as a 500 (agent-os-x0xl). A classified failure keeps its own status,
+// message and code (in details.code); anything else is still the 500 it was.
+func renderGitResult(c *gin.Context, ar truth.ActionResult) {
 	var appErr *models.AppError
 	if ar.Outcome == truth.OutcomeFailed && errors.As(ar.Err, &appErr) {
 		details := make(map[string]any, len(ar.Details)+1)
@@ -265,6 +281,121 @@ func (h *GitHandler) Pull(c *gin.Context) {
 	}
 
 	renderResult(c, ar)
+}
+
+// gitStackRequest names the stack a git write acts on. stackId only: a write
+// must name a registered stack, never a raw directory.
+type gitStackRequest struct {
+	StackID string `json:"stackId"`
+}
+
+type gitCommitRequest struct {
+	StackID    string   `json:"stackId"`
+	Message    string   `json:"message"`
+	Files      []string `json:"files"`
+	ConfirmEnv bool     `json:"confirmEnv"`
+	Push       bool     `json:"push"`
+}
+
+// GetChanges lists the tracked changes in a stack's folder that a commit
+// could include (GET /git/changes?stackId=).
+func (h *GitHandler) GetChanges(c *gin.Context) {
+	stackID := c.Query("stackId")
+	if stackID == "" {
+		handleError(c, models.NewAppError(http.StatusBadRequest, models.ErrValidation, "Missing stackId query parameter"))
+		return
+	}
+	absPath, err := h.stackDir(stackID)
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+	result, err := h.git.GetChanges(absPath)
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+// Commit commits the ticked files of a stack's folder, and pushes when asked
+// (POST /git/commit).
+func (h *GitHandler) Commit(c *gin.Context) {
+	var req gitCommitRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		handleError(c, models.NewAppError(http.StatusBadRequest, models.ErrValidation, "Invalid request body"))
+		return
+	}
+	absPath, ok := h.requireStack(c, req.StackID)
+	if !ok {
+		return
+	}
+	ar, w := h.git.CommitVerified(absPath, services.CommitRequest{
+		Message:    req.Message,
+		Files:      req.Files,
+		ConfirmEnv: req.ConfirmEnv,
+		Push:       req.Push,
+	})
+	h.logGitWrite(c, req.StackID, absPath, ar, w)
+	renderGitResult(c, ar)
+}
+
+// Push pushes a stack's current branch to its upstream (POST /git/push).
+func (h *GitHandler) Push(c *gin.Context) {
+	var req gitStackRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		handleError(c, models.NewAppError(http.StatusBadRequest, models.ErrValidation, "Invalid request body"))
+		return
+	}
+	absPath, ok := h.requireStack(c, req.StackID)
+	if !ok {
+		return
+	}
+	ar, w := h.git.PushVerified(absPath)
+	h.logGitWrite(c, req.StackID, absPath, ar, w)
+	renderGitResult(c, ar)
+}
+
+func (h *GitHandler) requireStack(c *gin.Context, stackID string) (string, bool) {
+	if stackID == "" {
+		handleError(c, models.NewAppError(http.StatusBadRequest, models.ErrValidation, "Missing stackId"))
+		return "", false
+	}
+	absPath, err := h.stackDir(stackID)
+	if err != nil {
+		handleError(c, err)
+		return "", false
+	}
+	return absPath, true
+}
+
+// logGitWrite writes one action-log row for the commit the request made and
+// one for the push it ran, both when a commit landed and its push failed. The
+// detail names the remote, never its URL, which can carry a token.
+func (h *GitHandler) logGitWrite(c *gin.Context, stackID, absPath string, ar truth.ActionResult, w *services.GitWriteResult) {
+	if w == nil {
+		return
+	}
+	if w.Commit != "" {
+		h.actionLog.LogWithRequest(middleware.RequestIDFrom(c), userIDFrom(c), &stackID, services.ActionGitCommit, gin.H{
+			"path":   absPath,
+			"commit": w.Commit,
+			"files":  w.Files,
+		})
+	}
+	if w.PushRan {
+		outcome := ar.Outcome
+		if w.Commit != "" && ar.Outcome == truth.OutcomePartial {
+			// The commit landed and the push did not.
+			outcome = truth.OutcomeFailed
+		}
+		h.actionLog.LogWithRequest(middleware.RequestIDFrom(c), userIDFrom(c), &stackID, services.ActionGitPush, gin.H{
+			"path":    absPath,
+			"remote":  w.Remote,
+			"branch":  w.Branch,
+			"outcome": outcome,
+		})
+	}
 }
 
 func (h *GitHandler) formatPullDetail(result *models.PullResult) string {
