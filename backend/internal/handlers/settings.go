@@ -861,6 +861,50 @@ func looksLikePrivateKey(s string) bool {
 		strings.ContainsAny(s, "\n\r")
 }
 
+// Settings keys for the commit author. Neither is a credential, so neither
+// joins sensitiveSettingKeys.
+const (
+	gitAuthorNameKey  = "git_author_name"
+	gitAuthorEmailKey = "git_author_email"
+
+	maxGitAuthorNameLen  = 200
+	maxGitAuthorEmailLen = 254
+)
+
+// validateGitAuthorName returns "" when name is storable as a commit author
+// name, otherwise the 400 message. The value ends up in a git command line, so
+// a line break is refused outright.
+func validateGitAuthorName(name string) string {
+	trimmed := strings.TrimSpace(name)
+	switch {
+	case trimmed == "":
+		return "git author name must not be blank"
+	case strings.ContainsAny(name, "\n\r"):
+		return "git author name must be a single line"
+	case len(trimmed) > maxGitAuthorNameLen:
+		return "git author name must be at most 200 characters"
+	}
+	return ""
+}
+
+// validateGitAuthorEmail returns "" when email has exactly one "@" with text on
+// both sides; the shape check is deliberately loose, git accepts any such value.
+func validateGitAuthorEmail(email string) string {
+	trimmed := strings.TrimSpace(email)
+	local, domain, found := strings.Cut(trimmed, "@")
+	switch {
+	case trimmed == "":
+		return "git author email must not be blank"
+	case strings.ContainsAny(email, "\n\r"):
+		return "git author email must be a single line"
+	case len(trimmed) > maxGitAuthorEmailLen:
+		return "git author email must be at most 254 characters"
+	case !found || local == "" || domain == "" || strings.Contains(domain, "@"):
+		return "git author email must contain exactly one @ with text on both sides"
+	}
+	return ""
+}
+
 func (h *SettingsHandler) GetGitSettings(c *gin.Context) {
 	// Both keys select the identity a later git operation runs as: an empty
 	// value silently hands the operation over to the env-supplied cfg fallback.
@@ -870,6 +914,23 @@ func (h *SettingsHandler) GetGitSettings(c *gin.Context) {
 	// decrypt path and therefore no "row present but unreadable" state to
 	// report — and unlike hasHttpsToken, these values are USED rather than
 	// reported as a presence flag.
+	// The commit author is read FIRST so a settings fault names it in the
+	// logged cause: the fault fixture hides the whole table, and only the first
+	// read can show that this arm refuses on its own. An unreadable author must
+	// not read as "not configured", because the commit action refuses on a
+	// missing author and would then report the wrong reason.
+	authorName, err := settingOrFault(h.db, gitAuthorNameKey)
+	if err != nil {
+		slog.Error("Failed to read the git author name setting", "error", err)
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to read git settings", err))
+		return
+	}
+	authorEmail, err := settingOrFault(h.db, gitAuthorEmailKey)
+	if err != nil {
+		slog.Error("Failed to read the git author email setting", "error", err)
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to read git settings", err))
+		return
+	}
 	sshKey, err := settingOrFault(h.db, "git_ssh_key")
 	if err != nil {
 		slog.Error("Failed to read the git SSH key setting", "error", err)
@@ -924,14 +985,18 @@ func (h *SettingsHandler) GetGitSettings(c *gin.Context) {
 		"httpsUser":            httpsUser,
 		"hasHttpsToken":        hasToken,
 		"httpsTokenUnreadable": httpsTokenUnreadable,
+		"authorName":           authorName,
+		"authorEmail":          authorEmail,
 	})
 }
 
 func (h *SettingsHandler) UpdateGitSettings(c *gin.Context) {
 	var req struct {
-		SSHKey     string `json:"sshKey"`
-		HTTPSUser  string `json:"httpsUser"`
-		HTTPSToken string `json:"httpsToken"`
+		SSHKey      string `json:"sshKey"`
+		HTTPSUser   string `json:"httpsUser"`
+		HTTPSToken  string `json:"httpsToken"`
+		AuthorName  string `json:"authorName"`
+		AuthorEmail string `json:"authorEmail"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.NewAppError(
@@ -940,6 +1005,21 @@ func (h *SettingsHandler) UpdateGitSettings(c *gin.Context) {
 			"Invalid request body",
 		))
 		return
+	}
+
+	// "" means "no change", like the other fields; a non-empty value is
+	// validated, so whitespace-only is a 400 rather than a quiet skip.
+	if req.AuthorName != "" {
+		if msg := validateGitAuthorName(req.AuthorName); msg != "" {
+			c.JSON(http.StatusBadRequest, models.NewAppError(http.StatusBadRequest, "VALIDATION_ERROR", msg))
+			return
+		}
+	}
+	if req.AuthorEmail != "" {
+		if msg := validateGitAuthorEmail(req.AuthorEmail); msg != "" {
+			c.JSON(http.StatusBadRequest, models.NewAppError(http.StatusBadRequest, "VALIDATION_ERROR", msg))
+			return
+		}
 	}
 
 	var values []database.SettingValue
@@ -963,6 +1043,12 @@ func (h *SettingsHandler) UpdateGitSettings(c *gin.Context) {
 	if req.HTTPSToken != "" {
 		values = append(values, database.SettingValue{Key: "git_https_token", Value: req.HTTPSToken})
 	}
+	if req.AuthorName != "" {
+		values = append(values, database.SettingValue{Key: gitAuthorNameKey, Value: strings.TrimSpace(req.AuthorName)})
+	}
+	if req.AuthorEmail != "" {
+		values = append(values, database.SettingValue{Key: gitAuthorEmailKey, Value: strings.TrimSpace(req.AuthorEmail)})
+	}
 
 	// One transaction, so a storage fault cannot leave a new user paired with
 	// the old token (agent-os-u0nd).
@@ -983,9 +1069,11 @@ func (h *SettingsHandler) UpdateGitSettings(c *gin.Context) {
 	slog.Info("Git settings updated")
 	// Record which credential fields were changed, never their values.
 	logActionFromContext(h.actionLog, c, nil, services.ActionUpdateGitSettings, gin.H{
-		"ssh_key":     req.SSHKey != "",
-		"https_user":  req.HTTPSUser != "",
-		"https_token": req.HTTPSToken != "",
+		"ssh_key":      req.SSHKey != "",
+		"https_user":   req.HTTPSUser != "",
+		"https_token":  req.HTTPSToken != "",
+		"author_name":  req.AuthorName != "",
+		"author_email": req.AuthorEmail != "",
 	})
 	h.GetGitSettings(c)
 }

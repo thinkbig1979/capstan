@@ -489,7 +489,11 @@ func TestGetGitSettings_FaultRefusesInsteadOfSelectingTheEnvFallback(t *testing.
 		t.Fatalf("status = %d, want 500: an unreadable git_ssh_key reads as \"not configured\" and hands the next git operation the env-supplied fallback identity. body = %s",
 			w.Code, w.Body.String())
 	}
-	requireOneFaultLineWithCause(t, buf.String(), sentinel, `read setting "git_ssh_key"`,
+	// The commit author is read before git_ssh_key (agent-os-k81p.1), and this
+	// fixture hides the whole table, so the first read names the cause. The
+	// author arm is pinned in git_push_settings_test.go; the git_ssh_key and
+	// git_https_user arms can no longer be told apart by a table-wide fault.
+	requireOneFaultLineWithCause(t, buf.String(), sentinel, `read setting "git_author_name"`,
 		"GET /api/settings/git with an unreadable settings table")
 }
 

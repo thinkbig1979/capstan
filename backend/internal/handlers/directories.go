@@ -16,14 +16,16 @@ import (
 )
 
 type DirectoriesHandler struct {
-	scanner *services.ScannerService
-	db      *database.DB
+	scanner   *services.ScannerService
+	db        *database.DB
+	actionLog *services.ActionLogger
 }
 
 func NewDirectoriesHandler(scanner *services.ScannerService, db *database.DB) *DirectoriesHandler {
 	return &DirectoriesHandler{
-		scanner: scanner,
-		db:      db,
+		scanner:   scanner,
+		db:        db,
+		actionLog: services.NewActionLogger(db),
 	}
 }
 
@@ -31,6 +33,7 @@ func (h *DirectoriesHandler) RegisterRoutes(group *gin.RouterGroup) {
 	group.GET("", h.List)
 	group.POST("/scan", h.Scan)
 	group.PUT("/credentials", h.UpdateCredentials)
+	group.PUT("/push", h.UpdatePushEnabled)
 	group.GET("/credential-status", h.CredentialStatus)
 }
 
@@ -247,6 +250,62 @@ const (
 //     fails with a generic auth error, and the UI reports the directory as
 //     configured even though nothing was saved. Collapsing this into "none"
 //     would leave that exact symptom unfixed, so it gets its own state.
+//
+// UpdatePushEnabled flips a directory's push switch. It has its own route and
+// its own database writer so that saving credentials cannot disarm it and
+// arming it cannot touch a stored credential. `enabled` is a pointer so an
+// omitted field is a 400 instead of a silent false, and so false is accepted:
+// binding:"required" on a plain bool rejects false, which would let the switch
+// be turned on and never off.
+func (h *DirectoriesHandler) UpdatePushEnabled(c *gin.Context) {
+	var req struct {
+		Path    string `json:"path" binding:"required"`
+		Enabled *bool  `json:"enabled" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.NewAppError(
+			http.StatusBadRequest,
+			models.ErrValidation,
+			"Invalid request body: path and enabled are required",
+		))
+		return
+	}
+
+	directory, err := h.db.GetDirectory(req.Path)
+	if err != nil {
+		handleDBError(c, err, "Failed to load directory")
+		return
+	}
+
+	if err := h.db.SetDirectoryPushEnabled(directory.Path, *req.Enabled); err != nil {
+		handleDBError(c, err, "Failed to update push setting")
+		return
+	}
+
+	updated, err := h.db.GetDirectory(directory.Path)
+	if err != nil {
+		handleError(c, models.NewAppErrorWithCause(
+			http.StatusInternalServerError,
+			"INTERNAL_ERROR",
+			"Failed to retrieve updated directory",
+			err,
+		))
+		return
+	}
+
+	slog.Info("Directory push setting updated", "path", directory.Path, "enabled", *req.Enabled)
+	logActionFromContext(h.actionLog, c, nil, services.ActionUpdateDirectoryPush, gin.H{
+		"path":    directory.Path,
+		"enabled": *req.Enabled,
+	})
+
+	updated.GitHTTPSToken = ""
+
+	c.JSON(http.StatusOK, gin.H{
+		"directory": updated,
+	})
+}
+
 func (h *DirectoriesHandler) CredentialStatus(c *gin.Context) {
 	path := c.Query("path")
 	if path == "" {

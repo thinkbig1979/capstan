@@ -34,6 +34,11 @@ const (
 	ActionUpdateGitSettings = "update_git_settings"
 	ActionUpdateSettings    = "update_settings"
 
+	// ActionUpdateDirectoryPush records a flip of a directory's push switch.
+	// The switch arms a later network write and any signed-in session can flip
+	// it, so each change leaves an audit row (path and new value only).
+	ActionUpdateDirectoryPush = "update_directory_push"
+
 	// Docker resource mutations (see ResourcesHandler).
 	ActionDeleteContainer = "delete_container"
 	ActionDeleteImage     = "delete_image"

@@ -120,7 +120,13 @@ password is checked.
 - `GET /api/v1/settings/updates` / `PUT /api/v1/settings/updates` —
   update-scan scheduler settings
 - `GET /api/v1/settings/git` / `PUT /api/v1/settings/git` — Git integration
-  settings (SSH key, etc.)
+  settings (SSH key, etc.). Also carries the commit author, `authorName` and
+  `authorEmail`, which are not credentials. On PUT an empty or omitted field
+  means "no change"; a non-empty value is trimmed and validated, and anything
+  invalid answers **400 `VALIDATION_ERROR`** with nothing in the request saved:
+  both must be one line, the name at most 200 characters, the email at most
+  254 characters with exactly one `@` and text on both sides. A settings read
+  fault on GET answers 500
 - `GET /api/v1/settings/directories` / `PUT /api/v1/settings/directories` —
   configured stack directories
 - `GET /api/v1/settings/scan-depth` / `PUT /api/v1/settings/scan-depth` —
@@ -141,6 +147,13 @@ password is checked.
 - `PUT /api/v1/directories/credentials` — update stored directory credentials
 - `GET /api/v1/directories/credential-status` — whether credentials are set,
   without exposing them
+- `PUT /api/v1/directories/push` — turn the directory's push switch on or off.
+  Body `{"path": "...", "enabled": true|false}`; both fields are required, so
+  an omitted `enabled` is a 400 and `false` is accepted. An unregistered path
+  answers 404. Returns `{"directory": ...}` with `gitPushEnabled`, which every
+  directory carries and which is `false` until an admin turns it on. A rescan
+  and a credential save never change it. Each successful change writes one
+  `update_directory_push` audit-log row (path and new value)
 
 ## Stacks
 

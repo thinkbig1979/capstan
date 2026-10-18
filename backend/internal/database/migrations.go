@@ -927,6 +927,18 @@ ALTER TABLE docker_cleanup_runs ADD COLUMN networks_deleted INTEGER NOT NULL DEF
 ALTER TABLE docker_cleanup_runs ADD COLUMN other_bytes_reclaimed INTEGER NOT NULL DEFAULT 0;
 `,
 	},
+	{
+		Version: 25,
+		Name:    "directories_git_push_enabled",
+		SQL: `
+-- Per-directory switch for the user-initiated "commit and push" action
+-- (agent-os-k81p). Off by default, so every existing install stays read-only
+-- until an admin turns it on. Additive column with a default: a binary older
+-- than this migration needs CAPSTAN_ALLOW_SCHEMA_DOWNGRADE=1 to start on the
+-- migrated database, and then ignores the column.
+ALTER TABLE directories ADD COLUMN git_push_enabled INTEGER NOT NULL DEFAULT 0;
+`,
+	},
 }
 
 // ReencryptSecrets rewrites every stored secret that is not yet in the v2
