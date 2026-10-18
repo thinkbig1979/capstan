@@ -28,7 +28,10 @@ vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
 }))
 
-import { CommitPushDialog, ENV_DIFF_HIDDEN } from '../CommitPushDialog'
+import { CommitPushDialog } from '../CommitPushDialog'
+
+// The D136 sentence, as the user reads it.
+const ENV_DIFF_HIDDEN = 'Diff hidden: env files may contain secrets.'
 
 const COMPOSE: GitChange = { path: 'compose.yaml', status: '.M', isEnv: false }
 const ENV: GitChange = { path: '.env', status: '.M', isEnv: true }

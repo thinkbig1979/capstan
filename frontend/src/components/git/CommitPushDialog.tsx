@@ -23,7 +23,7 @@ import { stringOr } from '@/lib/narrow'
 import type { GitChange, GitChangesResult } from '@/types/generated'
 
 /** D136: an env file's diff is never shown, whatever the server would send. */
-export const ENV_DIFF_HIDDEN = 'Diff hidden: env files may contain secrets.'
+const ENV_DIFF_HIDDEN = 'Diff hidden: env files may contain secrets.'
 
 /**
  * Plain sentences for the refusals of POST /git/commit and /git/push
