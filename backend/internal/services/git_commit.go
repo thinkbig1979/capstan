@@ -190,11 +190,11 @@ func (s *GitService) CommitVerified(dirPath string, req CommitRequest) (truth.Ac
 	if err != nil {
 		return truth.Failed("git commit failed", err), nil
 	}
-	w := &GitWriteResult{Commit: hash, Files: len(req.Files)}
+	w := &GitWriteResult{Commit: hash, Files: len(paths)}
 	if !req.Push {
 		return truth.Success("committed",
 			truth.KV("commit", hash),
-			truth.KV("files", len(req.Files)),
+			truth.KV("files", len(paths)),
 		), w
 	}
 
@@ -209,7 +209,7 @@ func (s *GitService) CommitVerified(dirPath string, req CommitRequest) (truth.Ac
 		slog.Warn("Commit kept after its push failed", "path", dirPath, "commit", hash, "error", err)
 		return truth.Partial("committed, but the push failed: "+reason,
 			truth.KV("commit", hash),
-			truth.KV("files", len(req.Files)),
+			truth.KV("files", len(paths)),
 			truth.KV("remote", target.remote),
 			truth.KV("branch", target.mergeRef),
 			truth.KV("pushCode", code),
@@ -218,7 +218,7 @@ func (s *GitService) CommitVerified(dirPath string, req CommitRequest) (truth.Ac
 	}
 	return truth.Success("committed and pushed "+branch+" to "+target.remote+pushScopeNote,
 		truth.KV("commit", hash),
-		truth.KV("files", len(req.Files)),
+		truth.KV("files", len(paths)),
 		truth.KV("remote", target.remote),
 		truth.KV("branch", target.mergeRef),
 		truth.KV("range", rng),
@@ -396,8 +396,10 @@ func (s *GitService) lockRepo(top, kind string) (func(), error) {
 }
 
 // headBranch is the branch HEAD names, or detached=true when it names none.
+// The full ref is read and refs/heads/ stripped: --short answers "heads/main"
+// when a tag is also named "main", which names no branch config.
 func (s *GitService) headBranch(top, user, token string) (branch string, detached bool, err error) {
-	out, err := s.gitCommandWithCreds(top, user, token, "symbolic-ref", "-q", "--short", "HEAD")
+	out, err := s.gitCommandWithCreds(top, user, token, "symbolic-ref", "-q", "HEAD")
 	if err != nil {
 		// Exit 1 is git's documented "HEAD is not a symbolic ref".
 		if gitExitCode(err) == 1 {
@@ -405,7 +407,11 @@ func (s *GitService) headBranch(top, user, token string) (branch string, detache
 		}
 		return "", false, fmt.Errorf("failed to read the current branch: %w", err)
 	}
-	return out, false, nil
+	branch, ok := strings.CutPrefix(out, "refs/heads/")
+	if !ok || branch == "" {
+		return "", false, fmt.Errorf("HEAD names %q, which is not a branch", out)
+	}
+	return branch, false, nil
 }
 
 // requireBranch is headBranch with a detached HEAD refused: a commit there is
@@ -443,10 +449,11 @@ func (s *GitService) refuseOperationInProgress(top, user, token string) error {
 // paths are repository-root-relative and NUL-terminated, never C-quoted, and
 // every record starts with a type letter, so nothing at its start is
 // whitespace. --no-optional-locks keeps status off .git/index.lock, which a
-// concurrent commit needs.
+// concurrent commit needs; fsmonitor is off because repository config must
+// not run code here either.
 func (s *GitService) listChanges(dirPath, top, user, token string) ([]models.GitChange, error) {
 	out, _, err := s.gitRun(dirPath, user, token, nil,
-		"--no-optional-locks", "status", "--porcelain=v2", "-z", "--untracked-files=no", "--", ".")
+		"-c", "core.fsmonitor=false", "--no-optional-locks", "status", "--porcelain=v2", "-z", "--untracked-files=no", "--", ".")
 	if err != nil {
 		return nil, fmt.Errorf("failed to read status: %w", err)
 	}
@@ -675,16 +682,34 @@ func (s *GitService) pushPreconditions(top, branch, user, token string) (pushTar
 		}
 		return pushTarget{}, noUpstream
 	}
-	remote, err := s.gitConfigValue(top, user, token, "branch."+branch+".remote")
+	// Every value, not `config --get`: that answers the LAST value while
+	// @{upstream} resolves the FIRST, so a second branch.<b>.merge would push
+	// HEAD to a branch the upstream does not name.
+	remotes, err := s.gitConfigValues(top, user, token, "branch."+branch+".remote")
 	if err != nil {
 		return pushTarget{}, err
 	}
-	mergeRef, err := s.gitConfigValue(top, user, token, "branch."+branch+".merge")
+	merges, err := s.gitConfigValues(top, user, token, "branch."+branch+".merge")
 	if err != nil {
 		return pushTarget{}, err
 	}
+	if len(remotes) == 0 || len(merges) == 0 {
+		return pushTarget{}, noUpstream
+	}
+	if len(remotes) > 1 || len(merges) > 1 {
+		return pushTarget{}, models.NewAppError(http.StatusConflict, models.ErrGitNoUpstream,
+			"Branch "+branch+" has more than one upstream configured; Capstan pushes to exactly one")
+	}
+	remote, mergeRef := remotes[0], merges[0]
 	if remote == "" || mergeRef == "" {
 		return pushTarget{}, noUpstream
+	}
+	// A remote NAMED by a URL (a hand-written config subsection) would carry
+	// that URL, and any userinfo in it, into the reason, the details and the
+	// action log. Refused before anything echoes the name.
+	if strings.Contains(remote, "://") || strings.Contains(remote, "@") {
+		return pushTarget{}, models.NewAppError(http.StatusConflict, models.ErrGitPushURLUnsupported,
+			"Branch "+branch+" tracks a remote named by a URL; Capstan pushes only to a named remote")
 	}
 	if remote == "." {
 		// Pushing to "." moves another LOCAL branch and reports success.
@@ -702,24 +727,29 @@ func (s *GitService) pushPreconditions(top, branch, user, token string) (pushTar
 		return pushTarget{}, models.NewAppError(http.StatusConflict, models.ErrGitNoUpstream,
 			"Branch "+branch+" tracks "+remote+", which is not a configured remote")
 	}
-	for _, u := range strings.Split(urls, "\n") {
-		if refusal := pushURLRefusal(remote, strings.TrimSpace(u)); refusal != nil {
-			return pushTarget{}, refusal
-		}
+	pushURLs := strings.Split(urls, "\n")
+	if len(pushURLs) != 1 {
+		// git pushes to each URL in turn, so one ref line could report the
+		// first while a later one failed or went somewhere else.
+		return pushTarget{}, models.NewAppError(http.StatusConflict, models.ErrGitPushURLUnsupported,
+			"Remote "+remote+" has more than one push URL; Capstan pushes to exactly one URL")
+	}
+	if refusal := pushURLRefusal(remote, strings.TrimSpace(pushURLs[0])); refusal != nil {
+		return pushTarget{}, refusal
 	}
 	return pushTarget{remote: remote, mergeRef: mergeRef}, nil
 }
 
-// gitConfigValue reads one config key; unset (exit 1) is "".
-func (s *GitService) gitConfigValue(top, user, token, key string) (string, error) {
-	v, err := s.gitCommandWithCreds(top, user, token, "config", "--get", key)
+// gitConfigValues reads every value of a config key; unset (exit 1) is none.
+func (s *GitService) gitConfigValues(top, user, token, key string) ([]string, error) {
+	v, err := s.gitCommandWithCreds(top, user, token, "config", "--get-all", key)
 	if err != nil {
 		if gitExitCode(err) == 1 {
-			return "", nil
+			return nil, nil
 		}
-		return "", fmt.Errorf("failed to read %s: %w", key, err)
+		return nil, fmt.Errorf("failed to read %s: %w", key, err)
 	}
-	return v, nil
+	return strings.Split(v, "\n"), nil
 }
 
 var (
@@ -778,6 +808,12 @@ func (s *GitService) push(top, user, token string, t pushTarget) (rng string, up
 	}
 	stdout, _, runErr := s.gitRun(top, user, token, nil, args...)
 	flag, summary, found := porcelainRefLine(stdout)
+	if runErr != nil {
+		// The classified answers below carry a fixed message, and auth and
+		// network failures share one, so git's own text (redacted by
+		// gitRun) is logged here: it is the only place they differ.
+		slog.Warn("git push failed", "path", top, "remote", t.remote, "error", runErr.Error())
+	}
 
 	if runErr == nil {
 		switch {

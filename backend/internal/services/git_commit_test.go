@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -534,6 +535,16 @@ func TestPushSSHRefused(t *testing.T) {
 			runGit(t, f.top, "remote", "set-url", "origin", "https://example.invalid/o/r.git")
 			runGit(t, f.top, "config", "url.git+ssh://git@example.invalid/.pushInsteadOf", "https://example.invalid/")
 		}, models.ErrGitSSHUnsupported},
+		{"two push URLs, local then ssh-shaped", func(t *testing.T, f *commitFix) {
+			runGit(t, f.top, "config", "--add", "remote.origin.pushurl", f.bare)
+			runGit(t, f.top, "config", "--add", "remote.origin.pushurl", "git@example.invalid:o/r.git")
+		}, models.ErrGitPushURLUnsupported},
+		{"two push URLs, both local", func(t *testing.T, f *commitFix) {
+			second := filepath.Join(t.TempDir(), "second.git")
+			runGit(t, filepath.Dir(second), "init", "-q", "--bare", "-b", "main", second)
+			runGit(t, f.top, "config", "--add", "remote.origin.pushurl", f.bare)
+			runGit(t, f.top, "config", "--add", "remote.origin.pushurl", second)
+		}, models.ErrGitPushURLUnsupported},
 		{"git protocol", func(t *testing.T, f *commitFix) {
 			runGit(t, f.top, "remote", "set-url", "origin", "git://example.invalid/o/r.git")
 		}, models.ErrGitPushURLUnsupported},
@@ -545,11 +556,15 @@ func TestPushSSHRefused(t *testing.T) {
 			f := newCommitFix(t, false)
 			tc.prep(t, f)
 			writeFile(t, filepath.Join(f.top, "compose.yaml"), "services: {a: {}}\n")
+			remoteBefore := f.remoteMain(t)
+			// One commit ahead, so a push that wrongly ran would move the remote.
+			runGit(t, f.top, "-c", "core.hooksPath=/dev/null", "commit", "-q", "--allow-empty", "-m", "ahead")
 			before := f.head(t)
 
 			ar, w := f.svc.PushVerified(f.dir)
 			requireRefusal(t, ar, http.StatusConflict, tc.code)
 			assert.Nil(t, w, "a push ran")
+			assert.Equal(t, remoteBefore, f.remoteMain(t), "the remote moved")
 
 			ar, w = f.svc.CommitVerified(f.dir, CommitRequest{Message: "m", Files: []string{"compose.yaml"}, Push: true})
 			requireRefusal(t, ar, http.StatusConflict, tc.code)
@@ -726,6 +741,8 @@ func TestPushRemoteDot(t *testing.T) {
 	ar, w := f.svc.PushVerified(f.dir)
 
 	requireRefusal(t, ar, http.StatusConflict, models.ErrGitNoUpstream)
+	// The remote "." check itself, not the get-url fallback that also 409s.
+	assert.Contains(t, ar.Err.Error(), "tracks a local branch")
 	assert.Nil(t, w)
 	assert.Equal(t, base, runGit(t, f.top, "rev-parse", "refs/heads/base"), "a local branch moved")
 }
@@ -822,4 +839,216 @@ func TestPushURLRefusal(t *testing.T) {
 		}
 		assert.Equal(t, want, code, "url %q", u)
 	}
+}
+
+// gitTry runs git like runGit but returns the error instead of failing, for
+// controls that must show plain git doing what the service refuses to.
+func gitTry(t *testing.T, dir string, args ...string) (string, error) {
+	t.Helper()
+	//nolint:gosec // test helper, explicit argv
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
+		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.invalid",
+		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@test.invalid")
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// TestPushMultiValuedUpstream: @{upstream} resolves the FIRST
+// branch.<b>.merge and `config --get` the LAST, so two values would push HEAD
+// to a branch the upstream does not name. Refused, nothing moves.
+func TestPushMultiValuedUpstream(t *testing.T) {
+	for _, tc := range []struct{ name, key, value string }{
+		{"two merge values", "branch.main.merge", "refs/heads/production"},
+		{"two remote values", "branch.main.remote", "origin"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newCommitFix(t, false)
+			runGit(t, f.top, "push", "-q", "origin", "main:production")
+			runGit(t, f.top, "config", "--add", tc.key, tc.value)
+			writeFile(t, filepath.Join(f.top, "compose.yaml"), "services: {a: {}}\n")
+			runGit(t, f.top, "commit", "-q", "-am", "local")
+			main, production := f.remoteMain(t), runGit(t, f.bare, "rev-parse", "refs/heads/production")
+
+			ar, w := f.svc.PushVerified(f.dir)
+
+			requireRefusal(t, ar, http.StatusConflict, models.ErrGitNoUpstream)
+			assert.Contains(t, ar.Err.Error(), "more than one upstream")
+			assert.Nil(t, w)
+			assert.Equal(t, main, f.remoteMain(t))
+			assert.Equal(t, production, runGit(t, f.bare, "rev-parse", "refs/heads/production"), "the push moved another remote branch")
+		})
+	}
+}
+
+// TestPushFailureLogsCause: a failed push logs git's own text (the only
+// place an auth failure and a network failure differ), redacted.
+func TestPushFailureLogsCause(t *testing.T) {
+	f := newCommitFix(t, false)
+	require.NoError(t, f.db.UpdateDirectoryCredentials(f.dir, "https", "", testGitUser, testGitToken))
+	runGit(t, f.top, "remote", "set-url", "origin", "http://"+testGitUser+":"+testGitToken+"@127.0.0.1:9/r.git")
+	logs := debugSlog(t)
+
+	writeFile(t, filepath.Join(f.top, "compose.yaml"), "services: {a: {}}\n")
+	runGit(t, f.top, "commit", "-q", "-am", "local")
+	ar, _ := f.svc.PushVerified(f.dir)
+	requireRefusal(t, ar, http.StatusBadGateway, models.ErrGitRemoteUnreachable)
+	assert.Contains(t, logs.String(), "git push failed")
+	assert.Contains(t, logs.String(), "Failed to connect", "git's cause is not in the log")
+
+	// The commit-kept path logs it too.
+	logs.Reset()
+	writeFile(t, filepath.Join(f.top, "compose.yaml"), "services: {b: {}}\n")
+	ar, _ = f.svc.CommitVerified(f.dir, CommitRequest{Message: "m", Files: []string{"compose.yaml"}, Push: true})
+	require.Equal(t, truth.OutcomePartial, ar.Outcome, "reason %q err %v", ar.Reason, ar.Err)
+	assert.Contains(t, logs.String(), "Failed to connect")
+	assert.NotContains(t, logs.String(), testGitToken)
+}
+
+func TestCommitIgnoresRepoGPGSign(t *testing.T) {
+	f := newCommitFix(t, false)
+	runGit(t, f.top, "config", "commit.gpgsign", "true")
+	runGit(t, f.top, "config", "gpg.program", "false")
+	writeFile(t, filepath.Join(f.top, "x"), "x2\n")
+	_, err := gitTry(t, f.top, "commit", "-q", "-m", "control", "--", "x")
+	require.Error(t, err, "control: the repository's signing config must make a plain commit fail")
+	writeFile(t, filepath.Join(f.top, "compose.yaml"), "services: {a: {}}\n")
+
+	ar, _ := f.svc.CommitVerified(f.dir, CommitRequest{Message: "m", Files: []string{"compose.yaml"}})
+
+	require.Equal(t, truth.OutcomeSuccess, ar.Outcome, "reason %q err %v", ar.Reason, ar.Err)
+	assert.NotContains(t, runGit(t, f.top, "cat-file", "commit", "HEAD"), "gpgsig")
+}
+
+// TestCommitIgnoresRepoFSMonitor: the repository's fsmonitor program runs
+// under plain git and not in any child of a commit request.
+func TestCommitIgnoresRepoFSMonitor(t *testing.T) {
+	f := newCommitFix(t, false)
+	marker := filepath.Join(t.TempDir(), "fsmonitor-ran")
+	script := filepath.Join(t.TempDir(), "fsmonitor")
+	require.NoError(t, os.WriteFile(script, []byte("#!/bin/sh\ntouch '"+marker+"'\nexit 1\n"), 0o755)) //nolint:gosec // test script
+	runGit(t, f.top, "config", "core.fsmonitor", script)
+	writeFile(t, filepath.Join(f.top, "compose.yaml"), "services: {a: {}}\n")
+	_, err := gitTry(t, f.top, "status", "--porcelain")
+	require.NoError(t, err, "control: plain git status")
+	_, err = os.Stat(marker)
+	require.NoError(t, err, "control: plain git status did not run the fsmonitor program")
+	require.NoError(t, os.Remove(marker))
+
+	ar, _ := f.svc.CommitVerified(f.dir, CommitRequest{Message: "m", Files: []string{"compose.yaml"}})
+
+	require.Equal(t, truth.OutcomeSuccess, ar.Outcome, "reason %q err %v", ar.Reason, ar.Err)
+	_, err = os.Stat(marker)
+	assert.True(t, os.IsNotExist(err), "the fsmonitor program ran during a commit request (stat err %v)", err)
+}
+
+func TestPushDoesNotFollowTags(t *testing.T) {
+	f := newCommitFix(t, false)
+	runGit(t, f.top, "config", "push.followTags", "true")
+	writeFile(t, filepath.Join(f.top, "compose.yaml"), "services: {a: {}}\n")
+	runGit(t, f.top, "commit", "-q", "-am", "local")
+	runGit(t, f.top, "tag", "-a", "v1", "-m", "v1")
+	control := runGit(t, f.top, "push", "--dry-run", "--porcelain", "origin", "HEAD:refs/heads/main")
+	require.Contains(t, control, "refs/tags/v1", "control: plain push would send the tag")
+
+	ar, _ := f.svc.PushVerified(f.dir)
+
+	require.Equal(t, truth.OutcomeSuccess, ar.Outcome, "reason %q err %v", ar.Reason, ar.Err)
+	assert.Equal(t, f.head(t), f.remoteMain(t))
+	assert.Empty(t, runGit(t, f.bare, "tag", "--list"), "a tag was pushed")
+}
+
+// TestPushIgnoresRepoRecurseSubmodules: push.recurseSubmodules=check in the
+// repository refuses a push whose submodule commit is on no remote; the
+// service's push is not the repository's to change.
+func TestPushIgnoresRepoRecurseSubmodules(t *testing.T) {
+	f := newCommitFix(t, false)
+	base := t.TempDir()
+	subBare := filepath.Join(base, "sub.git")
+	subSeed := filepath.Join(base, "subseed")
+	runGit(t, base, "init", "-q", "--bare", "-b", "main", subBare)
+	runGit(t, base, "init", "-q", "-b", "main", subSeed)
+	writeFile(t, filepath.Join(subSeed, "s"), "s\n")
+	runGit(t, subSeed, "add", "-A")
+	runGit(t, subSeed, "commit", "-q", "-m", "sub seed")
+	runGit(t, subSeed, "push", "-q", subBare, "main")
+	runGit(t, f.top, "-c", "protocol.file.allow=always", "submodule", "-q", "add", subBare, "sub")
+	runGit(t, f.top, "commit", "-q", "-m", "add sub")
+	runGit(t, f.top, "push", "-q")
+	writeFile(t, filepath.Join(f.top, "sub/s"), "s2\n")
+	runGit(t, filepath.Join(f.top, "sub"), "commit", "-q", "-am", "unpushed sub commit")
+	runGit(t, f.top, "add", "sub")
+	runGit(t, f.top, "commit", "-q", "-m", "bump sub")
+	runGit(t, f.top, "config", "push.recurseSubmodules", "check")
+	_, err := gitTry(t, f.top, "push", "--dry-run", "origin", "HEAD:refs/heads/main")
+	require.Error(t, err, "control: the repository's recurseSubmodules=check must refuse a plain push")
+
+	ar, _ := f.svc.PushVerified(f.dir)
+
+	require.Equal(t, truth.OutcomeSuccess, ar.Outcome, "reason %q err %v", ar.Reason, ar.Err)
+	assert.Equal(t, f.head(t), f.remoteMain(t))
+}
+
+// TestPushBranchNamedLikeATag: a tag named like the branch makes
+// `symbolic-ref --short` answer "heads/main", which names no branch config.
+func TestPushBranchNamedLikeATag(t *testing.T) {
+	f := newCommitFix(t, false)
+	runGit(t, f.top, "tag", "main")
+	writeFile(t, filepath.Join(f.top, "compose.yaml"), "services: {a: {}}\n")
+
+	got, err := f.svc.GetChanges(f.dir)
+	require.NoError(t, err)
+	assert.Equal(t, "main", got.Branch)
+	ar, _ := f.svc.CommitVerified(f.dir, CommitRequest{Message: "m", Files: []string{"compose.yaml"}, Push: true})
+
+	require.Equal(t, truth.OutcomeSuccess, ar.Outcome, "reason %q err %v", ar.Reason, ar.Err)
+	assert.Equal(t, f.head(t), f.remoteMain(t))
+}
+
+// TestPushRefusesURLNamedRemote: a remote whose NAME is a URL with userinfo
+// (hand-written config) is refused before the name reaches a reason, the
+// details, the log or the action log.
+func TestPushRefusesURLNamedRemote(t *testing.T) {
+	f := newCommitFix(t, false)
+	const secret = "k81p-url-name-SECRET"
+	name := "http://u:" + secret + "@127.0.0.1:9/r.git"
+	runGit(t, f.top, "config", "remote."+name+".url", name)
+	runGit(t, f.top, "config", "remote."+name+".fetch", "+refs/heads/*:refs/remotes/x/*")
+	runGit(t, f.top, "update-ref", "refs/remotes/x/main", "HEAD")
+	runGit(t, f.top, "config", "branch.main.remote", name)
+	writeFile(t, filepath.Join(f.top, "compose.yaml"), "services: {a: {}}\n")
+	runGit(t, f.top, "commit", "-q", "-am", "local")
+	_, upErr := gitTry(t, f.top, "rev-parse", "--abbrev-ref", "@{upstream}")
+	require.NoError(t, upErr, "fixture: the URL-named remote must resolve as the upstream")
+	logs := debugSlog(t)
+
+	ar, w := f.svc.PushVerified(f.dir)
+
+	requireRefusal(t, ar, http.StatusConflict, models.ErrGitPushURLUnsupported)
+	assert.Nil(t, w, "a push ran, so an action-log row would name the remote")
+	body, err := json.Marshal(ar)
+	require.NoError(t, err)
+	for _, where := range []string{string(body), ar.Err.Error(), logs.String()} {
+		assert.NotContains(t, where, secret)
+	}
+}
+
+// TestCommitFilesCountsCommittedPaths: the files count is what was committed:
+// a rename's original path counts, a duplicated name does not.
+func TestCommitFilesCountsCommittedPaths(t *testing.T) {
+	f := newCommitFix(t, true)
+	runGit(t, f.top, "mv", "app/a.txt", "app/b.txt")
+	ar, w := f.svc.CommitVerified(f.dir, CommitRequest{Message: "m", Files: []string{"app/b.txt"}})
+	require.Equal(t, truth.OutcomeSuccess, ar.Outcome, "reason %q err %v", ar.Reason, ar.Err)
+	assert.ElementsMatch(t, []string{"app/a.txt", "app/b.txt"},
+		strings.Fields(runGit(t, f.top, "show", "--no-renames", "--name-only", "--format=", "HEAD")))
+	assert.Equal(t, 2, w.Files)
+	assert.Equal(t, 2, ar.Details["files"])
+
+	writeFile(t, filepath.Join(f.top, "app/compose.yaml"), "services: {a: {}}\n")
+	_, w = f.svc.CommitVerified(f.dir, CommitRequest{Message: "m", Files: []string{"app/compose.yaml", "app/compose.yaml"}})
+	require.NotNil(t, w)
+	assert.Equal(t, 1, w.Files)
 }

@@ -279,8 +279,9 @@ are 4xx or 502, never 401. Commit and push results are action results
   the folder answer 409 `GIT_OPERATION_IN_PROGRESS`
 - `POST /api/v1/git/commit` — body `{stackId, message, files, confirmEnv,
   push}`. Commits exactly `files` (paths as `/changes` lists them; a rename
-  commits its old path too), with repository hooks, fsmonitor and signing off
-  and literal pathspecs, as the author in Settings > Git. With `push: true` it
+  commits its old path too) with literal pathspecs, as the author in Settings >
+  Git. No repository hook, fsmonitor program or commit signing runs during the
+  request. The audit row's file count is the paths committed. With `push: true` it
   then pushes as `POST /git/push` does, under the same lock. Answers:
   - 400 `VALIDATION_ERROR`: blank message, no files, or a file that is not a
     changed tracked file of this stack's folder (including a sibling folder's)
@@ -305,14 +306,18 @@ are 4xx or 502, never 401. Commit and push results are action results
     any git runs), or the push URL is SSH-shaped (`ssh://`, `git+ssh://`,
     `user@host:path`, `host:path`); Capstan does not push over SSH yet
   - 409 `GIT_PUSH_URL_UNSUPPORTED`: `git://`, another scheme, or a
-    `<transport>::` helper. Allowed: `https://`, `http://`, `file://`, a local
-    path
-  - 409 `GIT_DETACHED_HEAD`; 409 `GIT_NO_UPSTREAM` (no upstream, or one in the
-    same repository, remote `.`)
+    `<transport>::` helper; more than one push URL (Capstan pushes to exactly
+    one); or a remote whose name is a URL. Allowed: `https://`, `http://`,
+    `file://`, a local path
+  - 409 `GIT_DETACHED_HEAD`; 409 `GIT_NO_UPSTREAM` (no upstream, one in the
+    same repository (remote `.`), or more than one `branch.<b>.remote` or
+    `branch.<b>.merge` value)
   - 409 `GIT_REMOTE_AHEAD`: the remote has commits this branch lacks; pull
     first
   - 409 `GIT_PUSH_REJECTED`: the remote refused for another reason
-  - 502 `GIT_REMOTE_UNREACHABLE`: unreachable, or the credentials were refused
+  - 502 `GIT_REMOTE_UNREACHABLE`: unreachable, or the credentials were refused.
+    git's own (redacted) message for any failed push is logged at WARN as
+    "git push failed"; it is the only place the two causes differ
   - each push that runs writes one `git_push` audit row (path, remote name,
     branch, outcome); the remote URL is never recorded
 
