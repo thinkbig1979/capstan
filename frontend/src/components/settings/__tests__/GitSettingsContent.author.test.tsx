@@ -53,9 +53,18 @@ describe('GitSettingsContent: commit author', () => {
     await user.clear(name)
     await user.type(name, 'New Name')
     await user.click(screen.getByRole('button', { name: 'Save Git Settings' }))
-    await waitFor(() =>
-      expect(mockUpdateGit).toHaveBeenCalledWith({ authorName: 'New Name', authorEmail: 'stored@example.invalid' }),
-    )
+    await waitFor(() => expect(mockUpdateGit).toHaveBeenCalledTimes(1))
+    expect(mockUpdateGit).toHaveBeenCalledWith({ authorName: 'New Name' })
+  })
+
+  it('a save that edits no author field sends neither (review R3 N4)', async () => {
+    const user = userEvent.setup()
+    renderPanel()
+    await screen.findByLabelText('Author name')
+    await user.type(screen.getByLabelText('Username'), 'git')
+    await user.click(screen.getByRole('button', { name: 'Save Git Settings' }))
+    await waitFor(() => expect(mockUpdateGit).toHaveBeenCalledTimes(1))
+    expect(mockUpdateGit).toHaveBeenCalledWith({ httpsUser: 'git' })
   })
 
   it('shows the server\'s validation message when it refuses the author', async () => {

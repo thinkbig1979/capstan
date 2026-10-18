@@ -58,6 +58,10 @@ export function useGitChanges(stackId: string, enabled = true) {
     queryKey: changesKey(stackId),
     queryFn: () => gitApi.changes(stackId),
     enabled,
+    // A save changes this list without touching git, and the save must make no
+    // git call, so the list is re-read whenever a panel or the dialog mounts
+    // rather than served from a cache up to staleTime old (review R3 S3).
+    refetchOnMount: 'always',
     // Every answer but a fault is a 4xx that repeats on retry.
     retry: false,
   })
@@ -72,6 +76,8 @@ export function useGitChangesDiff(stackId: string, path: string | null) {
     queryKey: changesDiffKey(stackId, path ?? ''),
     queryFn: () => gitApi.changesDiff(stackId, path ?? ''),
     enabled: path !== null,
+    // Same as useGitChanges: a save since the last read changes the diff.
+    refetchOnMount: 'always',
     retry: false,
   })
 }

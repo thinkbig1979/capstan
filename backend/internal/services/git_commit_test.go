@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -1217,4 +1218,191 @@ func TestEnvSymlinkTarget(t *testing.T) {
 			requireRefusal(t, ar, http.StatusBadRequest, models.ErrGitEnvConfirmRequired)
 		})
 	}
+}
+
+// Revision round (agent-os-k81p.3, review R3): the env rule decides what the
+// dialog shows, so every shape below must be hidden, with its contents absent.
+
+// requireEnvHidden asserts path is listed as env, its diff is hidden and the
+// secret is absent from the marshalled answer.
+func requireEnvHidden(t *testing.T, f *commitFix, dir, path string) {
+	t.Helper()
+	changes, err := f.svc.GetChanges(dir)
+	require.NoError(t, err)
+	var found *models.GitChange
+	for i := range changes.Changes {
+		if changes.Changes[i].Path == path {
+			found = &changes.Changes[i]
+		}
+	}
+	require.NotNil(t, found, "%q not listed in %+v", path, changes.Changes)
+	assert.True(t, found.IsEnv, "%q must be an env file", path)
+	got, err := f.svc.GetChangeDiff(dir, path)
+	require.NoError(t, err)
+	body, err := json.Marshal(got)
+	require.NoError(t, err)
+	assert.True(t, got.Hidden, "%q diff must be hidden", path)
+	assert.NotContains(t, string(body), k81p3Secret, "%q", path)
+}
+
+// requireShown is the control: a file the rule must NOT flag keeps its diff.
+func requireShown(t *testing.T, f *commitFix, dir, path string) {
+	t.Helper()
+	got, err := f.svc.GetChangeDiff(dir, path)
+	require.NoError(t, err)
+	assert.False(t, got.Hidden, "%q must not be hidden", path)
+	assert.Contains(t, got.Diff, k81p3Secret, "control: %q shows its diff", path)
+}
+
+// trackThenChange commits each file with a harmless value, then rewrites it
+// with the secret.
+func trackThenChange(t *testing.T, f *commitFix, names ...string) {
+	t.Helper()
+	for _, n := range names {
+		writeFile(t, filepath.Join(f.top, n), "X=1\n")
+	}
+	runGit(t, f.top, "add", "-A")
+	runGit(t, f.top, "commit", "-q", "-m", "track")
+	for _, n := range names {
+		writeFile(t, filepath.Join(f.top, n), "X="+k81p3Secret+"\n")
+	}
+}
+
+func TestEnvRuleNames(t *testing.T) {
+	envNames := []string{".ENV", "prod.Env", ".envrc", "app.env.local", ".env-prod", ".env_local", "env", ".env.prod", "sub/.Env.Local"}
+	controls := []string{"environment.yaml", "notes.txt", "envoy.yaml"}
+	f := newCommitFix(t, false)
+	trackThenChange(t, f, append(append([]string{}, envNames...), controls...)...)
+	for _, n := range envNames {
+		t.Run(n, func(t *testing.T) { requireEnvHidden(t, f, f.dir, n) })
+	}
+	for _, n := range controls {
+		t.Run("control "+n, func(t *testing.T) { requireShown(t, f, f.dir, n) })
+	}
+}
+
+func TestEnvRuleComposeEnvFile(t *testing.T) {
+	for _, tc := range []struct{ name, compose string }{
+		{"string", "services:\n  web:\n    env_file: app.secrets\n"},
+		{"list", "services:\n  web:\n    env_file:\n      - other.txt\n      - app.secrets\n"},
+		{"long form", "services:\n  web:\n    env_file:\n      - path: app.secrets\n        required: false\n"},
+		{"subfolder", "services:\n  web:\n    env_file: ./conf/../app.secrets\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newCommitFix(t, false)
+			writeFile(t, filepath.Join(f.top, "compose.yaml"), tc.compose)
+			trackThenChange(t, f, "app.secrets", "notes.txt")
+			requireEnvHidden(t, f, f.dir, "app.secrets")
+			requireShown(t, f, f.dir, "notes.txt")
+		})
+	}
+}
+
+// TestEnvRuleComposeUnknown: when the env files a compose file names cannot be
+// known, every changed file but the compose file is treated as env.
+func TestEnvRuleComposeUnknown(t *testing.T) {
+	for _, tc := range []struct{ name, compose string }{
+		{"parse error", "services: [\n"},
+		{"interpolated", "services:\n  web:\n    env_file: ${ENV_FILE}\n"},
+		{"unknown shape", "services:\n  web:\n    env_file: {path: x}\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newCommitFix(t, false)
+			trackThenChange(t, f, "notes.txt")
+			writeFile(t, filepath.Join(f.top, "compose.yaml"), tc.compose)
+			requireEnvHidden(t, f, f.dir, "notes.txt")
+			got, err := f.svc.GetChangeDiff(f.dir, "compose.yaml")
+			require.NoError(t, err)
+			assert.False(t, got.Hidden, "the compose file itself stays visible")
+		})
+	}
+}
+
+// TestEnvRuleCrossFolderLink: app/.env -> ../other/prod.secrets, viewed from
+// the sibling stack folder other/. Also with GIT_LITERAL_PATHSPECS=1 in the
+// server's environment, which would read the glob pathspecs literally.
+func TestEnvRuleCrossFolderLink(t *testing.T) {
+	for _, literal := range []bool{false, true} {
+		t.Run(fmt.Sprintf("GIT_LITERAL_PATHSPECS inherited=%v", literal), func(t *testing.T) {
+			if literal {
+				t.Setenv("GIT_LITERAL_PATHSPECS", "1")
+			}
+			f := newCommitFix(t, true)
+			writeFile(t, filepath.Join(f.top, "other/prod.secrets"), "A=1\n")
+			require.NoError(t, os.Symlink("../other/prod.secrets", filepath.Join(f.top, "app/.env")))
+			runGit(t, f.top, "add", "-A")
+			runGit(t, f.top, "commit", "-q", "-m", "cross-folder link")
+			writeFile(t, filepath.Join(f.top, "other/prod.secrets"), "A="+k81p3Secret+"\n")
+			writeFile(t, filepath.Join(f.top, "other/compose.yaml"), "services: {}\n# "+k81p3Secret+"\n")
+			requireEnvHidden(t, f, f.sibling, "other/prod.secrets")
+			requireShown(t, f, f.sibling, "other/compose.yaml")
+		})
+	}
+}
+
+// TestEnvRuleUntrackedLink: a gitignored, untracked .env -> secrets.txt, with
+// a stack row whose EnvFile is "" (scanned before .env existed).
+func TestEnvRuleUntrackedLink(t *testing.T) {
+	f := newCommitFix(t, false)
+	require.NoError(t, f.db.UpsertStack(models.Stack{ID: "s-app", Directory: f.dir, ComposeFile: "compose.yaml", EnvFile: "", ProjectName: "app"}))
+	runGit(t, f.top, "rm", "-q", "--cached", ".env")
+	require.NoError(t, os.Remove(filepath.Join(f.top, ".env")))
+	writeFile(t, filepath.Join(f.top, ".gitignore"), ".env\n")
+	writeFile(t, filepath.Join(f.top, "secrets.txt"), "A=1\n")
+	writeFile(t, filepath.Join(f.top, "notes.txt"), "n\n")
+	runGit(t, f.top, "add", "-A")
+	runGit(t, f.top, "commit", "-q", "-m", "untracked env link")
+	require.NoError(t, os.Symlink("secrets.txt", filepath.Join(f.top, ".env")))
+	writeFile(t, filepath.Join(f.top, "secrets.txt"), "A="+k81p3Secret+"\n")
+	writeFile(t, filepath.Join(f.top, "notes.txt"), k81p3Secret+"\n")
+	requireEnvHidden(t, f, f.dir, "secrets.txt")
+	requireShown(t, f, f.dir, "notes.txt")
+}
+
+// TestGetChangeDiffSubmodule: with the superproject's diff.submodule=diff,
+// git would diff inside the submodule, running the submodule's own
+// diff.external and textconv and showing its files. Neither runs, and only
+// the commit line is shown.
+func TestGetChangeDiffSubmodule(t *testing.T) {
+	f := newCommitFix(t, false)
+	base := t.TempDir()
+	subBare := filepath.Join(base, "sub.git")
+	seed := filepath.Join(base, "seed")
+	runGit(t, base, "init", "-q", "--bare", "-b", "main", subBare)
+	runGit(t, base, "init", "-q", "-b", "main", seed)
+	writeFile(t, filepath.Join(seed, "s.txt"), "s\n")
+	runGit(t, seed, "add", "-A")
+	runGit(t, seed, "commit", "-q", "-m", "seed")
+	runGit(t, seed, "push", "-q", subBare, "main")
+	runGit(t, f.top, "-c", "protocol.file.allow=always", "submodule", "-q", "add", subBare, "sub")
+	runGit(t, f.top, "commit", "-q", "-m", "add sub")
+
+	markerExt := filepath.Join(t.TempDir(), "ext-ran")
+	markerTc := filepath.Join(t.TempDir(), "tc-ran")
+	sub := filepath.Join(f.top, "sub")
+	runGit(t, sub, "config", "diff.external", "sh -c 'touch "+markerExt+"; true'")
+	runGit(t, sub, "config", "diff.tc.textconv", "sh -c 'touch "+markerTc+"; cat \"$0\"'")
+	writeFile(t, filepath.Join(sub, ".gitattributes"), "s.txt diff=tc\n")
+	runGit(t, sub, "add", ".gitattributes")
+	runGit(t, sub, "commit", "-q", "-m", "attrs")
+	writeFile(t, filepath.Join(sub, "s.txt"), "s2-"+k81p3Secret+"\n")
+	runGit(t, f.top, "config", "diff.submodule", "diff")
+
+	got, err := f.svc.GetChangeDiff(f.dir, "sub")
+	require.NoError(t, err)
+	assert.NoFileExists(t, markerExt, "the submodule's diff.external ran")
+	assert.NoFileExists(t, markerTc, "the submodule's textconv ran")
+	assert.NotContains(t, got.Diff, k81p3Secret, "a submodule file's contents were shown")
+	assert.Contains(t, got.Diff, "diff --git a/sub b/sub\n")
+}
+
+// TestEnvRuleGatesCommit: the commit confirm reads the same rule, so a file
+// only the widened rule flags needs confirmEnv too.
+func TestEnvRuleGatesCommit(t *testing.T) {
+	f := newCommitFix(t, false)
+	trackThenChange(t, f, ".envrc")
+	ar, _ := f.svc.CommitVerified(f.dir, CommitRequest{Message: "m", Files: []string{".envrc"}})
+	requireRefusal(t, ar, http.StatusBadRequest, models.ErrGitEnvConfirmRequired)
+	ar, _ = f.svc.CommitVerified(f.dir, CommitRequest{Message: "m", Files: []string{".envrc"}, ConfirmEnv: true})
+	require.Equal(t, truth.OutcomeSuccess, ar.Outcome, "control: confirmed, it commits (reason %q)", ar.Reason)
 }

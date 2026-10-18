@@ -57,10 +57,11 @@ export function GitSettingsContent() {
     if (effectiveSshKey) data.sshKey = effectiveSshKey
     if (effectiveHttpsUser) data.httpsUser = effectiveHttpsUser
     if (httpsToken) data.httpsToken = httpsToken
-    // The server validates these and answers 400 VALIDATION_ERROR with the
-    // reason, which settingsSaveFault shows. Blank means "no change" there.
-    if (effectiveAuthorName) data.authorName = effectiveAuthorName
-    if (effectiveAuthorEmail) data.authorEmail = effectiveAuthorEmail
+    // Sent only when edited, so a credentials-only save never re-validates a
+    // stored author. The server answers 400 VALIDATION_ERROR with the reason,
+    // which settingsSaveFault shows. Blank means "no change" there.
+    if (effectiveAuthorName && effectiveAuthorName !== (gitSettings?.authorName || '')) data.authorName = effectiveAuthorName
+    if (effectiveAuthorEmail && effectiveAuthorEmail !== (gitSettings?.authorEmail || '')) data.authorEmail = effectiveAuthorEmail
     updateGitSettings.mutate(data, {
       onSuccess: () => {
         toast.success('Git settings saved')

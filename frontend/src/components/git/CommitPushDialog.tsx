@@ -147,7 +147,9 @@ interface BodyProps {
 }
 
 function CommitPushBody({ stackId, composeFile, onClose }: BodyProps) {
-  const { data, isPending, error, refetch } = useGitChanges(stackId)
+  // isFetchedAfterMount: a cached list from before the latest save is not
+  // shown while the mount's re-read is in flight.
+  const { data, isPending, isFetchedAfterMount, error, refetch } = useGitChanges(stackId)
   const commit = useGitCommit()
   const push = useGitPush()
   const [outcome, setOutcome] = useState<Outcome | null>(null)
@@ -178,7 +180,7 @@ function CommitPushBody({ stackId, composeFile, onClose }: BodyProps) {
   }
 
   let body
-  if (isPending) {
+  if (isPending || !isFetchedAfterMount) {
     body = <p className="py-4 text-sm text-muted-foreground">Loading the changed files…</p>
   } else if (!data) {
     const cause = sentenceFor(codeOf(error), causeOf(error))
@@ -268,12 +270,12 @@ function ChangesForm({ stackId, composeFile, result, busy, onCommit, onPush }: C
   )
 
   const toggle = (path: string) => {
-    setTicked((prev) => {
-      const next = new Set(prev)
-      if (next.has(path)) next.delete(path)
-      else next.add(path)
-      return next
-    })
+    const next = new Set(ticked)
+    if (next.has(path)) next.delete(path)
+    else next.add(path)
+    setTicked(next)
+    // A confirm given for one selection does not carry over to the next.
+    if (!changes.some((c) => c.isEnv && next.has(c.path))) setEnvConfirmed(false)
   }
 
   // What the server refuses, mirrored so a button never offers what will fail.
@@ -439,11 +441,11 @@ function BlockedNotes({ result }: { result: GitChangesResult }) {
 
 /** The selected file's diff; an env file's is never requested (D136). */
 function ChangeDiff({ stackId, change }: { stackId: string; change: GitChange }) {
-  const { data, isPending, error, refetch } = useGitChangesDiff(stackId, change.isEnv ? null : change.path)
+  const { data, isPending, isFetchedAfterMount, error, refetch } = useGitChangesDiff(stackId, change.isEnv ? null : change.path)
   if (change.isEnv || data?.hidden) {
     return <p className="rounded-md border px-3 py-2 text-sm text-muted-foreground">{ENV_DIFF_HIDDEN}</p>
   }
-  if (isPending) return <p className="text-sm text-muted-foreground">Loading diff…</p>
+  if (isPending || !isFetchedAfterMount) return <p className="text-sm text-muted-foreground">Loading diff…</p>
   if (!data) {
     return (
       <div className="space-y-1">

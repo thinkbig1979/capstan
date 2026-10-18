@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { QueryClient } from '@tanstack/react-query'
 import { renderWithProviders } from '../../../test/utils'
+import { queryKeys } from '@/lib/query-keys'
 
 /**
  * The per-directory "Allow commit and push" switch (agent-os-k81p.3): it
@@ -58,6 +60,22 @@ describe('GitSettingsSection: Allow commit and push', () => {
     await waitFor(() => expect(sw).not.toBeChecked())
     expect(mockUpdatePush).toHaveBeenNthCalledWith(2, DIR, false)
     expect(mockUpdatePush).toHaveBeenCalledTimes(2)
+  })
+
+  it('a toggle marks the stack\'s git queries stale, so the dialog reads the new switch (review R3 FB)', async () => {
+    const user = userEvent.setup()
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity }, mutations: { retry: false } } })
+    const changesKey = [...queryKeys.git.all('s1'), 'changes']
+    const otherKey = [...queryKeys.git.all('s2'), 'changes']
+    queryClient.setQueryData(changesKey, { pushEnabled: false })
+    queryClient.setQueryData(otherKey, { pushEnabled: false })
+    renderWithProviders(<GitSettingsSection directoryPath={DIR} stackId="s1" open onToggle={() => {}} />, { queryClient })
+    const sw = screen.getByRole('switch', { name: 'Allow commit and push' })
+    await waitFor(() => expect(sw).toBeEnabled())
+    expect(queryClient.getQueryState(changesKey)?.isInvalidated).toBe(false)
+    await user.click(sw)
+    await waitFor(() => expect(queryClient.getQueryState(changesKey)?.isInvalidated).toBe(true))
+    expect(queryClient.getQueryState(otherKey)?.isInvalidated, 'control: another stack is untouched').toBe(false)
   })
 
   it('shows the stored value, and is disabled until it has loaded', async () => {

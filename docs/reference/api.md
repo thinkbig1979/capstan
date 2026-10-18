@@ -273,20 +273,27 @@ are 4xx or 502, never 401. Commit and push results are action results
   git's porcelain v2 code (`.M` modified, `M.` staged, `R.` renamed).
   `hasUpstream` comes from `@{upstream}` alone; `ahead`/`behind` can be counted
   against `origin/<branch>` when none is set. Untracked files are not listed.
-  `isEnv` marks `.env`, `.env.*`, `*.env` and the stack's own env file; it does
-  not see a compose `env_file:` with another name. A push switch or author
-  setting that cannot be read is a 500, never `false`. Unresolved conflicts in
-  the folder answer 409 `GIT_OPERATION_IN_PROGRESS`. `isEnv` also marks a file
-  that a stack's env file or an env-named tracked file resolves to through a
-  symlink (`.env -> secrets.txt` marks `secrets.txt`); an untracked env-named
-  symlink no stack names is not seen
+  `isEnv` marks a file whose name, ignoring case, is `env` or `.env`, starts with
+  `.env` (`.envrc`, `.env-prod`, `.env.prod`), ends with `.env` or contains
+  `.env.`; the stack's own env file; every `env_file:` entry (string, list or
+  `{path:}` form) of the compose file of each stack in the folder; and a file
+  that an env-named path resolves to through a symlink (tracked anywhere in
+  the repository, or untracked, ignored included, in the folder). When a
+  compose file cannot be read or parsed, or names an `env_file:` it cannot
+  resolve (an interpolated `${...}` path), every changed file of the folder
+  but the compose files is `isEnv`. Not seen: an env file copied to an
+  unrelated name, and one moved and changed past git's rename detection. A
+  push switch or author setting that cannot be read is a 500, never `false`.
+  Unresolved conflicts in the folder answer 409 `GIT_OPERATION_IN_PROGRESS`
 - `GET /api/v1/git/changes/diff` — `?stackId=<id>&path=<path>`. Read-only, no
   lock. The uncommitted diff of one file from `/changes` against `HEAD`:
   `{path, hidden, diff}`, `diff` a raw unified diff with `a/`/`b/` prefixes and
   no colour (a rename holds both paths). An env file (`isEnv` in the change
   list, which covers a rename from an env name) answers 200 `{hidden: true,
-  diff: ""}` and its contents are never read or sent. No external diff, diff
-  driver or textconv program runs; clean and process filters still do, as for
+  diff: ""}` and its contents are never read or sent. The repository's
+  external diff, diff driver and textconv commands do not run, and a submodule
+  shows only its commit line (`--submodule=short`): its files' contents are
+  not shown and its own external diff and textconv commands do not run; clean and process filters still run, as for
   `git status`. Answers 400 `VALIDATION_ERROR` when `path` is missing or not in
   the change list, and the errors `/changes` answers (a repository with no
   commits yet included)

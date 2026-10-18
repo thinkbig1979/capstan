@@ -6,6 +6,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { QueryClient } from '@tanstack/react-query'
 import { renderWithProviders } from '../../../test/utils'
 import type { GitChange, GitChangesResult } from '@/types/generated'
 
@@ -102,6 +103,20 @@ describe('CommitPushDialog: the file list', () => {
     })
   })
 
+  it('unticking every env file clears the confirm, so re-ticking asks again (review R3 N1)', async () => {
+    const user = userEvent.setup()
+    renderDialog()
+    await screen.findByRole('checkbox', { name: /^compose\.yaml/ })
+    await typeMessage('update')
+    await user.click(checkbox('.env'))
+    await user.click(screen.getByRole('checkbox', { name: 'Commit the env file anyway' }))
+    expect(commitButton()).toBeEnabled()
+    await user.click(checkbox('.env'))
+    await user.click(checkbox('.env'))
+    expect(screen.getByRole('checkbox', { name: 'Commit the env file anyway' })).not.toBeChecked()
+    expect(commitButton()).toBeDisabled()
+  })
+
   it('shows the selected file\'s diff, and never requests an env file\'s (D136)', async () => {
     const user = userEvent.setup()
     renderDialog()
@@ -113,6 +128,18 @@ describe('CommitPushDialog: the file list', () => {
     expect(screen.getByText(ENV_DIFF_HIDDEN)).toBeInTheDocument()
     expect(screen.queryByText(/services: \{a: \{\}\}/)).not.toBeInTheDocument()
     expect(mockChangesDiff.mock.calls.map((c) => c[1])).not.toContain('.env')
+  })
+
+  it('re-reads a diff cached before the latest save (review R3 S3)', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: 30_000 } } })
+    queryClient.setQueryData(['git', 's1', 'changes', 'diff', 'compose.yaml'], {
+      path: 'compose.yaml', hidden: false,
+      diff: 'diff --git a/compose.yaml b/compose.yaml\n--- a/compose.yaml\n+++ b/compose.yaml\n@@ -1 +1 @@\n-services: {}\n+services: {old: {}}\n',
+    })
+    renderWithProviders(<CommitPushDialog stackId="s1" composeFile="compose.yaml" open onOpenChange={vi.fn()} />, { queryClient })
+    expect(await screen.findByText(/services: \{a: \{\}\}/)).toBeInTheDocument()
+    expect(screen.queryByText(/services: \{old: \{\}\}/)).not.toBeInTheDocument()
+    expect(mockChangesDiff).toHaveBeenCalledWith('s1', 'compose.yaml')
   })
 
   it('shows the D136 sentence when the server hides a file the list did not mark', async () => {
@@ -235,6 +262,12 @@ describe('CommitPushDialog: states', () => {
     await typeMessage('m')
     expect(commitButton()).toBeDisabled()
     expect(commitPushButton()).toBeDisabled()
+  })
+
+  it('push switch off: Push is disabled too, even with commits to push (review R3 FA)', async () => {
+    mockChanges.mockResolvedValue(changesResult({ pushEnabled: false, changes: [], ahead: 1 }))
+    renderDialog()
+    expect(await screen.findByRole('button', { name: 'Push 1 commit' })).toBeDisabled()
   })
 
   it('identity missing: blocks commit and links to Settings > Git', async () => {

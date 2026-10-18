@@ -100,8 +100,8 @@ import { toast } from 'sonner'
 /** Every git endpoint called so far, by name. */
 const gitCalls = () => Object.entries(git).filter(([, fn]) => fn.mock.calls.length > 0).map(([name]) => name)
 
-function renderEditor(isGitRepo: boolean) {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity }, mutations: { retry: false } } })
+function renderEditor(isGitRepo: boolean, staleTime = 0) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime }, mutations: { retry: false } } })
   // What StackPage has already fetched.
   queryClient.setQueryData(queryKeys.stack.detail('s1'), {
     id: 's1', directory: '/stacks/app', composeFile: 'compose.yaml', envFile: '.env', projectName: 'app', isGitRepo,
@@ -150,6 +150,38 @@ describe('ComposeEditor: the save toast\'s Commit and push link', () => {
     expect(gitCalls().sort()).toEqual(['changes', 'changesDiff'])
     expect(git.commit).not.toHaveBeenCalled()
     expect(git.push).not.toHaveBeenCalled()
+  })
+
+  it('the dialog re-reads a change list cached before the save (review R3 S3)', async () => {
+    // Production's staleTime (lib/query-client.ts) and a list the git panel
+    // read while the folder was still clean.
+    const { queryClient } = renderEditor(true, 30_000)
+    queryClient.setQueryData([...queryKeys.git.all('s1'), 'changes'], {
+      branch: 'main', detached: false, trackingBranch: 'origin/main', hasUpstream: true, ahead: 0, behind: 0,
+      pushEnabled: true, identityConfigured: true, changes: [],
+    })
+    // Hold the re-read open, so the check below sees the in-flight moment.
+    const fresh = git.changes.getMockImplementation()
+    let release: () => void = () => {}
+    git.changes.mockImplementationOnce((...a: unknown[]) => new Promise((resolve) => {
+      release = () => resolve(fresh?.(...a))
+    }))
+    await save()
+    const [, opts] = vi.mocked(toast.success).mock.calls[0] as [string, { action?: { onClick: () => void } }]
+    expect(gitCalls()).toEqual([])
+    await act(async () => {
+      opts.action?.onClick()
+    })
+    await screen.findByRole('dialog', { name: 'Commit and push' })
+    await waitFor(() => expect(git.changes).toHaveBeenCalledTimes(1))
+    // The stale list is not shown while the re-read is in flight.
+    expect(screen.getByText('Loading the changed files…')).toBeInTheDocument()
+    expect(screen.queryByText(/No uncommitted changes/)).not.toBeInTheDocument()
+    await act(async () => {
+      release()
+    })
+    expect(await screen.findByRole('checkbox', { name: /^compose\.yaml/ })).toBeChecked()
+    expect(git.changes).toHaveBeenCalledTimes(1)
   })
 
   it('a stack that is not a git repository gets the plain toast and no link', async () => {
