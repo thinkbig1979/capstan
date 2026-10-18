@@ -183,8 +183,11 @@ func (d *DB) UpdateDirectoryCredentials(path, authType, sshKeyPath, httpsUser, h
 // SetDirectoryPushEnabled writes the push switch and nothing else. It is the
 // only writer of git_push_enabled: UpsertDirectory, InsertDirectoryIfAbsent
 // and UpdateDirectoryCredentials leave the column out on purpose, so a rescan
-// or a credential save can neither arm nor disarm a later network write. An
-// unregistered path is errdefs.ErrNotFound rather than a silent no-op.
+// that still finds the directory, or a credential save, can neither arm nor
+// disarm a later network write. A deleted row (DeleteDirectory, when a scan no
+// longer finds the directory) takes the switch with it and a re-created row
+// starts off. An unregistered path is errdefs.ErrNotFound rather than a silent
+// no-op.
 //
 // A reader that gates on the switch uses GetDirectory(path).GitPushEnabled and
 // treats the error as "not allowed": a read error must never read as false

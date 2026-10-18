@@ -265,17 +265,37 @@ func TestGitAuthorSettings_InvalidValuesAre400AndStoreNothing(t *testing.T) {
 	e := newPushTestEnv(t)
 
 	cases := map[string]string{
-		"name whitespace only": `{"authorName":"   "}`,
-		"name newline":         `{"authorName":"Ada\nLovelace"}`,
-		"name carriage return": `{"authorName":"Ada\rLovelace"}`,
-		"name too long":        `{"authorName":"` + strings.Repeat("a", 201) + `"}`,
-		"email whitespace":     `{"authorEmail":"  "}`,
-		"email newline":        `{"authorEmail":"a@b.c\n"}`,
-		"email no at":          `{"authorEmail":"ada.example.com"}`,
-		"email two at":         `{"authorEmail":"a@b@c.com"}`,
-		"email empty local":    `{"authorEmail":"@example.com"}`,
-		"email empty domain":   `{"authorEmail":"ada@"}`,
-		"email too long":       `{"authorEmail":"` + strings.Repeat("a", 250) + `@b.co"}`,
+		"name whitespace only":    `{"authorName":"   "}`,
+		"name newline":            `{"authorName":"Ada\nLovelace"}`,
+		"name carriage return":    `{"authorName":"Ada\rLovelace"}`,
+		"name too long":           `{"authorName":"` + strings.Repeat("a", 201) + `"}`,
+		"email whitespace":        `{"authorEmail":"  "}`,
+		"email newline":           `{"authorEmail":"a@b.c\n"}`,
+		"email no at":             `{"authorEmail":"ada.example.com"}`,
+		"email two at":            `{"authorEmail":"a@b@c.com"}`,
+		"email empty local":       `{"authorEmail":"@example.com"}`,
+		"email empty domain":      `{"authorEmail":"ada@"}`,
+		"email too long":          `{"authorEmail":"` + strings.Repeat("a", 250) + `@b.co"}`,
+		"name NUL":                `{"authorName":"Ada\u0000Lovelace"}`,
+		"name ESC":                `{"authorName":"Ada\u001bLovelace"}`,
+		"name VT":                 `{"authorName":"Ada\u000bLovelace"}`,
+		"name tab":                `{"authorName":"Ada\tLovelace"}`,
+		"name NEL U+0085":         `{"authorName":"Ada\u0085Lovelace"}`,
+		"name line sep U+2028":    `{"authorName":"Ada\u2028Lovelace"}`,
+		"name para sep U+2029":    `{"authorName":"Ada\u2029Lovelace"}`,
+		"name trailing U+2028":    `{"authorName":"Ada\u2028"}`,
+		"name angle open":         `{"authorName":"Ada <Lovelace"}`,
+		"name angle close":        `{"authorName":"Ada Lovelace>"}`,
+		"name 201 multibyte":      `{"authorName":"` + strings.Repeat("é", 201) + `"}`,
+		"email NUL":               `{"authorEmail":"a\u0000@b.co"}`,
+		"email ESC":               `{"authorEmail":"a\u001b@b.co"}`,
+		"email NEL U+0085":        `{"authorEmail":"a\u0085@b.co"}`,
+		"email line sep U+2028":   `{"authorEmail":"a@b.co\u2028"}`,
+		"email para sep U+2029":   `{"authorEmail":"a\u2029@b.co"}`,
+		"email angle brackets":    `{"authorEmail":"<>"}`,
+		"email angle with at":     `{"authorEmail":"<>@<>"}`,
+		"email wrapped in angles": `{"authorEmail":"<ada@example.com>"}`,
+		"email 255 multibyte":     `{"authorEmail":"` + strings.Repeat("é", 250) + `@b.co"}`,
 		// A valid name must not be stored when the email in the same request is bad.
 		"valid name, bad email": `{"authorName":"Ada","authorEmail":"nope"}`,
 	}
@@ -295,29 +315,7 @@ func TestGitAuthorSettings_InvalidValuesAre400AndStoreNothing(t *testing.T) {
 	// Boundary sides: exactly the limits are accepted.
 	ok := `{"authorName":"` + strings.Repeat("a", 200) + `","authorEmail":"` + strings.Repeat("a", 248) + `@b.co"}`
 	require.Equal(t, http.StatusOK, e.do(t, http.MethodPut, "/settings/git", ok).Code)
-}
-
-// The author is the FIRST read in GetGitSettings. The fault fixture hides the
-// whole settings table, so whichever key is read first faults first; only an
-// author that is read first can show that this arm refuses on its own.
-func TestGitAuthorSettings_ReadFaultRefusesAndNamesTheAuthorKey(t *testing.T) {
-	buf := captureHandlerLogs(t)
-	plant := plantStrayServerFaultLine(t)
-
-	db, hide, _ := hiddenTableDB(t, "settings")
-	hide()
-
-	id, sentinel := requestIDSentinel()
-	r := newDBFaultRouter(func(r *gin.Engine) {
-		settings := NewSettingsHandler(db, "/opt/stacks", dbFaultTestSecret, false, nil, &config.Config{})
-		r.GET("/api/settings/git", settings.GetGitSettings)
-	})
-	w := doDBFaultRequest(t, r, http.MethodGet, "/api/settings/git", "", id)
-	<-plant
-	requireSentinelHonoured(t, w, id)
-
-	require.Equal(t, http.StatusInternalServerError, w.Code,
-		"an unreadable author must refuse, not read as not configured: %s", w.Body.String())
-	requireOneFaultLineWithCause(t, buf.String(), sentinel, `read setting "git_author_name"`,
-		"GET /settings/git with an unreadable settings table")
+	// Limits count characters, not bytes: 200 and 254 two-byte characters fit.
+	multi := `{"authorName":"` + strings.Repeat("é", 200) + `","authorEmail":"` + strings.Repeat("é", 248) + `@b.co"}`
+	require.Equal(t, http.StatusOK, e.do(t, http.MethodPut, "/settings/git", multi).Code)
 }

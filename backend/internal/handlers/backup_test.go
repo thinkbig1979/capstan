@@ -49,10 +49,11 @@ import (
 // (agent-os-fn7x), migration 18 (agent-os-zt0h), migration 19
 // (agent-os-4i7r), migration 20 (agent-os-n4ca.7), migration 21
 // (agent-os-z91e.32), migration 22 (agent-os-z91e.46), migration 23
-// (agent-os-6exk) and migration 24 (agent-os-8hdg): the template is rebuilt
+// (agent-os-6exk), migration 24 (agent-os-8hdg) and migration 25
+// (agent-os-k81p.1): the template is rebuilt
 // from the database package's own migration list, so it picked each up
 // automatically and only this literal needed moving.
-const wantSchemaMigrations = 24
+const wantSchemaMigrations = 25
 
 // backupSchemaTemplate returns the bytes of a fully migrated, empty Capstan
 // database, built exactly once per test binary.

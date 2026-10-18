@@ -56,9 +56,10 @@ func TestGitPushEnabledMigration_NewRowsDefaultFalse(t *testing.T) {
 	assert.False(t, dir.GitPushEnabled)
 }
 
-// TestGitPushEnabledSurvivesRescan: a scan upserts the directory row, and a
-// scan is not an admin decision. The switch is set TRUE first; a test that
-// leaves the default false is green even when the upsert resets the column.
+// TestGitPushEnabledSurvivesRescan: a scan that still finds the directory
+// upserts its row, and a scan is not a decision to arm a push. The switch is
+// set TRUE first; a test that leaves the default false is green even when the
+// upsert resets the column.
 func TestGitPushEnabledSurvivesRescan(t *testing.T) {
 	db, err := NewWithMigrations(":memory:")
 	require.NoError(t, err)

@@ -30,7 +30,9 @@ type Directory struct {
 	GitHTTPSToken string `json:"-"`
 	HasHTTPSToken bool   `json:"hasHttpsToken"`
 	// GitPushEnabled is the per-directory switch for the user-initiated commit
-	// and push action. Off by default; only SetDirectoryPushEnabled writes it.
+	// and push action. Off by default; only SetDirectoryPushEnabled turns it on
+	// or off. A rescan that still finds the directory does not change it, but a
+	// deleted row (directory moved away, last stack removed) comes back off.
 	GitPushEnabled bool      `json:"gitPushEnabled"`
 	ScannedAt      time.Time `json:"scannedAt"`
 }

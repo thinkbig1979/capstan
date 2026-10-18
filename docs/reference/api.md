@@ -151,8 +151,10 @@ password is checked.
   Body `{"path": "...", "enabled": true|false}`; both fields are required, so
   an omitted `enabled` is a 400 and `false` is accepted. An unregistered path
   answers 404. Returns `{"directory": ...}` with `gitPushEnabled`, which every
-  directory carries and which is `false` until an admin turns it on. A rescan
-  and a credential save never change it. Each successful change writes one
+  directory carries and which is `false` until someone with a session turns it
+  on. A rescan that still finds the directory, and a credential save, never
+  change it; if the directory row is deleted (the directory moved away, or its
+  last stack was removed) it comes back `false`. Each successful change writes one
   `update_directory_push` audit-log row (path and new value)
 
 ## Stacks

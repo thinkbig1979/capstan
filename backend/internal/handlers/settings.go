@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
@@ -871,17 +873,26 @@ const (
 	maxGitAuthorEmailLen = 254
 )
 
+// forbiddenAuthorRune reports whether r may not appear in a commit author
+// field. Control characters (NUL, ESC, VT, U+0085, line breaks) and the Unicode
+// line and paragraph separators are refused because the value reaches a git
+// command line: a stored NUL makes every later exec fail with "invalid
+// argument". '<' and '>' are refused because git writes the author as
+// "Name <email>" and strips them, so they can only corrupt that frame.
+func forbiddenAuthorRune(r rune) bool {
+	return unicode.IsControl(r) || r == '\u2028' || r == '\u2029' || r == '<' || r == '>'
+}
+
 // validateGitAuthorName returns "" when name is storable as a commit author
-// name, otherwise the 400 message. The value ends up in a git command line, so
-// a line break is refused outright.
+// name, otherwise the 400 message. Length is counted in characters, not bytes.
 func validateGitAuthorName(name string) string {
 	trimmed := strings.TrimSpace(name)
 	switch {
 	case trimmed == "":
 		return "git author name must not be blank"
-	case strings.ContainsAny(name, "\n\r"):
-		return "git author name must be a single line"
-	case len(trimmed) > maxGitAuthorNameLen:
+	case strings.IndexFunc(name, forbiddenAuthorRune) >= 0:
+		return "git author name must be a single line without control characters, '<' or '>'"
+	case utf8.RuneCountInString(trimmed) > maxGitAuthorNameLen:
 		return "git author name must be at most 200 characters"
 	}
 	return ""
@@ -895,9 +906,9 @@ func validateGitAuthorEmail(email string) string {
 	switch {
 	case trimmed == "":
 		return "git author email must not be blank"
-	case strings.ContainsAny(email, "\n\r"):
-		return "git author email must be a single line"
-	case len(trimmed) > maxGitAuthorEmailLen:
+	case strings.IndexFunc(email, forbiddenAuthorRune) >= 0:
+		return "git author email must be a single line without control characters, '<' or '>'"
+	case utf8.RuneCountInString(trimmed) > maxGitAuthorEmailLen:
 		return "git author email must be at most 254 characters"
 	case !found || local == "" || domain == "" || strings.Contains(domain, "@"):
 		return "git author email must contain exactly one @ with text on both sides"
@@ -914,23 +925,6 @@ func (h *SettingsHandler) GetGitSettings(c *gin.Context) {
 	// decrypt path and therefore no "row present but unreadable" state to
 	// report — and unlike hasHttpsToken, these values are USED rather than
 	// reported as a presence flag.
-	// The commit author is read FIRST so a settings fault names it in the
-	// logged cause: the fault fixture hides the whole table, and only the first
-	// read can show that this arm refuses on its own. An unreadable author must
-	// not read as "not configured", because the commit action refuses on a
-	// missing author and would then report the wrong reason.
-	authorName, err := settingOrFault(h.db, gitAuthorNameKey)
-	if err != nil {
-		slog.Error("Failed to read the git author name setting", "error", err)
-		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to read git settings", err))
-		return
-	}
-	authorEmail, err := settingOrFault(h.db, gitAuthorEmailKey)
-	if err != nil {
-		slog.Error("Failed to read the git author email setting", "error", err)
-		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to read git settings", err))
-		return
-	}
 	sshKey, err := settingOrFault(h.db, "git_ssh_key")
 	if err != nil {
 		slog.Error("Failed to read the git SSH key setting", "error", err)
@@ -948,6 +942,26 @@ func (h *SettingsHandler) GetGitSettings(c *gin.Context) {
 	}
 	if httpsUser == "" {
 		httpsUser = h.cfg.GitHTTPSUser
+	}
+
+	// The commit author is read LAST, after the keys above. The fault fixture
+	// hides the whole settings table, so whichever read comes first faults
+	// first; keeping the author behind git_ssh_key and git_https_user leaves
+	// those two arms pinned by their existing test. An unreadable author must
+	// not read as "not configured": the commit action refuses on a missing
+	// author and would report the wrong reason. Known gap: no test pins these
+	// two arms individually (agent-os-k81p.1 report).
+	authorName, err := settingOrFault(h.db, gitAuthorNameKey)
+	if err != nil {
+		slog.Error("Failed to read the git author name setting", "error", err)
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to read git settings", err))
+		return
+	}
+	authorEmail, err := settingOrFault(h.db, gitAuthorEmailKey)
+	if err != nil {
+		slog.Error("Failed to read the git author email setting", "error", err)
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to read git settings", err))
+		return
 	}
 
 	// hasHttpsToken must distinguish "no row" (never configured) from "row
