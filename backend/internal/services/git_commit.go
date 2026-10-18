@@ -1,0 +1,864 @@
+package services
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"path/filepath"
+	"regexp"
+	"strings"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
+	"github.com/thinkbig1979/capstan/backend/internal/models"
+	"github.com/thinkbig1979/capstan/backend/internal/pathutil"
+	"github.com/thinkbig1979/capstan/backend/internal/truth"
+)
+
+// The user-initiated commit and push (agent-os-k81p.2). Nothing here runs on
+// its own: a file save never touches git, and both writes need the folder's
+// push switch on.
+//
+// One repository can hold several stack folders (the scanner makes one
+// directories row per folder and walks up to an ancestor .git), so:
+//   - the change list holds only files inside the requesting folder;
+//   - the lock covers every stack inside the repository top level;
+//   - the switch, credentials and auth type come from the requesting folder;
+//   - a push sends the whole branch, which can hold commits made elsewhere.
+//
+// Writes run git from the top level, so gitCmdWithCreds sets
+// safe.directory to it. The first child (show-toplevel) has to run from the
+// folder itself, so an ancestor repository owned by another user still fails
+// there, as GetStatus does.
+
+// maxCommitMessageBytes bounds the message, which travels as one argv entry.
+const maxCommitMessageBytes = 64 << 10
+
+// CommitRequest is what POST /git/commit asks for.
+type CommitRequest struct {
+	Message string
+	// Files are repository-root-relative paths, as GetChanges lists them.
+	Files      []string
+	ConfirmEnv bool
+	Push       bool
+}
+
+// GitWriteResult says what a commit or push request actually did, so the
+// handler writes one action-log row per commit and one per push that ran.
+type GitWriteResult struct {
+	// Commit is the hash of the commit this request made; "" when none.
+	Commit string
+	Files  int
+	// PushRan is true once the push child was started, whatever it answered.
+	PushRan bool
+	// Remote is the remote's NAME. Its URL can carry a token, so it is never
+	// recorded.
+	Remote string
+	// Branch is the remote ref pushed to.
+	Branch string
+}
+
+// pushTarget is where a push goes: branch.<b>.remote and branch.<b>.merge.
+type pushTarget struct {
+	remote   string
+	mergeRef string
+}
+
+// GetChanges lists the tracked files with uncommitted changes inside dirPath,
+// plus what decides whether a commit or push can run. A read error of the
+// switch or the author settings is an error, never false.
+func (s *GitService) GetChanges(dirPath string) (*models.GitChangesResult, error) {
+	pushEnabled, err := s.pushSwitch(dirPath)
+	if err != nil {
+		return nil, err
+	}
+	name, email, err := s.authorIdentity()
+	if err != nil {
+		return nil, err
+	}
+
+	status, err := s.GetStatus(dirPath)
+	if err != nil {
+		return nil, err
+	}
+	if status.IsBare {
+		return nil, models.NewAppError(http.StatusConflict, models.ErrGitBareRepo, "A bare repository has no work tree to commit from")
+	}
+
+	user, token := s.httpsCredentials(dirPath)
+	top, err := s.repoTopLevel(dirPath, user, token)
+	if err != nil {
+		return nil, err
+	}
+	changes, err := s.listChanges(dirPath, top, user, token)
+	if err != nil {
+		return nil, err
+	}
+	branch, detached, err := s.headBranch(top, user, token)
+	if err != nil {
+		return nil, err
+	}
+	// Exit 128 is both "no upstream" and a fault, so this is a hint for the
+	// form only; commit and push ask again under the lock and refuse.
+	_, upErr := s.gitCommandWithCreds(top, user, token, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}") //geterrors:ignore a failing @{upstream} IS the "no upstream" answer, and git exits 128 for it and for a fault alike; commit and push re-check under the lock
+
+	return &models.GitChangesResult{
+		Branch:             branch,
+		Detached:           detached,
+		TrackingBranch:     status.TrackingBranch,
+		HasUpstream:        upErr == nil,
+		Ahead:              status.Ahead,
+		Behind:             status.Behind,
+		PushEnabled:        pushEnabled,
+		IdentityConfigured: name != "" && email != "",
+		Changes:            changes,
+	}, nil
+}
+
+// CommitVerified commits exactly the requested files and, when req.Push, pushes
+// the branch under the same lock.
+//
+// Order: request shape, then the database-only reads (the switch, then for a
+// push the ssh auth type) before any git child, so an ssh directory reaches
+// none; then the lock; then every other read and every precondition, the
+// push's included, before the commit. So a refusal leaves nothing half done.
+// A push that fails after the commit keeps the commit and answers partial.
+func (s *GitService) CommitVerified(dirPath string, req CommitRequest) (truth.ActionResult, *GitWriteResult) {
+	message := strings.TrimSpace(req.Message)
+	switch {
+	case message == "":
+		return refused(models.NewAppError(http.StatusBadRequest, models.ErrValidation, "A commit message is required"))
+	case strings.ContainsRune(message, 0):
+		return refused(models.NewAppError(http.StatusBadRequest, models.ErrValidation, "The commit message must not contain a NUL character"))
+	case len(message) > maxCommitMessageBytes:
+		return refused(models.NewAppError(http.StatusBadRequest, models.ErrValidation, "The commit message must be at most 64 KiB"))
+	case len(req.Files) == 0:
+		return refused(models.NewAppError(http.StatusBadRequest, models.ErrValidation, "Choose at least one file to commit"))
+	}
+
+	if s.opLock == nil {
+		return truth.Failed("operation lock is not configured; refusing a git write", nil), nil
+	}
+	if ar, ok := s.writePrecheck(dirPath, req.Push); !ok {
+		return ar, nil
+	}
+
+	user, token := s.httpsCredentials(dirPath)
+	top, err := s.repoTopLevel(dirPath, user, token)
+	if err != nil {
+		return truth.Failed("could not find the repository", err), nil
+	}
+	release, err := s.lockRepo(top, OpKindGitCommit)
+	if err != nil {
+		return truth.Failed("could not lock the repository's stacks", err), nil
+	}
+	defer release()
+
+	name, email, err := s.authorIdentity()
+	if err != nil {
+		return truth.Failed("could not read the commit author settings", err), nil
+	}
+	if name == "" || email == "" {
+		return refused(models.NewAppError(http.StatusBadRequest, models.ErrGitIdentityMissing,
+			"Set the commit author name and email in Settings > Git first"))
+	}
+	branch, err := s.requireBranch(top, user, token)
+	if err != nil {
+		return truth.Failed("could not read the current branch", err), nil
+	}
+	if err := s.refuseOperationInProgress(top, user, token); err != nil {
+		return truth.Failed("could not check for a merge in progress", err), nil
+	}
+	changes, err := s.listChanges(dirPath, top, user, token)
+	if err != nil {
+		return truth.Failed("could not list the changed files", err), nil
+	}
+	paths, err := selectCommitPaths(dirPath, top, changes, req)
+	if err != nil {
+		return truth.Failed("could not check the requested files", err), nil
+	}
+	var target pushTarget
+	if req.Push {
+		if target, err = s.pushPreconditions(top, branch, user, token); err != nil {
+			return truth.Failed("could not check the push target", err), nil
+		}
+	}
+
+	hash, err := s.commitPaths(top, user, token, name, email, message, paths)
+	if err != nil {
+		return truth.Failed("git commit failed", err), nil
+	}
+	w := &GitWriteResult{Commit: hash, Files: len(req.Files)}
+	if !req.Push {
+		return truth.Success("committed",
+			truth.KV("commit", hash),
+			truth.KV("files", len(req.Files)),
+		), w
+	}
+
+	w.PushRan, w.Remote, w.Branch = true, target.remote, target.mergeRef
+	rng, _, err := s.push(top, user, token, target)
+	if err != nil {
+		code, reason := "INTERNAL_ERROR", "git push failed"
+		var appErr *models.AppError
+		if errors.As(err, &appErr) {
+			code, reason = appErr.Code, appErr.Message
+		}
+		slog.Warn("Commit kept after its push failed", "path", dirPath, "commit", hash, "error", err)
+		return truth.Partial("committed, but the push failed: "+reason,
+			truth.KV("commit", hash),
+			truth.KV("files", len(req.Files)),
+			truth.KV("remote", target.remote),
+			truth.KV("branch", target.mergeRef),
+			truth.KV("pushCode", code),
+			truth.KV("pushReason", reason),
+		), w
+	}
+	return truth.Success("committed and pushed "+branch+" to "+target.remote+pushScopeNote,
+		truth.KV("commit", hash),
+		truth.KV("files", len(req.Files)),
+		truth.KV("remote", target.remote),
+		truth.KV("branch", target.mergeRef),
+		truth.KV("range", rng),
+	), w
+}
+
+// PushVerified pushes the current branch to its upstream: never a force, never
+// a new upstream, never tags or submodules.
+func (s *GitService) PushVerified(dirPath string) (truth.ActionResult, *GitWriteResult) {
+	if s.opLock == nil {
+		return truth.Failed("operation lock is not configured; refusing a git write", nil), nil
+	}
+	if ar, ok := s.writePrecheck(dirPath, true); !ok {
+		return ar, nil
+	}
+
+	user, token := s.httpsCredentials(dirPath)
+	top, err := s.repoTopLevel(dirPath, user, token)
+	if err != nil {
+		return truth.Failed("could not find the repository", err), nil
+	}
+	release, err := s.lockRepo(top, OpKindGitPush)
+	if err != nil {
+		return truth.Failed("could not lock the repository's stacks", err), nil
+	}
+	defer release()
+
+	branch, err := s.requireBranch(top, user, token)
+	if err != nil {
+		return truth.Failed("could not read the current branch", err), nil
+	}
+	target, err := s.pushPreconditions(top, branch, user, token)
+	if err != nil {
+		return truth.Failed("could not check the push target", err), nil
+	}
+
+	w := &GitWriteResult{PushRan: true, Remote: target.remote, Branch: target.mergeRef}
+	rng, upToDate, err := s.push(top, user, token, target)
+	switch {
+	case err != nil:
+		return truth.Failed("git push failed", err), w
+	case upToDate:
+		return truth.NoChange("already up to date",
+			truth.KV("remote", target.remote),
+			truth.KV("branch", target.mergeRef),
+		), w
+	}
+	return truth.Success("pushed "+branch+" to "+target.remote+pushScopeNote,
+		truth.KV("remote", target.remote),
+		truth.KV("branch", target.mergeRef),
+		truth.KV("range", rng),
+	), w
+}
+
+// pushScopeNote is appended to a push's success reason: the push sends the
+// branch, not only what Capstan committed (agent-os-k81p, D134).
+const pushScopeNote = " (a push sends every commit on the branch the remote lacks, including ones made outside Capstan)"
+
+// refused is a classified refusal that wrote nothing.
+func refused(err *models.AppError) (truth.ActionResult, *GitWriteResult) {
+	return truth.Failed(err.Message, err), nil
+}
+
+// writePrecheck runs the database-only gates of a git write, before any git
+// child: the push switch, then (for a push) the auth type. The switch comes
+// first, so an ssh directory with the switch off answers 403.
+func (s *GitService) writePrecheck(dirPath string, push bool) (truth.ActionResult, bool) {
+	enabled, err := s.pushSwitch(dirPath)
+	if err != nil {
+		return truth.Failed("could not read the push switch", err), false
+	}
+	if !enabled {
+		return truth.Failed("push is not enabled for this directory", models.NewAppError(http.StatusForbidden,
+			models.ErrGitPushDisabled, "Commit and push are not enabled for this directory")), false
+	}
+	if !push {
+		return truth.ActionResult{}, true
+	}
+	cred, err := s.db.GetDirectoryCredentials(dirPath)
+	switch {
+	case errors.Is(err, errdefs.ErrNotFound):
+	case err != nil:
+		return truth.Failed("could not read this directory's git credentials", err), false
+	case strings.EqualFold(cred.GitAuthType, "ssh"):
+		return truth.Failed("ssh push is not supported", models.NewAppError(http.StatusConflict,
+			models.ErrGitSSHUnsupported, "This directory uses SSH git auth; Capstan cannot push over SSH yet")), false
+	}
+	return truth.ActionResult{}, true
+}
+
+// pushSwitch reads dirPath's push switch. No row means off; any other read
+// error is returned, never read as off or on.
+func (s *GitService) pushSwitch(dirPath string) (bool, error) {
+	dir, err := s.db.GetDirectory(dirPath)
+	switch {
+	case errors.Is(err, errdefs.ErrNotFound):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("could not read the push switch for this directory: %w", err)
+	}
+	return dir.GitPushEnabled, nil
+}
+
+// authorIdentity reads the commit author settings, trimmed. An unset key is
+// ""; any other read error is returned. Each read names its key constant
+// directly, so the settings-key census (database/settings_classification_test.go)
+// can resolve it.
+func (s *GitService) authorIdentity() (name, email string, err error) {
+	v, err := s.db.GetSetting(models.SettingGitAuthorName)
+	if name, err = settingOrUnset(models.SettingGitAuthorName, v, err); err != nil {
+		return "", "", err
+	}
+	v, err = s.db.GetSetting(models.SettingGitAuthorEmail)
+	if email, err = settingOrUnset(models.SettingGitAuthorEmail, v, err); err != nil {
+		return "", "", err
+	}
+	return name, email, nil
+}
+
+// settingOrUnset maps a GetSetting answer for key: unset is "", any other
+// error is wrapped with the key's name.
+func settingOrUnset(key, v string, err error) (string, error) {
+	switch {
+	case errors.Is(err, errdefs.ErrNotFound):
+		return "", nil
+	case err != nil:
+		return "", fmt.Errorf("could not read the %s setting: %w", key, err)
+	}
+	return strings.TrimSpace(v), nil
+}
+
+// repoTopLevel is the work tree root of the repository holding dirPath.
+func (s *GitService) repoTopLevel(dirPath, user, token string) (string, error) {
+	out, err := s.gitCommandWithCreds(dirPath, user, token, "rev-parse", "--show-toplevel")
+	if err == nil {
+		return filepath.Clean(out), nil
+	}
+	if repoErr := s.gitFailure(dirPath, err); repoErr != nil {
+		return "", repoErr
+	}
+	isBare, bareErr := s.gitCommandWithCreds(dirPath, user, token, "rev-parse", "--is-bare-repository")
+	if bareErr != nil {
+		return "", fmt.Errorf("failed to find the repository top level (%w) or tell whether it is bare: %w", err, bareErr)
+	}
+	if isBare == "true" {
+		return "", models.NewAppError(http.StatusConflict, models.ErrGitBareRepo, "A bare repository has no work tree to commit from")
+	}
+	return "", fmt.Errorf("failed to find the repository top level: %w", err)
+}
+
+// lockRepo takes the lock of every stack whose folder is inside top: a
+// commit or push in one folder changes what every stack of the repository
+// sees. An unanswerable containment check refuses rather than skipping the
+// stack, which would under-lock.
+func (s *GitService) lockRepo(top, kind string) (func(), error) {
+	stacks, err := s.db.ListStacks()
+	if err != nil {
+		return nil, fmt.Errorf("could not list the stacks to lock: %w", err)
+	}
+	var inRepo []models.Stack
+	for _, st := range stacks {
+		ok, err := pathutil.IsContained(top, st.Directory)
+		if err != nil {
+			return nil, fmt.Errorf("could not tell whether stack %s is inside the repository: %w", st.ProjectName, err)
+		}
+		if ok {
+			inRepo = append(inRepo, st)
+		}
+	}
+	release, err := s.lockStacks(inRepo, kind)
+	if err != nil {
+		return nil, models.NewAppError(http.StatusConflict, models.ErrOperationInProgress, err.Error())
+	}
+	return release, nil
+}
+
+// headBranch is the branch HEAD names, or detached=true when it names none.
+func (s *GitService) headBranch(top, user, token string) (branch string, detached bool, err error) {
+	out, err := s.gitCommandWithCreds(top, user, token, "symbolic-ref", "-q", "--short", "HEAD")
+	if err != nil {
+		// Exit 1 is git's documented "HEAD is not a symbolic ref".
+		if gitExitCode(err) == 1 {
+			return "", true, nil
+		}
+		return "", false, fmt.Errorf("failed to read the current branch: %w", err)
+	}
+	return out, false, nil
+}
+
+// requireBranch is headBranch with a detached HEAD refused: a commit there is
+// reachable from HEAD alone, and a push has no branch to send.
+func (s *GitService) requireBranch(top, user, token string) (string, error) {
+	branch, detached, err := s.headBranch(top, user, token)
+	if err != nil {
+		return "", err
+	}
+	if detached {
+		return "", models.NewAppError(http.StatusConflict, models.ErrGitDetachedHead,
+			"HEAD is detached; check out a branch before committing or pushing")
+	}
+	return branch, nil
+}
+
+// refuseOperationInProgress refuses during a merge, cherry-pick or revert, by
+// exit code (0 present, 1 absent). A rebase leaves HEAD detached, which
+// requireBranch has already refused.
+func (s *GitService) refuseOperationInProgress(top, user, token string) error {
+	for _, ref := range []string{"MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"} {
+		_, err := s.gitCommandWithCreds(top, user, token, "rev-parse", "-q", "--verify", ref)
+		switch {
+		case err == nil:
+			return models.NewAppError(http.StatusConflict, models.ErrGitOperationInProgress,
+				"A merge, cherry-pick or revert is in progress in this repository; finish or abort it first")
+		case gitExitCode(err) != 1:
+			return fmt.Errorf("failed to check for %s: %w", ref, err)
+		}
+	}
+	return nil
+}
+
+// listChanges reads the tracked changes under dirPath. Porcelain v2 with -z:
+// paths are repository-root-relative and NUL-terminated, never C-quoted, and
+// every record starts with a type letter, so nothing at its start is
+// whitespace. --no-optional-locks keeps status off .git/index.lock, which a
+// concurrent commit needs.
+func (s *GitService) listChanges(dirPath, top, user, token string) ([]models.GitChange, error) {
+	out, _, err := s.gitRun(dirPath, user, token, nil,
+		"--no-optional-locks", "status", "--porcelain=v2", "-z", "--untracked-files=no", "--", ".")
+	if err != nil {
+		return nil, fmt.Errorf("failed to read status: %w", err)
+	}
+	entries, err := parsePorcelainV2(out)
+	if err != nil {
+		return nil, err
+	}
+
+	realDir, err := filepath.EvalSymlinks(dirPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve the stack folder: %w", err)
+	}
+	envFiles, err := s.stackEnvFiles(dirPath, realDir)
+	if err != nil {
+		return nil, err
+	}
+
+	changes := []models.GitChange{}
+	for _, e := range entries {
+		if e.unmerged {
+			return nil, models.NewAppError(http.StatusConflict, models.ErrGitOperationInProgress,
+				"This folder has files with unresolved conflicts; resolve them first")
+		}
+		abs := filepath.Join(top, filepath.FromSlash(e.path))
+		ok, err := inFolder(dirPath, abs)
+		if err != nil {
+			return nil, fmt.Errorf("failed to check that %q is inside the stack folder: %w", e.path, err)
+		}
+		if !ok {
+			continue
+		}
+		isEnv := isEnvPath(abs, envFiles)
+		if e.origPath != "" {
+			isEnv = isEnv || isEnvPath(filepath.Join(top, filepath.FromSlash(e.origPath)), envFiles)
+		}
+		changes = append(changes, models.GitChange{
+			Path:     e.path,
+			OrigPath: e.origPath,
+			Status:   e.xy,
+			IsEnv:    isEnv,
+		})
+	}
+	return changes, nil
+}
+
+type porcelainEntry struct {
+	xy       string
+	path     string
+	origPath string
+	unmerged bool
+}
+
+// parsePorcelainV2 parses `status --porcelain=v2 -z`. A path may hold spaces,
+// so each record is split a bounded number of times: type 1 has eight fields
+// before the path, type 2 nine (the last is the rename score) and its original
+// path follows as the next NUL record, type u ten. Untracked and ignored
+// records are dropped.
+func parsePorcelainV2(out string) ([]porcelainEntry, error) {
+	recs := strings.Split(out, "\x00")
+	var entries []porcelainEntry
+	for i := 0; i < len(recs); i++ {
+		r := recs[i]
+		if r == "" {
+			continue
+		}
+		var want int
+		switch r[0] {
+		case '1':
+			want = 9
+		case '2':
+			want = 10
+		case 'u':
+			want = 11
+		case '?', '!', '#':
+			continue
+		default:
+			return nil, fmt.Errorf("unexpected git status record %q", r)
+		}
+		f := strings.SplitN(r, " ", want)
+		if len(f) != want {
+			return nil, fmt.Errorf("git status record has %d fields, want %d: %q", len(f), want, r)
+		}
+		e := porcelainEntry{xy: f[1], path: f[want-1], unmerged: r[0] == 'u'}
+		if r[0] == '2' {
+			i++
+			if i >= len(recs) || recs[i] == "" {
+				return nil, fmt.Errorf("git status rename record has no original path: %q", r)
+			}
+			e.origPath = recs[i]
+		}
+		entries = append(entries, e)
+	}
+	return entries, nil
+}
+
+// inFolder reports whether abs lies inside dirPath. The PARENT is resolved,
+// not the file: git commits a symlink as a link, so a tracked symlink pointing
+// outside the folder is still a file of the folder.
+func inFolder(dirPath, abs string) (bool, error) {
+	if base := filepath.Base(abs); base == "." || base == ".." || base == string(filepath.Separator) {
+		return false, nil
+	}
+	return pathutil.IsContained(dirPath, filepath.Dir(abs))
+}
+
+// stackEnvFiles is the set of env files the stacks in dirPath name, as
+// absolute paths under realDir (dirPath with symlinks resolved, which is how
+// git's top level spells it).
+func (s *GitService) stackEnvFiles(dirPath, realDir string) (map[string]bool, error) {
+	stacks, err := s.db.ListStacksByDirectory(dirPath)
+	if err != nil {
+		return nil, fmt.Errorf("could not list the stacks in this folder: %w", err)
+	}
+	set := map[string]bool{}
+	for _, st := range stacks {
+		if st.EnvFile != "" {
+			set[filepath.Join(realDir, filepath.FromSlash(st.EnvFile))] = true
+		}
+	}
+	return set, nil
+}
+
+// isEnvPath: ".env", ".env.*", "*.env", or the env file a stack in the folder
+// names. A compose env_file: entry with any other name is not caught.
+func isEnvPath(abs string, envFiles map[string]bool) bool {
+	base := filepath.Base(abs)
+	return base == ".env" || strings.HasPrefix(base, ".env.") || strings.HasSuffix(base, ".env") || envFiles[filepath.Clean(abs)]
+}
+
+// selectCommitPaths checks every requested file against the change list just
+// read under the lock, and returns the pathspecs to commit: a rename brings its
+// original path, or HEAD would keep a copy and the index a dangling delete.
+func selectCommitPaths(dirPath, top string, changes []models.GitChange, req CommitRequest) ([]string, error) {
+	byPath := make(map[string]models.GitChange, len(changes))
+	for _, c := range changes {
+		byPath[c.Path] = c
+	}
+	seen := map[string]bool{}
+	var paths []string
+	envNamed := false
+	add := func(p string) error {
+		ok, err := inFolder(dirPath, filepath.Join(top, filepath.FromSlash(p)))
+		if err != nil {
+			return fmt.Errorf("failed to check that %q is inside the stack folder: %w", p, err)
+		}
+		if !ok {
+			return models.NewAppError(http.StatusBadRequest, models.ErrValidation,
+				fmt.Sprintf("%q is outside this stack's folder", p))
+		}
+		if !seen[p] {
+			seen[p] = true
+			paths = append(paths, p)
+		}
+		return nil
+	}
+	for _, f := range req.Files {
+		c, ok := byPath[f]
+		if !ok {
+			return nil, models.NewAppError(http.StatusBadRequest, models.ErrValidation,
+				fmt.Sprintf("%q is not a changed tracked file in this stack's folder", f))
+		}
+		if err := add(f); err != nil {
+			return nil, err
+		}
+		if c.OrigPath != "" {
+			if err := add(c.OrigPath); err != nil {
+				return nil, err
+			}
+		}
+		envNamed = envNamed || c.IsEnv
+	}
+	if envNamed && !req.ConfirmEnv {
+		return nil, models.NewAppError(http.StatusBadRequest, models.ErrGitEnvConfirmRequired,
+			"The selection includes an env file, which can hold secrets; confirm to commit it")
+	}
+	return paths, nil
+}
+
+// commitPaths commits paths (repository-root-relative) from top and returns
+// the new HEAD. Hooks, fsmonitor and signing are off: the repository's config
+// is not trusted to run code. Pathspecs are literal, so a file named ":!x"
+// is that file and not pathspec magic. The author comes from the settings
+// through the environment, which beats both config and inherited
+// GIT_AUTHOR_*/GIT_COMMITTER_* values.
+func (s *GitService) commitPaths(top, user, token, name, email, message string, paths []string) (string, error) {
+	args := []string{
+		"-c", "core.hooksPath=/dev/null",
+		"-c", "core.fsmonitor=false",
+		"-c", "commit.gpgSign=false",
+		"commit", "--only", "-m", message, "--",
+	}
+	env := []string{
+		"GIT_LITERAL_PATHSPECS=1",
+		"GIT_GLOB_PATHSPECS=0", "GIT_NOGLOB_PATHSPECS=0", "GIT_ICASE_PATHSPECS=0",
+		"GIT_AUTHOR_NAME=" + name, "GIT_AUTHOR_EMAIL=" + email,
+		"GIT_COMMITTER_NAME=" + name, "GIT_COMMITTER_EMAIL=" + email,
+	}
+	_, stderr, err := s.gitRun(top, user, token, env, append(args, paths...)...)
+	if err != nil {
+		// LC_ALL=C is pinned on the child, so this text is git's English.
+		if gitExitCode(err) == 128 && strings.Contains(stderr, "index.lock': File exists") {
+			return "", models.NewAppError(http.StatusConflict, models.ErrGitOperationInProgress,
+				"Another git process is using this repository; try again")
+		}
+		return "", err
+	}
+	hash, err := s.gitCommandWithCreds(top, user, token, "rev-parse", "HEAD")
+	if err != nil {
+		// The commit landed; only the read of its hash failed.
+		slog.Error("Committed but could not read the new HEAD", "path", top, "error", err)
+		return "unknown", nil
+	}
+	return hash, nil
+}
+
+// pushPreconditions refuses every push it can predict will be wrong, using
+// read-only git children: no upstream, an upstream in this same repository
+// (remote "."), or a push URL outside the allow-list. It returns the remote
+// and the ref to push HEAD to.
+func (s *GitService) pushPreconditions(top, branch, user, token string) (pushTarget, error) {
+	noUpstream := models.NewAppError(http.StatusConflict, models.ErrGitNoUpstream,
+		"Branch "+branch+" tracks no upstream branch; Capstan does not set one")
+	if _, err := s.gitCommandWithCreds(top, user, token, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"); err != nil {
+		if gitExitCode(err) < 0 {
+			return pushTarget{}, fmt.Errorf("failed to read the upstream: %w", err)
+		}
+		return pushTarget{}, noUpstream
+	}
+	remote, err := s.gitConfigValue(top, user, token, "branch."+branch+".remote")
+	if err != nil {
+		return pushTarget{}, err
+	}
+	mergeRef, err := s.gitConfigValue(top, user, token, "branch."+branch+".merge")
+	if err != nil {
+		return pushTarget{}, err
+	}
+	if remote == "" || mergeRef == "" {
+		return pushTarget{}, noUpstream
+	}
+	if remote == "." {
+		// Pushing to "." moves another LOCAL branch and reports success.
+		return pushTarget{}, models.NewAppError(http.StatusConflict, models.ErrGitNoUpstream,
+			"Branch "+branch+" tracks a local branch, not a remote; nothing would be pushed anywhere")
+	}
+
+	// --push --all applies pushurl and pushInsteadOf, which can differ from
+	// the fetch URL. The URLs are never echoed: one can carry a token.
+	urls, err := s.gitCommandWithCreds(top, user, token, "remote", "get-url", "--push", "--all", remote)
+	if err != nil {
+		if gitExitCode(err) < 0 {
+			return pushTarget{}, fmt.Errorf("failed to read the push URL: %w", err)
+		}
+		return pushTarget{}, models.NewAppError(http.StatusConflict, models.ErrGitNoUpstream,
+			"Branch "+branch+" tracks "+remote+", which is not a configured remote")
+	}
+	for _, u := range strings.Split(urls, "\n") {
+		if refusal := pushURLRefusal(remote, strings.TrimSpace(u)); refusal != nil {
+			return pushTarget{}, refusal
+		}
+	}
+	return pushTarget{remote: remote, mergeRef: mergeRef}, nil
+}
+
+// gitConfigValue reads one config key; unset (exit 1) is "".
+func (s *GitService) gitConfigValue(top, user, token, key string) (string, error) {
+	v, err := s.gitCommandWithCreds(top, user, token, "config", "--get", key)
+	if err != nil {
+		if gitExitCode(err) == 1 {
+			return "", nil
+		}
+		return "", fmt.Errorf("failed to read %s: %w", key, err)
+	}
+	return v, nil
+}
+
+var (
+	urlSchemeRe       = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9+.-]*)://`)
+	transportHelperRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9+.-]*::`)
+)
+
+// pushURLRefusal allow-lists the push URL: https://, http://, file:// or a
+// local path. Anything git would run over SSH (ssh://, git+ssh://,
+// ssh+git://, scp-like [user@]host:path) is GIT_SSH_UNSUPPORTED: nothing
+// supplies a key, so it would use whatever default key the container has.
+// git://, other schemes and <transport>:: helpers are refused too.
+func pushURLRefusal(remote, u string) *models.AppError {
+	sshRefusal := models.NewAppError(http.StatusConflict, models.ErrGitSSHUnsupported,
+		"Remote "+remote+" pushes over SSH; Capstan cannot push over SSH yet")
+	unsupported := models.NewAppError(http.StatusConflict, models.ErrGitPushURLUnsupported,
+		"Remote "+remote+" uses a transport Capstan does not push over; use https, http, file or a local path")
+	if u == "" || transportHelperRe.MatchString(u) {
+		return unsupported
+	}
+	if m := urlSchemeRe.FindStringSubmatch(u); m != nil {
+		switch strings.ToLower(m[1]) {
+		case "https", "http", "file":
+			return nil
+		case "ssh", "git+ssh", "ssh+git":
+			return sshRefusal
+		default:
+			return unsupported
+		}
+	}
+	// git's own rule: with no scheme, a ':' before the first '/' makes it an
+	// scp-like SSH address; otherwise it is a local path.
+	colon := strings.IndexByte(u, ':')
+	slash := strings.IndexByte(u, '/')
+	if colon >= 0 && (slash < 0 || colon < slash) {
+		return sshRefusal
+	}
+	return nil
+}
+
+// push runs the push and classifies its answer from the --porcelain ref line,
+// never from git's hint prose. It returns the pushed range on success, or
+// upToDate when the remote already had it.
+func (s *GitService) push(top, user, token string, t pushTarget) (rng string, upToDate bool, err error) {
+	args := []string{
+		"-c", "core.hooksPath=/dev/null",
+		"-c", "core.fsmonitor=false",
+		"-c", "push.followTags=false",
+		"-c", "push.recurseSubmodules=no",
+		"-c", "push.gpgSign=false",
+		// For a local or file:// remote git runs this program, and repository
+		// config must not choose it. The flag, not `-c remote.<r>.receivepack`:
+		// git keeps the FIRST receivepack value it reads, which is the
+		// repository's (OBSERVED, git 2.47.3, TestPushIgnoresRepoReceivePack).
+		"push", "--porcelain", "--receive-pack=git-receive-pack", t.remote, "HEAD:" + t.mergeRef,
+	}
+	stdout, _, runErr := s.gitRun(top, user, token, nil, args...)
+	flag, summary, found := porcelainRefLine(stdout)
+
+	if runErr == nil {
+		switch {
+		case found && flag == "=":
+			return "", true, nil
+		case found && (flag == " " || flag == "*"):
+			return summary, false, nil
+		}
+		return "", false, fmt.Errorf("git push exited 0 with an unexpected answer %q", strings.TrimSpace(stdout))
+	}
+	if gitExitCode(runErr) < 0 {
+		return "", false, runErr
+	}
+	if !found {
+		// No ref line: git never reached the point of updating a ref. Auth
+		// and network failures look the same here and share one answer; not
+		// 401, which the frontend reads as a lost Capstan session.
+		return "", false, models.NewAppErrorWithDetails(http.StatusBadGateway, models.ErrGitRemoteUnreachable,
+			"Could not push to the git remote: it was unreachable or refused the credentials", runErr.Error())
+	}
+	if flag == "!" {
+		if strings.Contains(summary, "(fetch first)") || strings.Contains(summary, "(non-fast-forward)") {
+			return "", false, models.NewAppError(http.StatusConflict, models.ErrGitRemoteAhead,
+				"The remote has commits this branch does not have; pull first")
+		}
+		return "", false, models.NewAppErrorWithDetails(http.StatusConflict, models.ErrGitPushRejected,
+			"The remote refused the push: "+summary, runErr.Error())
+	}
+	return "", false, fmt.Errorf("git push failed: %w", runErr)
+}
+
+// porcelainRefLine finds the ref line of `push --porcelain` output:
+// "<flag>\t<from>:<to>\t<summary>". One ref is pushed, so the first is it.
+func porcelainRefLine(stdout string) (flag, summary string, found bool) {
+	for _, line := range strings.Split(stdout, "\n") {
+		if len(line) < 2 || line[1] != '\t' {
+			continue
+		}
+		f := strings.SplitN(line, "\t", 3)
+		if len(f) != 3 {
+			continue
+		}
+		return f[0], f[2], true
+	}
+	return "", "", false
+}
+
+// gitRun is gitCommandWithCreds for the callers that need more: extra child
+// environment, and stdout and stderr untrimmed and kept on failure (a push's
+// porcelain line is on stdout whether it succeeded or not). Same child, same
+// deadline, same redaction of both streams. Cmd.Env keeps the last value of a
+// duplicate key, so env overrides what gitCmdWithCreds forwarded.
+func (s *GitService) gitRun(dirPath, user, token string, env []string, args ...string) (stdout, stderr string, err error) {
+	ctx, cancel := withCommandDeadline(context.Background(), s.gitTimeout())
+	defer cancel()
+	cmd, _ := s.gitCmdWithCreds(ctx, dirPath, user, token, args...)
+	cmd.Env = append(cmd.Env, env...)
+	var out, errOut bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &errOut
+
+	runErr := timeoutError(ctx, cmd.Run(), "command")
+	stdout = redactToken(out.String(), token)
+	stderr = redactToken(errOut.String(), token)
+	if runErr != nil {
+		return stdout, stderr, fmt.Errorf("git %s: %w (%s)", gitSubcommand(args), runErr, gitDiagnostic(stdout, stderr))
+	}
+	return stdout, stderr, nil
+}
+
+// gitSubcommand names the subcommand in args, past any leading options and
+// `-c key=value` pairs, for an error message.
+func gitSubcommand(args []string) string {
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "-c":
+			i++
+		case strings.HasPrefix(args[i], "-"):
+		default:
+			return args[i]
+		}
+	}
+	return "command"
+}

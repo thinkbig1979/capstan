@@ -163,6 +163,52 @@ type PullResult struct {
 	DiffError string `json:"-"`
 }
 
+// Settings keys for the commit author (agent-os-k81p.1). Exported here, once,
+// because the settings handler writes them and the git service reads them.
+// Neither is a credential, so neither joins sensitiveSettingKeys.
+const (
+	SettingGitAuthorName  = "git_author_name"
+	SettingGitAuthorEmail = "git_author_email"
+)
+
+// GitChange is one tracked file with uncommitted changes inside a stack's
+// folder (GET /git/changes, agent-os-k81p.2).
+type GitChange struct {
+	// Path is relative to the repository top level, exactly as git reports
+	// it, which may differ from the stack folder when the repository holds
+	// several stacks. A commit request names files by this value.
+	Path string `json:"path"`
+	// OrigPath is the old path of a staged rename. Committing the rename
+	// commits both paths.
+	OrigPath string `json:"origPath,omitempty"`
+	// Status is git's two-letter porcelain v2 code: index then work tree, '.'
+	// for unchanged (".M" modified and not staged, "M." staged, "R." renamed).
+	Status string `json:"status"`
+	// IsEnv marks a file that looks like an env file; committing one needs
+	// confirmEnv.
+	IsEnv bool `json:"isEnv"`
+}
+
+// GitChangesResult is GET /git/changes: what a commit from this stack's
+// folder could include, and whether a push could run.
+type GitChangesResult struct {
+	Branch string `json:"branch"`
+	// Detached is true when HEAD names no branch; commit and push refuse.
+	Detached       bool   `json:"detached"`
+	TrackingBranch string `json:"trackingBranch"`
+	// HasUpstream is read from @{upstream} alone. TrackingBranch, Ahead and
+	// Behind can be measured against origin/<branch> when no upstream is
+	// configured, so they do not mean a push can run.
+	HasUpstream bool `json:"hasUpstream"`
+	Ahead       int  `json:"ahead"`
+	Behind      int  `json:"behind"`
+	// PushEnabled is this folder's push switch. It gates commit as well.
+	PushEnabled bool `json:"pushEnabled"`
+	// IdentityConfigured is true when both author settings are set.
+	IdentityConfigured bool        `json:"identityConfigured"`
+	Changes            []GitChange `json:"changes"`
+}
+
 type LogResult struct {
 	Commits []GitCommit `json:"commits"`
 	Total   int         `json:"total"`

@@ -23,8 +23,13 @@ const (
 	OpKindRestore = "restore"
 	OpKindUpdate  = "update"
 	OpKindGitPull = "git pull"
-	OpKindCompose = "compose file write"
-	OpKindEnv     = "env file write"
+	// A commit (with or without its push) and a push alone take every stack
+	// whose folder is inside the repository, not only the requesting one: one
+	// repository can hold several stack folders (agent-os-k81p.2).
+	OpKindGitCommit = "git commit"
+	OpKindGitPush   = "git push"
+	OpKindCompose   = "compose file write"
+	OpKindEnv       = "env file write"
 	// OpKindContainer is a single-container start, stop, restart or delete
 	// from the Resources page on a container a managed stack owns.
 	OpKindContainer = "container action"

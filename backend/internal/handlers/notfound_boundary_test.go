@@ -81,7 +81,7 @@ var collapsedRoutes = []notFoundRoute{
 	// condition from the identical getter. They converge on STACK_NOT_FOUND, so
 	// here, unlike the rows above, the expected code is a deliberate change.
 	{"updates.go", "updateStack", "GetStack", "stack", "Failed to load stack", models.ErrStackNotFound, "Stack not found"},
-	{"git.go", "resolvePathFromStack", "GetStack", "stack", "Failed to load stack", models.ErrStackNotFound, "Stack not found"},
+	{"git.go", "stackDir", "GetStack", "stack", "Failed to load stack", models.ErrStackNotFound, "Stack not found"},
 	{"monitoring.go", "getStackContainers", "GetStack", "stack", "Failed to load stack", models.ErrStackNotFound, "Stack not found"},
 	{"monitoring.go", "handleMetricsWebSocket", "GetStack", "stack", "Failed to load stack", models.ErrStackNotFound, "Stack not found"},
 	// agent-os-vupj: answered an absent stack with a bare {"error"} body and no

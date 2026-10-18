@@ -19,6 +19,8 @@ const (
 	ActionEditCompose = "edit_compose"
 	ActionEditEnv     = "edit_env"
 	ActionGitPull     = "git_pull"
+	ActionGitCommit   = "git_commit"
+	ActionGitPush     = "git_push"
 	ActionLogin       = "login"
 	ActionLoginFailed = "login_failed"
 	ActionLogout      = "logout"
