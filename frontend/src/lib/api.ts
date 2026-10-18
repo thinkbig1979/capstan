@@ -55,6 +55,7 @@ import type {
   PruneImpact,
 } from '@/types/generated-services'
 import type { VolumePruneScope } from '@/types/generated-services'
+import type { Directory, GitChangeDiff, GitChangesResult } from '@/types/generated'
 
 /**
  * LifecycleResult is the wire type for stack start/stop/restart/pull responses.
@@ -258,6 +259,9 @@ export interface GitSettingsResponse {
   httpsUser: string
   hasHttpsToken: boolean
   httpsTokenUnreadable: boolean
+  /** The commit author (agent-os-k81p.1); "" when unset. */
+  authorName: string
+  authorEmail: string
 }
 
 export const settingsApi = {
@@ -291,7 +295,9 @@ export const settingsApi = {
     return response.data
   },
 
-  updateGit: async (data: { sshKey?: string; httpsUser?: string; httpsToken?: string }) => {
+  // A blank field means "no change" on the server, so an author field can be
+  // set but not cleared from here.
+  updateGit: async (data: { sshKey?: string; httpsUser?: string; httpsToken?: string; authorName?: string; authorEmail?: string }) => {
     const response = await apiClient.put<GitSettingsResponse>('/settings/git', data)
     return response.data
   },
@@ -399,6 +405,38 @@ export type ComposeEnvResult = ActionResult<{
   rollbackError?: string
 }>
 
+/**
+ * POST /git/commit (agent-os-k81p.2). `partial` is a commit that landed and a
+ * push that failed: the commit is kept, `pushCode`/`pushReason` say why.
+ */
+export type GitCommitResult = ActionResult<{
+  commit?: string
+  files?: number
+  remote?: string
+  branch?: string
+  range?: string
+  pushCode?: string
+  pushReason?: string
+  code?: string
+}>
+
+/** Body of POST /git/commit. `files` are paths exactly as /git/changes lists them. */
+export interface GitCommitRequest {
+  stackId: string
+  message: string
+  files: string[]
+  confirmEnv: boolean
+  push: boolean
+}
+
+/** POST /git/push: `success` with the pushed range, or `no_change`. */
+export type GitPushResult = ActionResult<{
+  remote?: string
+  branch?: string
+  range?: string
+  code?: string
+}>
+
 export const gitApi = {
   status: async (stackId: string) => {
     const response = await apiClient.get<GitStatus>(`/git?stackId=${encodeURIComponent(stackId)}`)
@@ -417,6 +455,26 @@ export const gitApi = {
 
   diff: async (stackId: string, hash: string) => {
     const response = await apiClient.get<DiffResult>(`/git/diff/${encodeURIComponent(hash)}?stackId=${encodeURIComponent(stackId)}`)
+    return response.data
+  },
+
+  changes: async (stackId: string) => {
+    const response = await apiClient.get<GitChangesResult>('/git/changes', { params: { stackId } })
+    return response.data
+  },
+
+  changesDiff: async (stackId: string, path: string) => {
+    const response = await apiClient.get<GitChangeDiff>('/git/changes/diff', { params: { stackId, path } })
+    return response.data
+  },
+
+  commit: async (req: GitCommitRequest) => {
+    const response = await apiClient.post<GitCommitResult>('/git/commit', req)
+    return response.data
+  },
+
+  push: async (stackId: string) => {
+    const response = await apiClient.post<GitPushResult>('/git/push', { stackId })
     return response.data
   },
 }
@@ -546,8 +604,9 @@ export const stacksApi = {
 }
 
 export const directoriesApi = {
+  // gitPushEnabled is always sent: models.Directory has no omitempty on it.
   list: async () => {
-    const response = await apiClient.get<{ directories: ConfiguredDir[] }>('/directories')
+    const response = await apiClient.get<{ directories: Array<ConfiguredDir & Pick<Directory, 'gitPushEnabled'>> }>('/directories')
     return response.data.directories
   },
 
@@ -568,6 +627,13 @@ export const directoriesApi = {
   // Same reasoning as updateCredentials above: the path travels as a query
   // parameter, not a URL segment, so an absolute path with slashes routes
   // correctly. See agent-os-8a5.
+  // The push switch has its own route so a credentials save cannot disarm it
+  // (k81p.1). Path in the body, as for updateCredentials.
+  updatePush: async (directoryPath: string, enabled: boolean) => {
+    const response = await apiClient.put<{ directory: Directory }>('/directories/push', { path: directoryPath, enabled })
+    return response.data.directory
+  },
+
   credentialStatus: async (directoryPath: string) => {
     const response = await apiClient.get<DirectoryCredentialStatus>('/directories/credential-status', {
       params: { path: directoryPath },

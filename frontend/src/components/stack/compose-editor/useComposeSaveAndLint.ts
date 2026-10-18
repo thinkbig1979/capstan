@@ -13,6 +13,11 @@ interface UseComposeSaveAndLintArgs {
   viewRef: ReturnType<typeof useCodeMirrorEditor>['viewRef']
   handleSaveRef: RefObject<(forceSave?: boolean) => void>
   setLastSaved: (content: string) => void
+  /**
+   * Set for a git stack: the save toast then offers "Commit and push", which
+   * only calls this (opens the dialog). The save itself makes no git call.
+   */
+  onOpenCommit?: () => void
 }
 
 /**
@@ -27,6 +32,7 @@ export function useComposeSaveAndLint({
   viewRef,
   handleSaveRef,
   setLastSaved,
+  onOpenCommit,
 }: UseComposeSaveAndLintArgs) {
   const queryClient = useQueryClient()
   const [lintResults, setLintResults] = useState<LintResult[]>([])
@@ -38,7 +44,13 @@ export function useComposeSaveAndLint({
     onSuccess: (data, variables) => {
       setLastSaved(variables)
       setLintResults(data.lintResults || [])
-      toast.success('Compose file saved successfully')
+      if (onOpenCommit) {
+        toast.success('Compose file saved successfully', {
+          action: { label: 'Commit and push', onClick: onOpenCommit },
+        })
+      } else {
+        toast.success('Compose file saved successfully')
+      }
       if (data.lintResults?.some((r: LintResult) => r.level === 'error')) {
         toastInvalid('Lint errors detected')
       } else if (data.lintResults?.some((r: LintResult) => r.level === 'warning')) {

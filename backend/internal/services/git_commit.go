@@ -5,11 +5,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
@@ -115,6 +119,73 @@ func (s *GitService) GetChanges(dirPath string) (*models.GitChangesResult, error
 		IdentityConfigured: name != "" && email != "",
 		Changes:            changes,
 	}, nil
+}
+
+// GetChangeDiff is the uncommitted diff, against HEAD, of one file GetChanges
+// lists for dirPath. An env file answers Hidden with no diff, and no diff child
+// runs for it. Whether it is one comes from the change list (which also
+// covers a rename's original path and env symlinks), never from the
+// requested path.
+func (s *GitService) GetChangeDiff(dirPath, path string) (*models.GitChangeDiff, error) {
+	status, err := s.GetStatus(dirPath)
+	if err != nil {
+		return nil, err
+	}
+	if status.IsBare {
+		return nil, models.NewAppError(http.StatusConflict, models.ErrGitBareRepo, "A bare repository has no work tree to diff")
+	}
+	user, token := s.httpsCredentials(dirPath)
+	top, err := s.repoTopLevel(dirPath, user, token)
+	if err != nil {
+		return nil, err
+	}
+	changes, err := s.listChanges(dirPath, top, user, token)
+	if err != nil {
+		return nil, err
+	}
+	var change *models.GitChange
+	for i := range changes {
+		if changes[i].Path == path {
+			change = &changes[i]
+			break
+		}
+	}
+	if change == nil {
+		return nil, models.NewAppError(http.StatusBadRequest, models.ErrValidation,
+			fmt.Sprintf("%q is not a changed tracked file in this stack's folder", path))
+	}
+	if change.IsEnv {
+		return &models.GitChangeDiff{Path: path, Hidden: true}, nil
+	}
+
+	pathspecs := []string{change.Path}
+	if change.OrigPath != "" {
+		pathspecs = append(pathspecs, change.OrigPath)
+	}
+	diff, _, err := s.gitRun(top, user, token, []string{"GIT_LITERAL_PATHSPECS=1"}, append(changeDiffArgs, pathspecs...)...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read the diff: %w", err)
+	}
+	return &models.GitChangeDiff{Path: path, Diff: diff}, nil
+}
+
+// changeDiffArgs is `git diff HEAD` with everything repository config could
+// change about it pinned, ending in "--". --no-ext-diff and --no-textconv stop
+// diff.external, GIT_EXTERNAL_DIFF, diff driver commands and textconv from
+// running code; --no-color, the explicit prefixes and --no-relative undo
+// color.ui=always, diff.noprefix, diff.mnemonicPrefix and diff.relative, and
+// core.quotePath=false keeps non-ASCII names unquoted, each of which would
+// break the frontend's parseDiff. --submodule=short (and diff.submodule=short,
+// which the flag outranks) keeps a submodule to its commit line: "diff" mode
+// runs a git diff inside the submodule, which reads the submodule's own
+// diff.external and textconv and shows its files' contents. Clean and process
+// filters still run when git reads the work tree: that is a residual risk, as
+// it is for status.
+var changeDiffArgs = []string{
+	"-c", "core.fsmonitor=false", "-c", "core.quotePath=false", "--no-optional-locks",
+	"-c", "diff.submodule=short",
+	"diff", "HEAD", "--no-ext-diff", "--no-textconv", "--no-color", "--submodule=short",
+	"--src-prefix=a/", "--dst-prefix=b/", "--no-relative", "--",
 }
 
 // CommitVerified commits exactly the requested files and, when req.Push, pushes
@@ -466,7 +537,7 @@ func (s *GitService) listChanges(dirPath, top, user, token string) ([]models.Git
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve the stack folder: %w", err)
 	}
-	envFiles, err := s.stackEnvFiles(dirPath, realDir)
+	rule, err := s.envRule(dirPath, realDir, top, user, token)
 	if err != nil {
 		return nil, err
 	}
@@ -485,9 +556,9 @@ func (s *GitService) listChanges(dirPath, top, user, token string) ([]models.Git
 		if !ok {
 			continue
 		}
-		isEnv := isEnvPath(abs, envFiles)
+		isEnv := rule.matches(abs)
 		if e.origPath != "" {
-			isEnv = isEnv || isEnvPath(filepath.Join(top, filepath.FromSlash(e.origPath)), envFiles)
+			isEnv = isEnv || rule.matches(filepath.Join(top, filepath.FromSlash(e.origPath)))
 		}
 		changes = append(changes, models.GitChange{
 			Path:     e.path,
@@ -559,28 +630,184 @@ func inFolder(dirPath, abs string) (bool, error) {
 	return pathutil.IsContained(dirPath, filepath.Dir(abs))
 }
 
-// stackEnvFiles is the set of env files the stacks in dirPath name, as
-// absolute paths under realDir (dirPath with symlinks resolved, which is how
-// git's top level spells it).
-func (s *GitService) stackEnvFiles(dirPath, realDir string) (map[string]bool, error) {
-	stacks, err := s.db.ListStacksByDirectory(dirPath)
-	if err != nil {
-		return nil, fmt.Errorf("could not list the stacks in this folder: %w", err)
-	}
-	set := map[string]bool{}
-	for _, st := range stacks {
-		if st.EnvFile != "" {
-			set[filepath.Join(realDir, filepath.FromSlash(st.EnvFile))] = true
-		}
-	}
-	return set, nil
+// envRule decides which changed files are env files. Since agent-os-k81p.3 it
+// decides what the dialog SHOWS (GET /git/changes/diff hides an env file) as
+// well as what needs confirmEnv, so it errs toward flagging.
+type envRule struct {
+	// named holds the env files named by path: each stack's EnvFile and every
+	// env_file: entry of each stack's compose file, absolute under realDir.
+	named map[string]bool
+	// targets holds where env files really live: named, every env-named
+	// tracked path of the repository and every env-named untracked path of
+	// the folder, with symlinks resolved. An env-named link
+	// (.env -> secrets.txt) leaves its target an innocent name.
+	targets map[string]bool
+	// composeUnreadable: a stack's compose file could not be read or parsed,
+	// or an env_file: entry could not be resolved, so the env files it names
+	// are unknown. Every change but the compose files is then flagged.
+	composeUnreadable bool
+	compose           map[string]bool
 }
 
-// isEnvPath: ".env", ".env.*", "*.env", or the env file a stack in the folder
-// names. A compose env_file: entry with any other name is not caught.
-func isEnvPath(abs string, envFiles map[string]bool) bool {
-	base := filepath.Base(abs)
-	return base == ".env" || strings.HasPrefix(base, ".env.") || strings.HasSuffix(base, ".env") || envFiles[filepath.Clean(abs)]
+func (r envRule) matches(abs string) bool {
+	abs = filepath.Clean(abs)
+	switch {
+	case isEnvName(filepath.Base(abs)), r.named[abs], resolvesInto(abs, r.targets):
+		return true
+	case r.composeUnreadable:
+		return !r.compose[abs]
+	}
+	return false
+}
+
+// isEnvName: the basename, case-insensitively, is "env" or ".env", starts with
+// ".env" (.envrc, .env-prod, .env_local, .env.prod), ends with ".env"
+// (prod.env) or contains ".env." (app.env.local).
+func isEnvName(base string) bool {
+	b := strings.ToLower(base)
+	return b == "env" || strings.HasPrefix(b, ".env") || strings.HasSuffix(b, ".env") || strings.Contains(b, ".env.")
+}
+
+// envNamePathspecs find env-named paths with ls-files. They are glob magic,
+// so globPathspecEnv turns off any inherited GIT_*_PATHSPECS that would read
+// them literally. isEnvName re-checks every hit.
+var envNamePathspecs = []string{
+	":(glob,icase)**/env", ":(glob,icase)**/.env*", ":(glob,icase)**/*.env", ":(glob,icase)**/*.env.*",
+}
+
+var globPathspecEnv = []string{
+	"GIT_LITERAL_PATHSPECS=0", "GIT_GLOB_PATHSPECS=0", "GIT_NOGLOB_PATHSPECS=0", "GIT_ICASE_PATHSPECS=0",
+}
+
+func (s *GitService) envRule(dirPath, realDir, top, user, token string) (envRule, error) {
+	stacks, err := s.db.ListStacksByDirectory(dirPath)
+	if err != nil {
+		return envRule{}, fmt.Errorf("could not list the stacks in this folder: %w", err)
+	}
+	r := envRule{named: map[string]bool{}, targets: map[string]bool{}, compose: map[string]bool{}}
+	for _, st := range stacks {
+		if st.EnvFile != "" {
+			r.named[filepath.Join(realDir, filepath.FromSlash(st.EnvFile))] = true
+		}
+		if st.ComposeFile == "" {
+			continue
+		}
+		composePath := filepath.Join(realDir, filepath.FromSlash(st.ComposeFile))
+		r.compose[composePath] = true
+		entries, err := composeEnvFiles(composePath)
+		if err != nil {
+			slog.Warn("Treating every changed file of the folder as an env file: the compose file's env_file entries are unknown",
+				"path", composePath, "error", err)
+			r.composeUnreadable = true
+			continue
+		}
+		for _, e := range entries {
+			r.named[filepath.Join(filepath.Dir(composePath), filepath.FromSlash(e))] = true
+		}
+	}
+
+	candidates := make([]string, 0, len(r.named))
+	for p := range r.named {
+		candidates = append(candidates, p)
+	}
+	// Tracked: the whole repository, so a link in a sibling stack folder
+	// (app/.env -> ../other/prod.secrets) flags its target here too.
+	tracked, _, err := s.gitRun(top, user, token, globPathspecEnv,
+		append([]string{"-c", "core.fsmonitor=false", "--no-optional-locks", "ls-files", "-z", "--full-name", "--"}, envNamePathspecs...)...)
+	if err != nil {
+		return envRule{}, fmt.Errorf("failed to list the tracked env files: %w", err)
+	}
+	// Untracked, ignored ones included: a .env is usually gitignored. Not
+	// --exclude-standard, which would drop exactly that file.
+	untracked, _, err := s.gitRun(dirPath, user, token, globPathspecEnv,
+		append([]string{"-c", "core.fsmonitor=false", "--no-optional-locks", "ls-files", "-z", "--full-name", "--others", "--"}, envNamePathspecs...)...)
+	if err != nil {
+		return envRule{}, fmt.Errorf("failed to list the untracked env files: %w", err)
+	}
+	for _, rel := range strings.Split(tracked+"\x00"+untracked, "\x00") {
+		if rel != "" && isEnvName(filepath.Base(rel)) {
+			candidates = append(candidates, filepath.Join(top, filepath.FromSlash(rel)))
+		}
+	}
+	for _, p := range candidates {
+		resolved, err := filepath.EvalSymlinks(p)
+		if err != nil {
+			// Missing or dangling: it points at nothing a change could be.
+			continue
+		}
+		r.targets[resolved] = true
+	}
+	return r, nil
+}
+
+// composeEnvFiles reads the env_file: entries of every service in a compose
+// file, relative to the file's folder: a string, a list of strings, or a list
+// of {path: ...} (compose's long form). An entry it cannot resolve to a fixed
+// path (interpolated, or another shape) is an error, so the caller fails
+// toward hiding. A missing compose file names no env file.
+func composeEnvFiles(composePath string) ([]string, error) {
+	//nolint:gosec // composePath is a registered stack's compose file under its folder
+	content, err := os.ReadFile(composePath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var doc struct {
+		Services map[string]struct {
+			EnvFile yaml.Node `yaml:"env_file"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(content, &doc); err != nil {
+		return nil, err
+	}
+	var out []string
+	add := func(n *yaml.Node) error {
+		if n.Kind != yaml.ScalarNode || n.Value == "" || strings.Contains(n.Value, "$") {
+			return fmt.Errorf("env_file entry at line %d is not a fixed path", n.Line)
+		}
+		out = append(out, n.Value)
+		return nil
+	}
+	for _, svc := range doc.Services {
+		n := svc.EnvFile
+		switch n.Kind {
+		case 0:
+		case yaml.ScalarNode:
+			if err := add(&n); err != nil {
+				return nil, err
+			}
+		case yaml.SequenceNode:
+			for _, item := range n.Content {
+				if item.Kind == yaml.MappingNode {
+					var long struct {
+						Path yaml.Node `yaml:"path"`
+					}
+					if err := item.Decode(&long); err != nil {
+						return nil, err
+					}
+					item = &long.Path
+				}
+				if err := add(item); err != nil {
+					return nil, err
+				}
+			}
+		default:
+			return nil, fmt.Errorf("env_file at line %d is neither a path nor a list", n.Line)
+		}
+	}
+	return out, nil
+}
+
+// resolvesInto reports whether abs, with symlinks resolved, is in targets. A
+// path that does not resolve (a deleted file) is not.
+func resolvesInto(abs string, targets map[string]bool) bool {
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return false
+	}
+	return targets[resolved]
 }
 
 // selectCommitPaths checks every requested file against the change list just

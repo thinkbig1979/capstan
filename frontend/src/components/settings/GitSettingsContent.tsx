@@ -19,10 +19,14 @@ export function GitSettingsContent() {
   const [sshKey, setSshKey] = useState<string | undefined>(undefined)
   const [httpsUser, setHttpsUser] = useState<string | undefined>(undefined)
   const [httpsToken, setHttpsToken] = useState('')
+  const [authorName, setAuthorName] = useState<string | undefined>(undefined)
+  const [authorEmail, setAuthorEmail] = useState<string | undefined>(undefined)
   const [showToken, setShowToken] = useState(false)
 
   const effectiveSshKey = sshKey !== undefined ? sshKey : (gitSettings?.sshKey || '')
   const effectiveHttpsUser = httpsUser !== undefined ? httpsUser : (gitSettings?.httpsUser || '')
+  const effectiveAuthorName = authorName !== undefined ? authorName : (gitSettings?.authorName || '')
+  const effectiveAuthorEmail = authorEmail !== undefined ? authorEmail : (gitSettings?.authorEmail || '')
   // hasHttpsToken is also true for a stored token the server could not read
   // (GetGitSettings), so "currently set" alone would claim a usable token
   // (agent-os-pjos).
@@ -49,10 +53,15 @@ export function GitSettingsContent() {
   }
 
   const handleSave = () => {
-    const data: { sshKey?: string; httpsUser?: string; httpsToken?: string } = {}
+    const data: Parameters<typeof updateGitSettings.mutate>[0] = {}
     if (effectiveSshKey) data.sshKey = effectiveSshKey
     if (effectiveHttpsUser) data.httpsUser = effectiveHttpsUser
     if (httpsToken) data.httpsToken = httpsToken
+    // Sent only when edited, so a credentials-only save never re-validates a
+    // stored author. The server answers 400 VALIDATION_ERROR with the reason,
+    // which settingsSaveFault shows. Blank means "no change" there.
+    if (effectiveAuthorName && effectiveAuthorName !== (gitSettings?.authorName || '')) data.authorName = effectiveAuthorName
+    if (effectiveAuthorEmail && effectiveAuthorEmail !== (gitSettings?.authorEmail || '')) data.authorEmail = effectiveAuthorEmail
     updateGitSettings.mutate(data, {
       onSuccess: () => {
         toast.success('Git settings saved')
@@ -161,6 +170,41 @@ export function GitSettingsContent() {
           )}
           <p className="text-xs text-muted-foreground">
             Used as the default token for HTTPS git remotes. Individual stack credentials override these.
+          </p>
+        </div>
+      </div>
+
+      <div className="space-y-4 pt-4 border-t">
+        <div className="flex items-center gap-1.5">
+          <h3 className="text-lg font-medium">Commit author</h3>
+          <HelpHint label="Commit author">
+            <p>The name and email on commits Capstan makes when you commit from a stack.</p>
+            <p>Committing and pushing are off by default. Turn them on per folder with &ldquo;Allow commit and push&rdquo; under the stack&apos;s git chip, in Git Credentials. Pushing over SSH is not supported yet.</p>
+          </HelpHint>
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="git-author-name">Author name</Label>
+          <Input
+            id="git-author-name"
+            type="text"
+            value={effectiveAuthorName}
+            onChange={(e) => setAuthorName(e.target.value)}
+            className="max-w-md"
+          />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="git-author-email">Author email</Label>
+          <Input
+            id="git-author-email"
+            // text, not email: the server's own validation message is the one
+            // shown, and a browser check would stop the form before it.
+            type="text"
+            value={effectiveAuthorEmail}
+            onChange={(e) => setAuthorEmail(e.target.value)}
+            className="max-w-md"
+          />
+          <p className="text-xs text-muted-foreground">
+            Both are needed before a commit can run. Leaving a field blank keeps the stored value.
           </p>
         </div>
       </div>

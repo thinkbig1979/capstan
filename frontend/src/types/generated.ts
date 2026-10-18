@@ -768,6 +768,26 @@ export interface GitChangesResult {
   identityConfigured: boolean;
   changes: GitChange[];
 }
+/**
+ * GitChangeDiff is GET /git/changes/diff: the uncommitted diff of one file
+ * from the change list, against HEAD (agent-os-k81p.3).
+ */
+export interface GitChangeDiff {
+  /**
+   * Path is the requested GitChange.Path.
+   */
+  path: string;
+  /**
+   * Hidden is true for an env file: Diff is then empty, because an env file
+   * can hold secrets and its contents are never sent (D136).
+   */
+  hidden: boolean;
+  /**
+   * Diff is a raw unified diff, "a/" and "b/" prefixed, uncoloured. A
+   * rename holds both paths.
+   */
+  diff: string;
+}
 export interface LogResult {
   commits: GitCommit[];
   total: number /* int */;

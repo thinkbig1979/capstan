@@ -543,7 +543,7 @@ export function useRunDockerCleanup() {
 export function useUpdateGitSettings() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (data: { sshKey?: string; httpsUser?: string; httpsToken?: string }) =>
+    mutationFn: (data: Parameters<typeof settingsApi.updateGit>[0]) =>
       settingsApi.updateGit(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.settings.git() })

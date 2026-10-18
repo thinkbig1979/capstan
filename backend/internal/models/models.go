@@ -209,6 +209,19 @@ type GitChangesResult struct {
 	Changes            []GitChange `json:"changes"`
 }
 
+// GitChangeDiff is GET /git/changes/diff: the uncommitted diff of one file
+// from the change list, against HEAD (agent-os-k81p.3).
+type GitChangeDiff struct {
+	// Path is the requested GitChange.Path.
+	Path string `json:"path"`
+	// Hidden is true for an env file: Diff is then empty, because an env file
+	// can hold secrets and its contents are never sent (D136).
+	Hidden bool `json:"hidden"`
+	// Diff is a raw unified diff, "a/" and "b/" prefixed, uncoloured. A
+	// rename holds both paths.
+	Diff string `json:"diff"`
+}
+
 type LogResult struct {
 	Commits []GitCommit `json:"commits"`
 	Total   int         `json:"total"`

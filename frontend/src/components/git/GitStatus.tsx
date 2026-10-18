@@ -1,9 +1,9 @@
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { Download, GitBranch, ArrowUp, ArrowDown, FileWarning, AlertTriangle } from 'lucide-react'
+import { Download, GitBranch, ArrowUp, ArrowDown, FileWarning, AlertTriangle, GitCommitHorizontal } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
-import { useGitStatus, useGitPull } from '@/hooks/useGit'
+import { useGitStatus, useGitPull, useGitChanges } from '@/hooks/useGit'
 import { useState } from 'react'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { directoriesApi } from '@/lib/api'
@@ -12,6 +12,7 @@ import { queryKeys } from '@/lib/query-keys'
 import type { Stack } from '@/types'
 import { GitSettingsSection } from '@/components/git/GitSettingsSection'
 import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
+import { CommitPushDialog } from '@/components/git/CommitPushDialog'
 
 // Why Pull is off whenever the status could not be read (agent-os-528x). A pull
 // on a dirty tree is the dangerous operation, and a failed probe cannot say the
@@ -44,6 +45,42 @@ function GitPullActions({ canPull, onPull }: GitPullActionsProps) {
   )
 }
 
+interface GitCommitActionsProps {
+  stackId: string
+  onOpen: () => void
+}
+
+/**
+ * "Commit and push" and "Push", each opening the commit dialog (agent-os-k81p.3).
+ * Read from GET /git/changes, not from the status above: `dirty` counts the
+ * whole repository, which can hold other stacks' folders, and only /changes
+ * says whether the branch has an upstream to push to. Mounted inside the
+ * popover, so the read happens when the popover opens.
+ */
+function GitCommitActions({ stackId, onOpen }: GitCommitActionsProps) {
+  const { data } = useGitChanges(stackId)
+  if (!data) return null
+  const hasChanges = data.changes.length > 0
+  const canOfferPush = data.hasUpstream && data.ahead > 0
+  if (!hasChanges && !canOfferPush) return null
+  return (
+    <div className="flex gap-2">
+      {hasChanges && (
+        <Button variant="outline" size="sm" onClick={onOpen}>
+          <GitCommitHorizontal className="mr-2 h-4 w-4" />
+          Commit and push
+        </Button>
+      )}
+      {canOfferPush && (
+        <Button variant="outline" size="sm" onClick={onOpen}>
+          <ArrowUp className="mr-2 h-4 w-4" />
+          Push
+        </Button>
+      )}
+    </div>
+  )
+}
+
 /**
  * Compact git chip for the stack header. Renders nothing while the status is
  * loading and when no data arrived. A failed request renders an explicit
@@ -63,6 +100,7 @@ export function GitStatus({ stack }: GitStatusProps) {
   } | null>(null)
 
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [commitOpen, setCommitOpen] = useState(false)
   const [isRescanning, setIsRescanning] = useState(false)
   const queryClient = useQueryClient()
 
@@ -341,18 +379,25 @@ export function GitStatus({ stack }: GitStatusProps) {
           </div>
 
           <GitPullActions canPull={canPull} onPull={handlePull} />
+          <GitCommitActions stackId={stack.id} onOpen={() => setCommitOpen(true)} />
           {!statusKnown && (
             <p className="text-xs text-muted-foreground">{PULL_BLOCKED_REASON}</p>
           )}
 
           <GitSettingsSection
             directoryPath={stack.directory}
+            stackId={stack.id}
             remoteURL={gitStatus.remote}
             open={settingsOpen}
             onToggle={() => setSettingsOpen(!settingsOpen)}
           />
         </PopoverContent>
       </Popover>
+
+      {/* Mounted only while open, so its reads and mutations exist only then. */}
+      {commitOpen && (
+        <CommitPushDialog stackId={stack.id} composeFile={stack.composeFile} open onOpenChange={setCommitOpen} />
+      )}
 
       {showConfirmDialog && confirmDialogProps && (
         <ConfirmDialog
