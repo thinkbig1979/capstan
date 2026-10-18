@@ -117,6 +117,68 @@ func (s *GitService) GetChanges(dirPath string) (*models.GitChangesResult, error
 	}, nil
 }
 
+// GetChangeDiff is the uncommitted diff, against HEAD, of one file GetChanges
+// lists for dirPath. An env file answers Hidden with no diff, and no diff child
+// runs for it. Whether it is one comes from the change list (which also
+// covers a rename's original path and env symlinks), never from the
+// requested path.
+func (s *GitService) GetChangeDiff(dirPath, path string) (*models.GitChangeDiff, error) {
+	status, err := s.GetStatus(dirPath)
+	if err != nil {
+		return nil, err
+	}
+	if status.IsBare {
+		return nil, models.NewAppError(http.StatusConflict, models.ErrGitBareRepo, "A bare repository has no work tree to diff")
+	}
+	user, token := s.httpsCredentials(dirPath)
+	top, err := s.repoTopLevel(dirPath, user, token)
+	if err != nil {
+		return nil, err
+	}
+	changes, err := s.listChanges(dirPath, top, user, token)
+	if err != nil {
+		return nil, err
+	}
+	var change *models.GitChange
+	for i := range changes {
+		if changes[i].Path == path {
+			change = &changes[i]
+			break
+		}
+	}
+	if change == nil {
+		return nil, models.NewAppError(http.StatusBadRequest, models.ErrValidation,
+			fmt.Sprintf("%q is not a changed tracked file in this stack's folder", path))
+	}
+	if change.IsEnv {
+		return &models.GitChangeDiff{Path: path, Hidden: true}, nil
+	}
+
+	pathspecs := []string{change.Path}
+	if change.OrigPath != "" {
+		pathspecs = append(pathspecs, change.OrigPath)
+	}
+	diff, _, err := s.gitRun(top, user, token, []string{"GIT_LITERAL_PATHSPECS=1"}, append(changeDiffArgs, pathspecs...)...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read the diff: %w", err)
+	}
+	return &models.GitChangeDiff{Path: path, Diff: diff}, nil
+}
+
+// changeDiffArgs is `git diff HEAD` with everything repository config could
+// change about it pinned, ending in "--". --no-ext-diff and --no-textconv stop
+// diff.external, GIT_EXTERNAL_DIFF, diff driver commands and textconv from
+// running code; --no-color, the explicit prefixes and --no-relative undo
+// color.ui=always, diff.noprefix, diff.mnemonicPrefix and diff.relative, and
+// core.quotePath=false keeps non-ASCII names unquoted, each of which would
+// break the frontend's parseDiff. Clean and process filters still run when
+// git reads the work tree: that is a residual risk, as it is for status.
+var changeDiffArgs = []string{
+	"-c", "core.fsmonitor=false", "-c", "core.quotePath=false", "--no-optional-locks",
+	"diff", "HEAD", "--no-ext-diff", "--no-textconv", "--no-color",
+	"--src-prefix=a/", "--dst-prefix=b/", "--no-relative", "--",
+}
+
 // CommitVerified commits exactly the requested files and, when req.Push, pushes
 // the branch under the same lock.
 //
@@ -470,6 +532,10 @@ func (s *GitService) listChanges(dirPath, top, user, token string) ([]models.Git
 	if err != nil {
 		return nil, err
 	}
+	envTargets, err := s.envSymlinkTargets(dirPath, top, user, token, envFiles)
+	if err != nil {
+		return nil, err
+	}
 
 	changes := []models.GitChange{}
 	for _, e := range entries {
@@ -485,9 +551,10 @@ func (s *GitService) listChanges(dirPath, top, user, token string) ([]models.Git
 		if !ok {
 			continue
 		}
-		isEnv := isEnvPath(abs, envFiles)
+		isEnv := isEnvPath(abs, envFiles) || resolvesInto(abs, envTargets)
 		if e.origPath != "" {
-			isEnv = isEnv || isEnvPath(filepath.Join(top, filepath.FromSlash(e.origPath)), envFiles)
+			orig := filepath.Join(top, filepath.FromSlash(e.origPath))
+			isEnv = isEnv || isEnvPath(orig, envFiles) || resolvesInto(orig, envTargets)
 		}
 		changes = append(changes, models.GitChange{
 			Path:     e.path,
@@ -581,6 +648,54 @@ func (s *GitService) stackEnvFiles(dirPath, realDir string) (map[string]bool, er
 func isEnvPath(abs string, envFiles map[string]bool) bool {
 	base := filepath.Base(abs)
 	return base == ".env" || strings.HasPrefix(base, ".env.") || strings.HasSuffix(base, ".env") || envFiles[filepath.Clean(abs)]
+}
+
+// envSymlinkTargets is where the folder's env files really live: every stack
+// EnvFile and every env-named TRACKED file of the folder, with symlinks
+// resolved. An env-named symlink (.env -> secrets.txt) leaves its target with
+// an innocent name, and the target is what holds the secrets, so a change
+// that resolves into this set is an env file too (agent-os-k81p.3). A path
+// that does not resolve (missing, dangling) adds nothing. An untracked
+// env-named symlink that no stack names is not seen: finding it would mean
+// walking the folder, which can hold large data directories.
+func (s *GitService) envSymlinkTargets(dirPath, top, user, token string, envFiles map[string]bool) (map[string]bool, error) {
+	out, _, err := s.gitRun(dirPath, user, token, nil,
+		"-c", "core.fsmonitor=false", "--no-optional-locks", "ls-files", "-z", "--full-name", "--", ".")
+	if err != nil {
+		return nil, fmt.Errorf("failed to list the tracked files: %w", err)
+	}
+	candidates := make([]string, 0, len(envFiles))
+	for p := range envFiles {
+		candidates = append(candidates, p)
+	}
+	for _, rel := range strings.Split(out, "\x00") {
+		if rel == "" {
+			continue
+		}
+		if abs := filepath.Join(top, filepath.FromSlash(rel)); isEnvPath(abs, nil) {
+			candidates = append(candidates, abs)
+		}
+	}
+	targets := map[string]bool{}
+	for _, p := range candidates {
+		resolved, err := filepath.EvalSymlinks(p)
+		if err != nil {
+			// Missing or dangling: it points at nothing a change could be.
+			continue
+		}
+		targets[resolved] = true
+	}
+	return targets, nil
+}
+
+// resolvesInto reports whether abs, with symlinks resolved, is in targets. A
+// path that does not resolve (a deleted file) is not.
+func resolvesInto(abs string, targets map[string]bool) bool {
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return false
+	}
+	return targets[resolved]
 }
 
 // selectCommitPaths checks every requested file against the change list just

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/cgi" //nolint:gosec // hosts git-http-backend as a local httptest server for the push tests below, never network-exposed
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -450,4 +451,33 @@ func TestGitCommitActionLog(t *testing.T) {
 		assert.NotContains(t, r.Detail, "http://")
 	}
 	assert.NotContains(t, w.Body.String(), k81pGitToken)
+}
+
+// TestGetChangeDiffRoute: GET /git/changes/diff answers a listed file's diff,
+// hides an env file with its contents absent from the body, and refuses a
+// path the change list does not hold (agent-os-k81p.3).
+func TestGetChangeDiffRoute(t *testing.T) {
+	const secret = "K81P3-HANDLER-SECRET-do-not-send"
+	e := newGitWriteEnv(t, false)
+	k81pWrite(t, filepath.Join(e.top, "compose.yaml"), "services: {a: {}}\n")
+	k81pWrite(t, filepath.Join(e.top, ".env"), "A="+secret+"\n")
+	get := func(path string) *httptest.ResponseRecorder {
+		return e.do(t, http.MethodGet, "/api/git/changes/diff?stackId="+e.stackID+"&path="+url.QueryEscape(path), "")
+	}
+
+	w := get("compose.yaml")
+	require.Equal(t, http.StatusOK, w.Code, "body %s", w.Body.String())
+	var got models.GitChangeDiff
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Equal(t, models.GitChangeDiff{Path: "compose.yaml", Diff: got.Diff}, got)
+	assert.Contains(t, got.Diff, "+services: {a: {}}")
+
+	w = get(".env")
+	require.Equal(t, http.StatusOK, w.Code, "body %s", w.Body.String())
+	assert.NotContains(t, w.Body.String(), secret)
+	assert.JSONEq(t, `{"path":".env","hidden":true,"diff":""}`, w.Body.String())
+
+	requireGitCode(t, get("x"), http.StatusBadRequest, models.ErrValidation)
+	requireGitCode(t, e.do(t, http.MethodGet, "/api/git/changes/diff?stackId="+e.stackID, ""), http.StatusBadRequest, models.ErrValidation)
+	requireGitCode(t, e.do(t, http.MethodGet, "/api/git/changes/diff?stackId=nope&path=compose.yaml", ""), http.StatusNotFound, models.ErrStackNotFound)
 }

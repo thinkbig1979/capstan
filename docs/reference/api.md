@@ -276,7 +276,20 @@ are 4xx or 502, never 401. Commit and push results are action results
   `isEnv` marks `.env`, `.env.*`, `*.env` and the stack's own env file; it does
   not see a compose `env_file:` with another name. A push switch or author
   setting that cannot be read is a 500, never `false`. Unresolved conflicts in
-  the folder answer 409 `GIT_OPERATION_IN_PROGRESS`
+  the folder answer 409 `GIT_OPERATION_IN_PROGRESS`. `isEnv` also marks a file
+  that a stack's env file or an env-named tracked file resolves to through a
+  symlink (`.env -> secrets.txt` marks `secrets.txt`); an untracked env-named
+  symlink no stack names is not seen
+- `GET /api/v1/git/changes/diff` — `?stackId=<id>&path=<path>`. Read-only, no
+  lock. The uncommitted diff of one file from `/changes` against `HEAD`:
+  `{path, hidden, diff}`, `diff` a raw unified diff with `a/`/`b/` prefixes and
+  no colour (a rename holds both paths). An env file (`isEnv` in the change
+  list, which covers a rename from an env name) answers 200 `{hidden: true,
+  diff: ""}` and its contents are never read or sent. No external diff, diff
+  driver or textconv program runs; clean and process filters still do, as for
+  `git status`. Answers 400 `VALIDATION_ERROR` when `path` is missing or not in
+  the change list, and the errors `/changes` answers (a repository with no
+  commits yet included)
 - `POST /api/v1/git/commit` — body `{stackId, message, files, confirmEnv,
   push}`. Commits exactly `files` (paths as `/changes` lists them; a rename
   commits its old path too) with literal pathspecs, as the author in Settings >

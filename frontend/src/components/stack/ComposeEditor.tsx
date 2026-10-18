@@ -11,6 +11,7 @@ import { useComposeSaveAndLint } from './compose-editor/useComposeSaveAndLint'
 import { useExtractToEnv } from './compose-editor/useExtractToEnv'
 import { queryKeys } from '@/lib/query-keys'
 import { stringOr } from '@/lib/narrow'
+import { CommitPushDialog } from '@/components/git/CommitPushDialog'
 
 interface ComposeEditorProps {
   stackId: string
@@ -40,6 +41,16 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
       return stringOr((compose as { content?: unknown } | undefined)?.content, '')
     },
   })
+
+  // The stack row StackPage already fetched, read from the cache: `enabled:
+  // false` means this observer never requests it. Decides whether the save
+  // toast offers "Commit and push" (agent-os-k81p.3).
+  const { data: stack } = useQuery({
+    queryKey: queryKeys.stack.detail(stackId),
+    queryFn: () => stacksApi.get(stackId),
+    enabled: false,
+  })
+  const [commitOpen, setCommitOpen] = useState(false)
 
   const { viewRef } = useCodeMirrorEditor(editorRef, {
     doc: data || content,
@@ -74,7 +85,13 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
   }
 
   const { lintResults, showSaveConfirm, setShowSaveConfirm, isLintingBeforeSave, saveMutation, lintMutation, handleSave, handleLint } =
-    useComposeSaveAndLint({ stackId, viewRef, handleSaveRef, setLastSaved })
+    useComposeSaveAndLint({
+      stackId,
+      viewRef,
+      handleSaveRef,
+      setLastSaved,
+      onOpenCommit: stack?.isGitRepo ? () => setCommitOpen(true) : undefined,
+    })
 
   const {
     extractVarName,
@@ -135,6 +152,10 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
         lintResults={lintResults}
         onSaveAnyway={() => handleSave(true)}
       />
+
+      {commitOpen && (
+        <CommitPushDialog stackId={stackId} composeFile={stack?.composeFile} open onOpenChange={setCommitOpen} />
+      )}
     </div>
   )
 }

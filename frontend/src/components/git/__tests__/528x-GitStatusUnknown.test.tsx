@@ -25,6 +25,8 @@ const mockUseGitPull = vi.fn(() => ({ mutate: mockMutate, isPending: false }))
 vi.mock('@/hooks/useGit', () => ({
   useGitStatus: (...args: unknown[]) => mockUseGitStatus(...args),
   useGitPull: () => mockUseGitPull(),
+  // The commit actions in the popover (agent-os-k81p.3); nothing to commit here.
+  useGitChanges: () => ({ data: undefined }),
 }))
 
 vi.mock('sonner', () => ({

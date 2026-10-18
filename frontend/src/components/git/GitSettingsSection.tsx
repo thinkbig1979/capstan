@@ -3,6 +3,8 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
+import { HelpHint } from '@/components/ui/help-hint'
 import { Badge } from '@/components/ui/badge'
 import {
   Select,
@@ -114,6 +116,8 @@ function credentialSaveFault(error: unknown): string | null {
 
 interface GitSettingsSectionProps {
   directoryPath: string
+  /** The stack whose git queries read this directory's push switch. */
+  stackId?: string
   remoteURL?: string
   open: boolean
   onToggle: () => void
@@ -121,6 +125,7 @@ interface GitSettingsSectionProps {
 
 export function GitSettingsSection({
   directoryPath,
+  stackId,
   remoteURL,
   open,
   onToggle,
@@ -131,6 +136,7 @@ export function GitSettingsSection({
   const [httpsUser, setHttpsUser] = useState('')
   const [httpsToken, setHttpsToken] = useState('')
   const [hasToken, setHasToken] = useState(false)
+  const [pushEnabled, setPushEnabled] = useState(false)
   const [loaded, setLoaded] = useState(false)
   const [credentialStatus, setCredentialStatus] = useState<DirectoryCredentialStatusValue | null>(null)
 
@@ -146,6 +152,7 @@ export function GitSettingsSection({
         setSshKeyPath(dir.gitSshKeyPath || '')
         setHttpsUser(dir.gitHttpsUser || '')
         setHasToken(dir.hasHttpsToken || false)
+        setPushEnabled(dir.gitPushEnabled === true)
       }
       setLoaded(true)
     })
@@ -183,6 +190,21 @@ export function GitSettingsSection({
     // exactly what it rendered before.
     onError: (error) => {
       presentFault('Failed to save credentials', credentialSaveFault(error))
+    },
+  })
+
+  // Its own route (k81p.1), so it saves on the click, not with the form, and
+  // a credentials save cannot turn it off.
+  const pushMutation = useMutation({
+    mutationFn: (enabled: boolean) => directoriesApi.updatePush(directoryPath, enabled),
+    onSuccess: (dir) => {
+      setPushEnabled(dir.gitPushEnabled)
+      toast.success(dir.gitPushEnabled ? 'Commit and push turned on' : 'Commit and push turned off')
+      queryClient.invalidateQueries({ queryKey: queryKeys.directories() })
+      if (stackId) queryClient.invalidateQueries({ queryKey: queryKeys.git.all(stackId) })
+    },
+    onError: (error) => {
+      presentFault('Failed to change the push setting', credentialSaveFault(error))
     },
   })
 
@@ -275,6 +297,22 @@ export function GitSettingsSection({
                 />
               </>
             )}
+          </div>
+
+          <div className="flex items-center gap-2 max-w-md">
+            <Switch
+              id={`git-push-${directoryPath}`}
+              checked={pushEnabled}
+              // Off until the stored value has loaded: a toggle from the
+              // default would write a value nobody saw.
+              disabled={!loaded || pushMutation.isPending}
+              onCheckedChange={(enabled) => pushMutation.mutate(enabled)}
+            />
+            <Label htmlFor={`git-push-${directoryPath}`} className="text-sm">Allow commit and push</Label>
+            <HelpHint label="Allow commit and push">
+              <p>Off by default. When on, you can commit the files you choose in this folder and push the branch to its upstream.</p>
+              <p>Pushing over SSH is not supported yet; use an HTTPS remote.</p>
+            </HelpHint>
           </div>
 
           <div className="flex justify-end">

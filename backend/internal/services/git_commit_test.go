@@ -1052,3 +1052,169 @@ func TestCommitFilesCountsCommittedPaths(t *testing.T) {
 	require.NotNil(t, w)
 	assert.Equal(t, 1, w.Files)
 }
+
+// Tests for agent-os-k81p.3: GET /git/changes/diff and the env-symlink flag.
+
+const k81p3Secret = "K81P3-SECRET-VALUE-do-not-send"
+
+func TestGetChangeDiff(t *testing.T) {
+	t.Run("a listed file answers its unified diff against HEAD", func(t *testing.T) {
+		f := newCommitFix(t, false)
+		writeFile(t, filepath.Join(f.top, "compose.yaml"), "services: {a: {}}\n")
+		got, err := f.svc.GetChangeDiff(f.dir, "compose.yaml")
+		require.NoError(t, err)
+		assert.False(t, got.Hidden)
+		assert.Contains(t, got.Diff, "diff --git a/compose.yaml b/compose.yaml\n")
+		assert.Contains(t, got.Diff, "\n+services: {a: {}}\n")
+	})
+
+	t.Run("an env file is hidden and its contents never leave the service", func(t *testing.T) {
+		f := newCommitFix(t, false)
+		writeFile(t, filepath.Join(f.top, ".env"), "A="+k81p3Secret+"\n")
+		got, err := f.svc.GetChangeDiff(f.dir, ".env")
+		require.NoError(t, err)
+		assert.True(t, got.Hidden)
+		assert.Empty(t, got.Diff)
+		body, err := json.Marshal(got)
+		require.NoError(t, err)
+		assert.NotContains(t, string(body), k81p3Secret)
+	})
+
+	t.Run("a rename from .env is hidden by the change list, not by the requested name", func(t *testing.T) {
+		f := newCommitFix(t, false)
+		// Enough unchanged lines that git still pairs the two paths as a
+		// rename, and the secret sits in the diff's context.
+		lines := "A=" + k81p3Secret + "\nB=2\nC=3\nD=4\nE=5\n"
+		writeFile(t, filepath.Join(f.top, ".env"), lines)
+		runGit(t, f.top, "commit", "-q", "-am", "env")
+		runGit(t, f.top, "mv", ".env", "config.txt")
+		writeFile(t, filepath.Join(f.top, "config.txt"), lines+"F=6\n")
+		runGit(t, f.top, "add", "config.txt")
+		changes, err := f.svc.GetChanges(f.dir)
+		require.NoError(t, err)
+		require.Contains(t, changes.Changes, models.GitChange{Path: "config.txt", OrigPath: ".env", Status: "R.", IsEnv: true})
+
+		got, err := f.svc.GetChangeDiff(f.dir, "config.txt")
+		require.NoError(t, err)
+		assert.True(t, got.Hidden)
+		body, err := json.Marshal(got)
+		require.NoError(t, err)
+		assert.NotContains(t, string(body), k81p3Secret)
+	})
+
+	t.Run("a path the change list does not hold is a 400", func(t *testing.T) {
+		f := newCommitFix(t, true)
+		writeFile(t, filepath.Join(f.top, "app/compose.yaml"), "services: {a: {}}\n")
+		writeFile(t, filepath.Join(f.top, "other/compose.yaml"), "services: {b: {}}\n")
+		for _, p := range []string{"app/a.txt", "other/compose.yaml", "../x", "compose.yaml"} {
+			_, err := f.svc.GetChangeDiff(f.dir, p)
+			var appErr *models.AppError
+			require.True(t, errors.As(err, &appErr), "%q: err %v", p, err)
+			assert.Equal(t, http.StatusBadRequest, appErr.Status, "%q", p)
+			assert.Equal(t, models.ErrValidation, appErr.Code, "%q", p)
+		}
+		got, err := f.svc.GetChangeDiff(f.dir, "app/compose.yaml")
+		require.NoError(t, err, "control: the listed file answers")
+		assert.Contains(t, got.Diff, "diff --git a/app/compose.yaml b/app/compose.yaml\n")
+	})
+
+	t.Run("a pathspec-looking name is literal", func(t *testing.T) {
+		f := newCommitFix(t, false)
+		writeFile(t, filepath.Join(f.top, "*.yaml"), "glob\n")
+		runGit(t, f.top, "add", "*.yaml")
+		runGit(t, f.top, "commit", "-q", "-m", "glob-named file")
+		writeFile(t, filepath.Join(f.top, "*.yaml"), "glob changed\n")
+		writeFile(t, filepath.Join(f.top, "compose.yaml"), "services: {a: {}}\n")
+		got, err := f.svc.GetChangeDiff(f.dir, "*.yaml")
+		require.NoError(t, err)
+		assert.Contains(t, got.Diff, "+glob changed")
+		assert.NotContains(t, got.Diff, "compose.yaml", "a glob pathspec would have matched compose.yaml too")
+	})
+}
+
+// TestGetChangeDiffRunsNoRepoCode: repository config can name programs for
+// git diff to run (an external diff driver, a textconv filter). Neither runs.
+// Each has its own marker: the driver fixture cannot catch a textconv.
+func TestGetChangeDiffRunsNoRepoCode(t *testing.T) {
+	for _, tc := range []struct{ name, attr, key, value string }{
+		{"diff driver command", "compose.yaml diff=evil\n", "diff.evil.command", "touch %s; true"},
+		{"textconv", "compose.yaml diff=tc\n", "diff.tc.textconv", "touch %s; cat"},
+		{"diff.external", "", "diff.external", "touch %s; true"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newCommitFix(t, false)
+			marker := filepath.Join(t.TempDir(), "ran")
+			if tc.attr != "" {
+				writeFile(t, filepath.Join(f.top, ".gitattributes"), tc.attr)
+			}
+			runGit(t, f.top, "config", tc.key, strings.Replace(tc.value, "%s", marker, 1))
+			writeFile(t, filepath.Join(f.top, "compose.yaml"), "services: {a: {}}\n")
+
+			got, err := f.svc.GetChangeDiff(f.dir, "compose.yaml")
+			require.NoError(t, err)
+			assert.NoFileExists(t, marker, "repository config ran a program")
+			assert.Contains(t, got.Diff, "+services: {a: {}}")
+		})
+	}
+}
+
+// TestGetChangeDiffIgnoresOutputConfig: config that changes the diff's text
+// (colour, prefixes, relative paths) is overridden, so the frontend's parser,
+// which splits each "diff --git" line on " b/", still finds the file.
+func TestGetChangeDiffIgnoresOutputConfig(t *testing.T) {
+	f := newCommitFix(t, true)
+	for k, v := range map[string]string{"color.ui": "always", "color.diff": "always", "diff.noprefix": "true", "diff.mnemonicPrefix": "true", "diff.relative": "true", "core.quotePath": "true"} {
+		runGit(t, f.top, "config", k, v)
+	}
+	writeFile(t, filepath.Join(f.top, "app/café.txt"), "1\n")
+	runGit(t, f.top, "add", "app/café.txt")
+	runGit(t, f.top, "commit", "-q", "-m", "non-ASCII name")
+	writeFile(t, filepath.Join(f.top, "app/café.txt"), "2\n")
+	quoted, err := f.svc.GetChangeDiff(f.dir, "app/café.txt")
+	require.NoError(t, err)
+	assert.Contains(t, quoted.Diff, "diff --git a/app/café.txt b/app/café.txt\n", "core.quotePath would C-quote the name")
+
+	writeFile(t, filepath.Join(f.top, "app/compose.yaml"), "services: {é: {}}\n")
+	got, err := f.svc.GetChangeDiff(f.dir, "app/compose.yaml")
+	require.NoError(t, err)
+	assert.NotContains(t, got.Diff, "\x1b[", "colour codes")
+	assert.Contains(t, got.Diff, "diff --git a/app/compose.yaml b/app/compose.yaml\n")
+	assert.Contains(t, got.Diff, "\n+++ b/app/compose.yaml\n")
+	assert.Contains(t, got.Diff, "\n+services: {é: {}}\n")
+}
+
+// TestEnvSymlinkTarget: an env-named symlink leaves its target with an
+// innocent name. The target is flagged, its diff hidden, and committing it
+// needs confirmEnv, whether the stack names the link as its EnvFile or the
+// link is only an env-named tracked file.
+func TestEnvSymlinkTarget(t *testing.T) {
+	for _, tc := range []struct{ name, link, envFile string }{
+		{"the stack's EnvFile is the link", ".env", ".env"},
+		{"an env-named tracked link the stack does not name", "prod.env", "vars"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newCommitFix(t, false)
+			require.NoError(t, f.db.UpsertStack(models.Stack{ID: "s-app", Directory: f.dir, ComposeFile: "compose.yaml", EnvFile: tc.envFile, ProjectName: "app"}))
+			require.NoError(t, os.Remove(filepath.Join(f.top, ".env")))
+			writeFile(t, filepath.Join(f.top, "secrets.txt"), "A=1\n")
+			require.NoError(t, os.Symlink("secrets.txt", filepath.Join(f.top, tc.link)))
+			runGit(t, f.top, "add", "-A")
+			runGit(t, f.top, "commit", "-q", "-m", "env as a link")
+			writeFile(t, filepath.Join(f.top, "secrets.txt"), "A="+k81p3Secret+"\n")
+			writeFile(t, filepath.Join(f.top, "decoy.txt"), "d2\n")
+
+			changes, err := f.svc.GetChanges(f.dir)
+			require.NoError(t, err)
+			assert.Contains(t, changes.Changes, models.GitChange{Path: "secrets.txt", Status: ".M", IsEnv: true})
+			assert.Contains(t, changes.Changes, models.GitChange{Path: "decoy.txt", Status: ".M"}, "control: an unrelated file stays unflagged")
+
+			got, err := f.svc.GetChangeDiff(f.dir, "secrets.txt")
+			require.NoError(t, err)
+			assert.True(t, got.Hidden)
+			assert.NotContains(t, got.Diff, k81p3Secret)
+
+			ar, _ := f.svc.CommitVerified(f.dir, CommitRequest{Message: "m", Files: []string{"secrets.txt"}})
+			requireRefusal(t, ar, http.StatusBadRequest, models.ErrGitEnvConfirmRequired)
+		})
+	}
+}

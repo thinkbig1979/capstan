@@ -44,6 +44,7 @@ func (h *GitHandler) RegisterRoutes(group *gin.RouterGroup) {
 	group.GET("/log", h.GetLog)
 	group.GET("/diff/:hash", h.GetDiff)
 	group.GET("/changes", h.GetChanges)
+	group.GET("/changes/diff", h.GetChangeDiff)
 	group.POST("/commit", h.Commit)
 	group.POST("/push", h.Push)
 }
@@ -311,6 +312,28 @@ func (h *GitHandler) GetChanges(c *gin.Context) {
 		return
 	}
 	result, err := h.git.GetChanges(absPath)
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+// GetChangeDiff answers the uncommitted diff of one listed file
+// (GET /git/changes/diff?stackId=&path=). Read-only, so no lock, as for
+// GetChanges. An env file answers {hidden: true} with no diff.
+func (h *GitHandler) GetChangeDiff(c *gin.Context) {
+	stackID, path := c.Query("stackId"), c.Query("path")
+	if stackID == "" || path == "" {
+		handleError(c, models.NewAppError(http.StatusBadRequest, models.ErrValidation, "Missing stackId or path query parameter"))
+		return
+	}
+	absPath, err := h.stackDir(stackID)
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+	result, err := h.git.GetChangeDiff(absPath, path)
 	if err != nil {
 		handleError(c, err)
 		return

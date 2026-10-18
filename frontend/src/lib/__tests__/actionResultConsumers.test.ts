@@ -54,9 +54,10 @@ const ACTIONS = new Set(['start', 'stop', 'restart', 'pull'])
 const ROUTE = /\/stacks\/[^'"`]*\/(start|stop|restart|pull)\b/
 const READS = new Set(['isActionResult', 'toastForResult'])
 
-// The 20 routes measured on b01032d, plus resourcesApi.freeSpace (agent-os-f9cf). Derived below; pinned so a change is seen.
+// The 20 routes measured on b01032d, plus resourcesApi.freeSpace (agent-os-f9cf) and the
+// commit and push routes (agent-os-k81p.3). Derived below; pinned so a change is seen.
 const PINNED_ROUTES = [
-  'gitApi.pull',
+  'gitApi.commit', 'gitApi.pull', 'gitApi.push',
   'resourcesApi.createNetwork', 'resourcesApi.deleteContainer', 'resourcesApi.deleteImage', 'resourcesApi.freeSpace',
   'resourcesApi.deleteNetwork', 'resourcesApi.deleteVolume', 'resourcesApi.pruneBuildCache',
   'resourcesApi.pruneContainers', 'resourcesApi.pruneImages', 'resourcesApi.pruneNetworks',

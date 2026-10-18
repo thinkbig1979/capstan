@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { gitApi } from '@/lib/api'
+import { gitApi, type GitCommitRequest } from '@/lib/api'
 import type { ActionResult } from '@/lib/action-result'
 import { useActionMutation } from '@/hooks/useActionMutation'
 import { queryKeys } from '@/lib/query-keys'
@@ -40,6 +40,73 @@ export function useGitDiff(stackId: string, hash: string) {
     queryFn: () => gitApi.diff(stackId, hash),
     enabled: !!hash,
     staleTime: 60000,
+  })
+}
+
+// The commit-and-push reads (agent-os-k81p.3). Keyed under queryKeys.git.all,
+// so invalidating that prefix after a pull, commit or push refreshes them too.
+const changesKey = (stackId: string) => [...queryKeys.git.all(stackId), 'changes'] as const
+const changesDiffKey = (stackId: string, path: string) => [...changesKey(stackId), 'diff', path] as const
+
+/**
+ * GET /git/changes: the tracked files a commit from this stack's folder could
+ * include, and what decides whether a commit or push can run. `enabled`
+ * exists so a caller reads it only when a dialog or panel is actually open.
+ */
+export function useGitChanges(stackId: string, enabled = true) {
+  return useQuery({
+    queryKey: changesKey(stackId),
+    queryFn: () => gitApi.changes(stackId),
+    enabled,
+    // Every answer but a fault is a 4xx that repeats on retry.
+    retry: false,
+  })
+}
+
+/**
+ * GET /git/changes/diff for one listed file. Never called for an env file:
+ * the caller passes `null` for one, and the server hides it as well (D136).
+ */
+export function useGitChangesDiff(stackId: string, path: string | null) {
+  return useQuery({
+    queryKey: changesDiffKey(stackId, path ?? ''),
+    queryFn: () => gitApi.changesDiff(stackId, path ?? ''),
+    enabled: path !== null,
+    retry: false,
+  })
+}
+
+/**
+ * The git queries a commit or push can have changed. Run on every outcome: a
+ * 207 partial DID commit, and a refusal can mean the change list we showed was
+ * stale.
+ */
+function useInvalidateGit() {
+  const queryClient = useQueryClient()
+  return (stackId: string) => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.git.all(stackId) })
+  }
+}
+
+/** POST /git/commit, optionally pushing. Toasts come from useActionMutation. */
+export function useGitCommit() {
+  const invalidate = useInvalidateGit()
+  return useActionMutation({
+    mutationFn: (req: GitCommitRequest) => gitApi.commit(req),
+    errorTitle: 'Commit failed',
+    onResult: (_r, vars) => invalidate(vars.stackId),
+    onError: (_err, vars) => invalidate(vars.stackId),
+  })
+}
+
+/** POST /git/push. */
+export function useGitPush() {
+  const invalidate = useInvalidateGit()
+  return useActionMutation({
+    mutationFn: ({ stackId }: { stackId: string }) => gitApi.push(stackId),
+    errorTitle: 'Push failed',
+    onResult: (_r, vars) => invalidate(vars.stackId),
+    onError: (_err, vars) => invalidate(vars.stackId),
   })
 }
 

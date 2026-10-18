@@ -22,38 +22,7 @@ interface DiffViewerProps {
 }
 
 export function DiffViewer({ stackId, commitHash }: DiffViewerProps) {
-  const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(new Set())
-  const [viewMode, setViewMode] = useState<DiffView>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('diff-view-preference') as DiffView
-      return saved === 'split' ? 'split' : 'unified'
-    }
-    return 'unified'
-  })
-
   const { data: diffData, isPending, fetchStatus, error, refetch } = useGitDiff(stackId, commitHash)
-
-  useEffect(() => {
-    localStorage.setItem('diff-view-preference', viewMode)
-  }, [viewMode])
-
-  const diff = diffData?.diff
-  const files = useMemo(() => {
-    if (!diff) return []
-    return parseDiff(diff)
-  }, [diff])
-
-  const toggleFile = (path: string) => {
-    setCollapsedFiles((prev) => {
-      const next = new Set(prev)
-      if (next.has(path)) {
-        next.delete(path)
-      } else {
-        next.add(path)
-      }
-      return next
-    })
-  }
 
   // isFirstLoad: useGitDiff is `enabled: !!hash`, and offline the first fetch is
   // paused (agent-os-7nqa).
@@ -91,154 +60,195 @@ export function DiffViewer({ stackId, commitHash }: DiffViewerProps) {
     )
   }
 
-  if (files.length === 0) {
-    return <div className="flex items-center justify-center py-4 text-muted-foreground">No diff available</div>
-  }
-
   return (
     <>
       {/* agent-os-lurn: past the guard, `error` means a REFRESH failed over a
           diff we still hold. Report it without taking the diff away. */}
       {error && <RefreshFailedNotice what="the diff" className="mb-2" onRetry={() => void refetch()} />}
-      <div className="space-y-2 rounded-lg border">
-        <div className="flex items-center justify-between px-4 py-2 border-b bg-muted/50">
-          <span className="text-sm font-medium">Diff View</span>
-          <Select value={viewMode} onValueChange={(value) => setViewMode(value as DiffView)}>
-            <SelectTrigger className="w-[140px] h-8" aria-label="Diff view mode">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="unified">Unified</SelectItem>
-              <SelectItem value="split">Split</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-
-        {files.map((file, fileIndex) => {
-          const isCollapsed = collapsedFiles.has(file.path)
-          return (
-            <div key={fileIndex} className="border-b last:border-b-0">
-              <Button
-                variant="ghost"
-                className="w-full justify-start px-4 py-2 font-mono text-sm hover:bg-muted/50"
-                onClick={() => toggleFile(file.path)}
-              >
-                {isCollapsed ? (
-                  <ChevronRight className="mr-2 h-4 w-4" />
-                ) : (
-                  <ChevronDown className="mr-2 h-4 w-4" />
-                )}
-                <span className="flex-1 truncate">{file.path}</span>
-                {file.addedLines > 0 && (
-                  <span className="mr-2 text-xs text-success">+{file.addedLines}</span>
-                )}
-                {file.removedLines > 0 && (
-                  <span className="text-xs text-destructive">-{file.removedLines}</span>
-                )}
-              </Button>
-
-              {!isCollapsed && (
-                <div className="overflow-x-auto">
-                  {viewMode === 'unified' ? (
-                    <table className="w-full text-sm font-mono">
-                      <tbody>
-                        {file.hunks.map((hunk, hunkIndex) => (
-                          <tr key={hunkIndex}>
-                            <td className="p-0">
-                              <div className="bg-muted/50 px-4 py-1 text-xs text-muted-foreground">
-                                {hunk.header}
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                        {file.hunks.flatMap((hunk, hunkIndex) =>
-                          hunk.lines.map((line, lineIndex) => (
-                            <tr
-                              key={`${hunkIndex}-${lineIndex}`}
-                              className={`${
-                                line.type === 'added'
-                                  ? 'bg-success/15'
-                                  : line.type === 'removed'
-                                  ? 'bg-destructive/15'
-                                  : ''
-                              }`}
-                            >
-                              <td className="px-4 py-0.5 whitespace-nowrap">
-                                <span
-                                  className={`${
-                                    line.type === 'added'
-                                      ? 'text-success'
-                                      : line.type === 'removed'
-                                      ? 'text-destructive'
-                                      : 'text-muted-foreground'
-                                  }`}
-                                >
-                                  {line.type === 'added' ? '+' : line.type === 'removed' ? '-' : ' '}
-                                  {line.content}
-                                </span>
-                              </td>
-                            </tr>
-                          )),
-                        )}
-                      </tbody>
-                    </table>
-                  ) : (
-                    <table className="w-full text-sm font-mono">
-                      <tbody>
-                        {file.hunks.map((hunk, hunkIndex) => (
-                          <tr key={hunkIndex}>
-                            {/* eslint-disable-next-line no-restricted-syntax -- headerless table: the split view's two code columns are fixed by the layout, there is no column list to derive the span from (agent-os-zree) */}
-                            <td colSpan={2} className="p-0">
-                              <div className="bg-muted/50 px-4 py-1 text-xs text-muted-foreground">
-                                {hunk.header}
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                        {file.hunks.flatMap((hunk, hunkIndex) =>
-                          hunk.lines.map((line, lineIndex) => (
-                            <tr
-                              key={`${hunkIndex}-${lineIndex}`}
-                              className="border-b"
-                            >
-                              {line.type === 'removed' || line.type === 'context' ? (
-                                <td
-                                  className={`px-4 py-0.5 whitespace-nowrap ${
-                                    line.type === 'removed'
-                                      ? 'bg-destructive/15 text-destructive'
-                                      : 'bg-muted/50'
-                                  }`}
-                                >
-                                  {line.type === 'removed' ? '-' : ' '}{line.content}
-                                </td>
-                              ) : (
-                                <td className="px-4 py-0.5 whitespace-nowrap bg-muted/30"></td>
-                              )}
-                              {line.type === 'added' || line.type === 'context' ? (
-                                <td
-                                  className={`px-4 py-0.5 whitespace-nowrap ${
-                                    line.type === 'added'
-                                      ? 'bg-success/15 text-success'
-                                      : 'bg-muted/50'
-                                  }`}
-                                >
-                                  {line.type === 'added' ? '+' : ' '}{line.content}
-                                </td>
-                              ) : (
-                                <td className="px-4 py-0.5 whitespace-nowrap bg-muted/30"></td>
-                              )}
-                            </tr>
-                          )),
-                        )}
-                      </tbody>
-                    </table>
-                  )}
-                </div>
-              )}
-            </div>
-          )
-        })}
-      </div>
+      <ParsedDiffView diff={diffData.diff} />
     </>
+  )
+}
+
+/**
+ * Renders a raw unified diff: a commit's (DiffViewer) or the working tree's
+ * (CommitPushDialog, agent-os-k81p.3). Fetching and its failure states stay
+ * with the caller.
+ */
+export function ParsedDiffView({ diff }: { diff: string }) {
+  const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(new Set())
+  const [viewMode, setViewMode] = useState<DiffView>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('diff-view-preference') as DiffView
+      return saved === 'split' ? 'split' : 'unified'
+    }
+    return 'unified'
+  })
+
+  useEffect(() => {
+    localStorage.setItem('diff-view-preference', viewMode)
+  }, [viewMode])
+
+  const files = useMemo(() => {
+    if (!diff) return []
+    return parseDiff(diff)
+  }, [diff])
+
+  const toggleFile = (path: string) => {
+    setCollapsedFiles((prev) => {
+      const next = new Set(prev)
+      if (next.has(path)) {
+        next.delete(path)
+      } else {
+        next.add(path)
+      }
+      return next
+    })
+  }
+
+  if (files.length === 0) {
+    return <div className="flex items-center justify-center py-4 text-muted-foreground">No diff available</div>
+  }
+
+  return (
+    <div className="space-y-2 rounded-lg border">
+      <div className="flex items-center justify-between px-4 py-2 border-b bg-muted/50">
+        <span className="text-sm font-medium">Diff View</span>
+        <Select value={viewMode} onValueChange={(value) => setViewMode(value as DiffView)}>
+          <SelectTrigger className="w-[140px] h-8" aria-label="Diff view mode">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="unified">Unified</SelectItem>
+            <SelectItem value="split">Split</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      {files.map((file, fileIndex) => {
+        const isCollapsed = collapsedFiles.has(file.path)
+        return (
+          <div key={fileIndex} className="border-b last:border-b-0">
+            <Button
+              variant="ghost"
+              className="w-full justify-start px-4 py-2 font-mono text-sm hover:bg-muted/50"
+              onClick={() => toggleFile(file.path)}
+            >
+              {isCollapsed ? (
+                <ChevronRight className="mr-2 h-4 w-4" />
+              ) : (
+                <ChevronDown className="mr-2 h-4 w-4" />
+              )}
+              <span className="flex-1 truncate">{file.path}</span>
+              {file.addedLines > 0 && (
+                <span className="mr-2 text-xs text-success">+{file.addedLines}</span>
+              )}
+              {file.removedLines > 0 && (
+                <span className="text-xs text-destructive">-{file.removedLines}</span>
+              )}
+            </Button>
+
+            {!isCollapsed && (
+              <div className="overflow-x-auto">
+                {viewMode === 'unified' ? (
+                  <table className="w-full text-sm font-mono">
+                    <tbody>
+                      {file.hunks.map((hunk, hunkIndex) => (
+                        <tr key={hunkIndex}>
+                          <td className="p-0">
+                            <div className="bg-muted/50 px-4 py-1 text-xs text-muted-foreground">
+                              {hunk.header}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                      {file.hunks.flatMap((hunk, hunkIndex) =>
+                        hunk.lines.map((line, lineIndex) => (
+                          <tr
+                            key={`${hunkIndex}-${lineIndex}`}
+                            className={`${
+                              line.type === 'added'
+                                ? 'bg-success/15'
+                                : line.type === 'removed'
+                                ? 'bg-destructive/15'
+                                : ''
+                            }`}
+                          >
+                            <td className="px-4 py-0.5 whitespace-nowrap">
+                              <span
+                                className={`${
+                                  line.type === 'added'
+                                    ? 'text-success'
+                                    : line.type === 'removed'
+                                    ? 'text-destructive'
+                                    : 'text-muted-foreground'
+                                }`}
+                              >
+                                {line.type === 'added' ? '+' : line.type === 'removed' ? '-' : ' '}
+                                {line.content}
+                              </span>
+                            </td>
+                          </tr>
+                        )),
+                      )}
+                    </tbody>
+                  </table>
+                ) : (
+                  <table className="w-full text-sm font-mono">
+                    <tbody>
+                      {file.hunks.map((hunk, hunkIndex) => (
+                        <tr key={hunkIndex}>
+                          {/* eslint-disable-next-line no-restricted-syntax -- headerless table: the split view's two code columns are fixed by the layout, there is no column list to derive the span from (agent-os-zree) */}
+                          <td colSpan={2} className="p-0">
+                            <div className="bg-muted/50 px-4 py-1 text-xs text-muted-foreground">
+                              {hunk.header}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                      {file.hunks.flatMap((hunk, hunkIndex) =>
+                        hunk.lines.map((line, lineIndex) => (
+                          <tr
+                            key={`${hunkIndex}-${lineIndex}`}
+                            className="border-b"
+                          >
+                            {line.type === 'removed' || line.type === 'context' ? (
+                              <td
+                                className={`px-4 py-0.5 whitespace-nowrap ${
+                                  line.type === 'removed'
+                                    ? 'bg-destructive/15 text-destructive'
+                                    : 'bg-muted/50'
+                                }`}
+                              >
+                                {line.type === 'removed' ? '-' : ' '}{line.content}
+                              </td>
+                            ) : (
+                              <td className="px-4 py-0.5 whitespace-nowrap bg-muted/30"></td>
+                            )}
+                            {line.type === 'added' || line.type === 'context' ? (
+                              <td
+                                className={`px-4 py-0.5 whitespace-nowrap ${
+                                  line.type === 'added'
+                                    ? 'bg-success/15 text-success'
+                                    : 'bg-muted/50'
+                                }`}
+                              >
+                                {line.type === 'added' ? '+' : ' '}{line.content}
+                              </td>
+                            ) : (
+                              <td className="px-4 py-0.5 whitespace-nowrap bg-muted/30"></td>
+                            )}
+                          </tr>
+                        )),
+                      )}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
   )
 }
