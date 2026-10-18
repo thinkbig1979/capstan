@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { LoadFailedNotice } from '@/components/LoadFailedNotice'
+import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 import { ParsedDiffView } from '@/components/git/DiffViewer'
 import { useGitChanges, useGitChangesDiff, useGitCommit, useGitPush } from '@/hooks/useGit'
 import { isActionResult } from '@/lib/action-result'
@@ -85,6 +86,18 @@ function composePath(changes: GitChange[], composeFile: string | undefined): str
   return hits[0] ?? null
 }
 
+/**
+ * True once a read SINCE THIS MOUNT has succeeded. Until then any cached data
+ * predates the dialog (a save can have changed it), so a failed re-read must
+ * show the load failure, never that data (review R3 NEW-1). After it, a failed
+ * refresh keeps the data with a notice, as everywhere else in the app.
+ */
+function useReadSinceMount(q: { isFetchedAfterMount: boolean; isFetching: boolean; error: unknown }): boolean {
+  const [seen, setSeen] = useState(false)
+  if (!seen && q.isFetchedAfterMount && !q.isFetching && !q.error) setSeen(true)
+  return seen
+}
+
 type Outcome =
   | { kind: 'success'; text: string }
   | { kind: 'partial'; commit: string; text: string }
@@ -149,7 +162,9 @@ interface BodyProps {
 function CommitPushBody({ stackId, composeFile, onClose }: BodyProps) {
   // isFetchedAfterMount: a cached list from before the latest save is not
   // shown while the mount's re-read is in flight.
-  const { data, isPending, isFetchedAfterMount, error, refetch } = useGitChanges(stackId)
+  const changesQuery = useGitChanges(stackId)
+  const { data, error, refetch } = changesQuery
+  const fresh = useReadSinceMount(changesQuery)
   const commit = useGitCommit()
   const push = useGitPush()
   const [outcome, setOutcome] = useState<Outcome | null>(null)
@@ -180,9 +195,7 @@ function CommitPushBody({ stackId, composeFile, onClose }: BodyProps) {
   }
 
   let body
-  if (isPending || !isFetchedAfterMount) {
-    body = <p className="py-4 text-sm text-muted-foreground">Loading the changed files…</p>
-  } else if (!data) {
+  if (!fresh && error && !changesQuery.isFetching) {
     const cause = sentenceFor(codeOf(error), causeOf(error))
     body = (
       <div className="space-y-2">
@@ -190,18 +203,23 @@ function CommitPushBody({ stackId, composeFile, onClose }: BodyProps) {
         <p className="text-sm text-muted-foreground">{cause}</p>
       </div>
     )
+  } else if (!fresh || !data) {
+    body = <p className="py-4 text-sm text-muted-foreground">Loading the changed files…</p>
   } else {
     body = (
-      <ChangesForm
-        // A new change list (after a commit) starts a fresh selection.
-        key={data.changes.map((c) => c.path).join('\0')}
-        stackId={stackId}
-        composeFile={composeFile}
-        result={data}
-        busy={busy}
-        onCommit={runCommit}
-        onPush={runPush}
-      />
+      <>
+        {error && <RefreshFailedNotice what="the changed files" onRetry={() => void refetch()} />}
+        <ChangesForm
+          // A new change list (after a commit) starts a fresh selection.
+          key={data.changes.map((c) => c.path).join('\0')}
+          stackId={stackId}
+          composeFile={composeFile}
+          result={data}
+          busy={busy}
+          onCommit={runCommit}
+          onPush={runPush}
+        />
+      </>
     )
   }
 
@@ -355,7 +373,8 @@ function ChangesForm({ stackId, composeFile, result, busy, onCommit, onPush }: C
             </div>
           )}
 
-          {selectedChange && <ChangeDiff stackId={stackId} change={selectedChange} />}
+          {/* Keyed by path: each file's diff is its own read since mount. */}
+          {selectedChange && <ChangeDiff key={selectedChange.path} stackId={stackId} change={selectedChange} />}
 
           <div className="space-y-1">
             <Label htmlFor="commit-message">Commit message</Label>
@@ -441,12 +460,13 @@ function BlockedNotes({ result }: { result: GitChangesResult }) {
 
 /** The selected file's diff; an env file's is never requested (D136). */
 function ChangeDiff({ stackId, change }: { stackId: string; change: GitChange }) {
-  const { data, isPending, isFetchedAfterMount, error, refetch } = useGitChangesDiff(stackId, change.isEnv ? null : change.path)
+  const diffQuery = useGitChangesDiff(stackId, change.isEnv ? null : change.path)
+  const { data, error, refetch } = diffQuery
+  const fresh = useReadSinceMount(diffQuery)
   if (change.isEnv || data?.hidden) {
     return <p className="rounded-md border px-3 py-2 text-sm text-muted-foreground">{ENV_DIFF_HIDDEN}</p>
   }
-  if (isPending || !isFetchedAfterMount) return <p className="text-sm text-muted-foreground">Loading diff…</p>
-  if (!data) {
+  if (!fresh && error && !diffQuery.isFetching) {
     return (
       <div className="space-y-1">
         <LoadFailedNotice what="the diff" onRetry={() => void refetch()} />
@@ -454,5 +474,11 @@ function ChangeDiff({ stackId, change }: { stackId: string; change: GitChange })
       </div>
     )
   }
-  return <ParsedDiffView diff={data.diff} />
+  if (!fresh || !data) return <p className="text-sm text-muted-foreground">Loading diff…</p>
+  return (
+    <>
+      {error && <RefreshFailedNotice what="the diff" className="mb-2" onRetry={() => void refetch()} />}
+      <ParsedDiffView diff={data.diff} />
+    </>
+  )
 }

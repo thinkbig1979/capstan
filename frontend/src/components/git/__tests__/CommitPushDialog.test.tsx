@@ -299,6 +299,42 @@ describe('CommitPushDialog: states', () => {
     expect(commitPushButton()).toBeDisabled()
   })
 
+  it('a failed re-read over a list cached before opening shows the failure, not the stale list (review R3 NEW-1)', async () => {
+    const user = userEvent.setup()
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: 30_000 } } })
+    queryClient.setQueryData(['git', 's1', 'changes'], changesResult({ changes: [], ahead: 1 }))
+    mockChanges.mockRejectedValueOnce({ code: 'INTERNAL_ERROR', message: 'Failed to read status', status: 500 })
+    renderWithProviders(<CommitPushDialog stackId="s1" composeFile="compose.yaml" open onOpenChange={vi.fn()} />, { queryClient })
+    expect(await screen.findByText(/Could not load the changed files/)).toBeInTheDocument()
+    expect(screen.queryByText(/No uncommitted changes/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Commit/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Push/ })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(await screen.findByRole('checkbox', { name: /^compose\.yaml/ })).toBeChecked()
+  })
+
+  it('a failed refresh after a fresh read keeps the list and says the refresh failed', async () => {
+    const { queryClient } = renderDialog()
+    expect(await screen.findByRole('checkbox', { name: /^compose\.yaml/ })).toBeChecked()
+    mockChanges.mockRejectedValueOnce({ code: 'INTERNAL_ERROR', message: 'Failed to read status', status: 500 })
+    await queryClient.refetchQueries({ queryKey: ['git', 's1', 'changes'] })
+    expect(await screen.findByText(/Could not refresh the changed files/)).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: /^compose\.yaml/ })).toBeChecked()
+    expect(screen.queryByText(/Could not load the changed files/)).not.toBeInTheDocument()
+  })
+
+  it('a failed re-read over a diff cached before opening shows the failure, not the stale diff (review R3 NEW-1)', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: 30_000 } } })
+    queryClient.setQueryData(['git', 's1', 'changes', 'diff', 'compose.yaml'], {
+      path: 'compose.yaml', hidden: false,
+      diff: 'diff --git a/compose.yaml b/compose.yaml\n--- a/compose.yaml\n+++ b/compose.yaml\n@@ -1 +1 @@\n-services: {}\n+services: {old: {}}\n',
+    })
+    mockChangesDiff.mockRejectedValueOnce({ code: 'INTERNAL_ERROR', message: 'Failed to read the diff', status: 500 })
+    renderWithProviders(<CommitPushDialog stackId="s1" composeFile="compose.yaml" open onOpenChange={vi.fn()} />, { queryClient })
+    expect(await screen.findByText(/Could not load the diff/)).toBeInTheDocument()
+    expect(screen.queryByText(/services: \{old: \{\}\}/)).not.toBeInTheDocument()
+  })
+
   it('a failed load shows the error and Retry, and nothing to commit', async () => {
     const user = userEvent.setup()
     mockChanges.mockRejectedValueOnce({ code: 'GIT_BARE_REPO', message: 'A bare repository has no work tree to commit from', status: 409 })
