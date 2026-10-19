@@ -193,9 +193,9 @@ Routes that take the lock: start, stop, restart, pull and delete of a stack;
 and `POST /api/v1/resources/containers/:id/update` (the latter only for a
 container belonging to a managed stack); `PUT /api/v1/stacks/:id/compose`,
 `PUT /api/v1/stacks/:id/compose-env`, `PUT /api/v1/stacks/:id/env` and
-`POST /api/v1/stacks/:id/env`; and `POST /api/v1/git/pull?redeploy=true`, which
-locks every stack in the pulled directory and refuses before pulling anything if
-one is held. Backups and restores take it too. `POST /api/v1/stacks` answers
+`POST /api/v1/stacks/:id/env`; and `POST /api/v1/git/pull`, with or without
+`?redeploy=true`, which locks every stack whose folder is inside the pulled
+repository and refuses before pulling anything if one is held (agent-os-88xz). Backups and restores take it too. `POST /api/v1/stacks` answers
 409 `DUPLICATE_STACK` instead, because losing that race means the name is taken.
 
 An update job holds the lock from the request until the job finishes, including
@@ -251,7 +251,18 @@ With a live token, all four behave exactly as they did before.
   `GIT_SSH_KEY_UNUSABLE` before pulling when the pull URL is SSH and that key
   is missing, unreadable, readable by other users, or a path ssh would misread
   (not absolute, or holding `"`, `\`, `${` or a control character); the
-  message names the path and the fix
+  message names the path and the fix.
+  A pull moves the whole work tree,
+  so it locks every stack of the repository, not only the requested stack's
+  folder, and answers **409 `OPERATION_IN_PROGRESS`** naming the busy stack
+  before pulling anything. With `?redeploy=true` it redeploys only the
+  requested folder's stacks whose compose or env file changed. Every result
+  after a successful diff carries `details.siblingStacksChanged`,
+  `[{stack, name}]`: the repository's other stacks whose compose or env file
+  the pull changed, which it does not redeploy. A stack it could not check
+  makes the outcome `partial`, named in `details.siblingCheckFailures`
+  (`[{stack, reason}]`), or `details.siblingListError` when none could be
+  (agent-os-88xz)
 - `GET /api/v1/git/log` — commit log. Optional `?file=` limits it to commits
   touching that path. The path must be relative, stay inside the repository
   after `..` is resolved, not start with `:` (git pathspec magic), contain no

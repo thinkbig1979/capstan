@@ -219,7 +219,7 @@ func TestPullVerified_DiffFaultIsPartialNotSuccess(t *testing.T) {
 func TestPullVerified_DiffSucceedsIsSuccessWithChangedFiles(t *testing.T) {
 	work, previousCommit := pullDiffFixture(t, "")
 
-	svc := NewGitService(&config.Config{}, nil)
+	svc := NewGitService(&config.Config{}, newTestDB(t))
 	ar, pullResult := svc.PullVerified(work, false, nil)
 
 	if pullResult == nil {
