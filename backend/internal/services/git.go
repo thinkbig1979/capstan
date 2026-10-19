@@ -607,7 +607,21 @@ func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
 	changedFiles := []string{}
 	diffError := ""
 	if previousCommit != currentCommit {
-		diffOutput, err := s.gitCommandWithCreds(dirPath, user, token, "diff", "--name-only", previousCommit, currentCommit)
+		// Names are repository-top-relative whatever folder git runs in, and
+		// the same on every box (agent-os-4d60):
+		//   --no-relative  a repo with diff.relative=true prints names relative
+		//                  to dirPath, a different frame from the one
+		//                  stackFilesChanged compares in.
+		//   -z             NUL-separated and never quoted; core.quotePath would
+		//                  print a non-ASCII folder as "st\303\244ck/...".
+		//   --no-renames   rename detection lists only the new name, so a
+		//                  compose file renamed away would never be named and
+		//                  its stack would keep the old content silently; with
+		//                  it the old name is listed (deleted) and the redeploy
+		//                  is attempted, and fails loudly.
+		// gitRun, not gitCommandWithCreds: that TrimSpaces stdout, which would
+		// eat a leading space of the first name.
+		diffOutput, _, err := s.gitRun(dirPath, user, token, nil, "diff", "--name-only", "-z", "--no-renames", "--no-relative", previousCommit, currentCommit)
 		switch {
 		case err != nil:
 			// This branch runs only because the ref MOVED, so "no files
@@ -624,7 +638,7 @@ func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
 			// the loose object for ORIG_HEAD: `outcome = "success" (reason
 			// "pulled new commits", changedFiles [])` on a ref that had moved.
 			//
-			// err is safe to surface: gitCommandWithCreds redacts the token out
+			// err is safe to surface: gitRun redacts the token out
 			// of the git output it wraps.
 			diffError = err.Error()
 			slog.Error("Git diff failed after pull; changed files unknown, redeploy will be skipped",
@@ -632,10 +646,12 @@ func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
 				"previousCommit", previousCommit,
 				"currentCommit", currentCommit,
 				"error", err)
-		case diffOutput != "":
-			// gitCommandWithCreds TrimSpaces its output, so a successful but
-			// empty diff cannot reach Split and produce a spurious [""].
-			changedFiles = strings.Split(diffOutput, "\n")
+		default:
+			for _, f := range strings.Split(diffOutput, "\x00") {
+				if f != "" {
+					changedFiles = append(changedFiles, f)
+				}
+			}
 		}
 	}
 
@@ -901,8 +917,27 @@ func (s *GitService) PullVerified(dirPath string, redeploy bool, docker *DockerS
 	// redeploy failed (agent-os-io23). failures is only sent when non-empty.
 	redeployed := []string{}
 
+	// The changed files are repository-top-relative; each stack's files are
+	// placed in that frame below. Without the top nothing can be placed, and
+	// "success, redeployed nothing" would be false, so every stack fails
+	// (agent-os-4d60).
+	user, token := s.httpsCredentials(dirPath)
+	top, topErr := s.repoTopLevel(dirPath, user, token)
+
 	for _, stack := range stacks {
-		if !stackFilesChanged(stack, pullResult.ChangedFiles) {
+		if topErr != nil {
+			failures = append(failures, RedeployFailure{
+				StackID: stack.ID,
+				Reason:  fmt.Sprintf("could not find the repository top to match the changed files: %v", topErr),
+			})
+			continue
+		}
+		changed, err := stackFilesChanged(top, stack, pullResult.ChangedFiles)
+		if err != nil {
+			failures = append(failures, RedeployFailure{StackID: stack.ID, Reason: err.Error()})
+			continue
+		}
+		if !changed {
 			continue
 		}
 		slog.Info("Redeploying stack after git pull", "stackID", stack.ID)
@@ -934,14 +969,39 @@ func (s *GitService) PullVerified(dirPath string, redeploy bool, docker *DockerS
 	), pullResult
 }
 
-// stackFilesChanged reports whether any changed file matches the stack's compose or env file.
-func stackFilesChanged(stack models.Stack, changedFiles []string) bool {
+// stackFilesChanged reports whether any changed file matches the stack's
+// compose or env file. changedFiles are repository-top-relative (git's own
+// frame); the stack's files are named relative to its folder, so they are
+// placed under the folder's repository-relative path first (agent-os-4d60).
+// The folder is resolved, not the files: git names a symlinked compose file by
+// the link, and a file deleted by the pull has nothing to resolve.
+func stackFilesChanged(top string, stack models.Stack, changedFiles []string) (bool, error) {
+	rel, ok, err := repoRel(top, stack.Directory)
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		return false, fmt.Errorf("the stack folder %s is outside the repository at %s", stack.Directory, top)
+	}
+	want := map[string]bool{}
+	for _, name := range []string{stack.ComposeFile, stack.EnvFile} {
+		if name == "" {
+			continue
+		}
+		p, ok := repoJoin(rel, name)
+		if !ok {
+			// Fail closed like an unplaceable folder: skipping it would report
+			// "nothing to redeploy" for a file that was never compared.
+			return false, fmt.Errorf("the stack file %q cannot be placed under %s in the repository", name, stack.Directory)
+		}
+		want[p] = true
+	}
 	for _, f := range changedFiles {
-		if f == stack.ComposeFile || f == stack.EnvFile {
-			return true
+		if want[f] {
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 func (s *GitService) GetLog(dirPath string, limit, offset int) (*models.LogResult, error) {
