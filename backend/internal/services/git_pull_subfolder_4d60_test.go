@@ -50,7 +50,8 @@ type pulled4d60 struct {
 	ar     truth.ActionResult
 	pr     *models.PullResult
 	failed []string // stack ids in details.failedRedeploys, sorted
-	docker string   // argv of every docker call, one per line
+	reason map[string]string
+	docker string // argv of every docker call, one per line
 }
 
 func commitUpstream4d60(t *testing.T, seed, root string, files map[string]string) {
@@ -120,9 +121,11 @@ func run4d60(t *testing.T, c pull4d60) pulled4d60 {
 		&DockerService{config: &config.Config{DataDir: t.TempDir()}})
 
 	out := pulled4d60{ar: ar, pr: pr}
+	out.reason = map[string]string{}
 	if fr, ok := ar.Details["failedRedeploys"].([]RedeployFailure); ok {
 		for _, f := range fr {
 			out.failed = append(out.failed, f.StackID)
+			out.reason[f.StackID] = f.Reason
 		}
 		sort.Strings(out.failed)
 	}
@@ -132,10 +135,13 @@ func run4d60(t *testing.T, c pull4d60) pulled4d60 {
 	return out
 }
 
+// redeployed is true when a redeploy of the stack was attempted and failed
+// (the fake docker always exits 1). A stack that failed because it could not be
+// placed in the repository was never attempted, and is not counted.
 func (p pulled4d60) redeployed(id string) bool {
 	for _, f := range p.failed {
 		if f == id {
-			return true
+			return !strings.Contains(p.reason[id], "repository")
 		}
 	}
 	return false
@@ -346,7 +352,7 @@ func TestPullRedeploy_TopLevelFaultFailsClosed_4d60(t *testing.T) {
 			}
 		},
 	})
-	if got.ar.Outcome != truth.OutcomePartial || !got.redeployed("A") {
+	if got.ar.Outcome != truth.OutcomePartial || len(got.failed) != 1 || got.failed[0] != "A" {
 		t.Fatalf("a failed repository-top lookup did not fail closed: outcome=%s reason=%q failed=%v",
 			got.ar.Outcome, got.ar.Reason, got.failed)
 	}
