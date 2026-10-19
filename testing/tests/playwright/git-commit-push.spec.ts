@@ -22,12 +22,14 @@
  * dir, so the folder is itself the repository (the push switch is per stack
  * folder, backend/internal/services/git_commit.go). A rescan registers it.
  *
- * CLEANUP, in afterAll: DELETE the stack (the clone's .git counts as collateral, so
- * the request carries confirmCollateral=true and its status is asserted), remove
- * the folder and the temp dir, rescan, then assert the stack row is gone. The author
- * settings are put back when they had a value. PUT /settings/git reads "" as "no
- * change", so an author that was unset STAYS set (afterAll warns). CI starts from a
- * fresh DATA_DIR, where nothing else reads it.
+ * CLEANUP, in afterAll: remove the stack folder and the temp dir, then rescan. The
+ * rescan prunes the row of a folder that is gone (pruneStaleStacks in
+ * backend/internal/services/scanner.go), and the spec asserts the row is gone. It
+ * does not call DELETE /stacks: with the clone's .git as collateral that runs a
+ * docker compose down, which needs Docker. The author settings are put back when
+ * they had a value. PUT /settings/git reads "" as "no change", so an author that was
+ * unset STAYS set (afterAll warns). CI starts from a fresh DATA_DIR, where nothing
+ * else reads it.
  */
 
 import { test, expect, APIRequestContext } from 'playwright/test'
@@ -106,29 +108,14 @@ const remote = (...args: string[]): string =>
   execFileSync('git', [`--git-dir=${bareDir}`, ...args], { encoding: 'utf8' }).trim()
 
 /**
- * Remove the stack (when it exists), its folder and the temp dir, then assert the
- * row is gone. No row is fine: it is the normal state before the first run.
+ * Remove the stack folder and the temp dir, rescan so the prune drops the row, then
+ * assert the row is gone. A leftover from an aborted run is removed the same way.
  */
 async function removeFixture(request: APIRequestContext): Promise<void> {
-  const row = findFixtureStack(await listStacks(request))
-  let deleteStatus: number | null = null
-  if (row) {
-    // .git is collateral to the delete, which answers 428 STACK_DELETE_COLLATERAL
-    // without confirmCollateral=true (backend/internal/handlers/stack_crud.go).
-    const resp = await request.delete(
-      `${API_URL}/api/v1/stacks/${encodeURIComponent(row.id)}?confirm=true&confirmCollateral=true`,
-      { headers: mutationHeaders() },
-    )
-    deleteStatus = resp.status()
-  }
   if (stackFolder) rmSync(stackFolder, { recursive: true, force: true })
   if (tempRoot) rmSync(tempRoot, { recursive: true, force: true })
   await rescan(request)
-
-  if (deleteStatus !== null) {
-    expect(deleteStatus, `DELETE /stacks/${row!.id} returned ${deleteStatus}`).toBeLessThan(300)
-  }
-  // A check, not a hope: the rescan prune would hide a refused delete.
+  // A check, not a hope: nothing else would notice a row the prune kept.
   expect(findFixtureStack(await listStacks(request)), 'fixture stack row still listed after cleanup').toBeUndefined()
 }
 

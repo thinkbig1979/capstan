@@ -165,9 +165,9 @@ until you turn it on.
 **Gotchas**
 
 - **It is per folder.** Each stack folder has its own switch.
-- **Only HTTPS remotes are supported (plain HTTP and local paths also work).** SSH is
-  not supported yet, and `git://` and other transports are refused. Use an HTTPS
-  remote with a token.
+- **HTTPS remotes with a token are the supported route.** HTTP, `file://` and
+  local-path remotes also work. SSH is not supported yet, and `git://` and other
+  transports are refused.
 - **Capstan never force-pushes or sets an upstream.** If the remote has newer commits,
   pull first.
 
