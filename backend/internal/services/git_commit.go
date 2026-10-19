@@ -529,11 +529,7 @@ func (s *GitService) listChanges(dirPath, top, user, token string) ([]models.Git
 		return nil, err
 	}
 
-	realDir, err := filepath.EvalSymlinks(dirPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve the stack folder: %w", err)
-	}
-	rule, err := s.envRule(dirPath, realDir, top, user, token)
+	rule, err := s.envRule(dirPath, top, user, token)
 	if err != nil {
 		return nil, err
 	}
@@ -675,21 +671,32 @@ var globPathspecEnv = []string{
 	"GIT_LITERAL_PATHSPECS=0", "GIT_GLOB_PATHSPECS=0", "GIT_NOGLOB_PATHSPECS=0", "GIT_ICASE_PATHSPECS=0",
 }
 
-func (s *GitService) envRule(dirPath, realDir, top, user, token string) (envRule, error) {
-	stacks, err := s.db.ListStacksByDirectory(dirPath)
+// envRule is built from every stack inside top, each stack's files read from
+// its own folder: a file in the requested folder can be named by a stack
+// registered above it, below it or beside it (agent-os-0zjs).
+func (s *GitService) envRule(dirPath, top, user, token string) (envRule, error) {
+	stacks, unplaced, err := s.repoStacks(top)
 	if err != nil {
-		return envRule{}, fmt.Errorf("could not list the stacks in this folder: %w", err)
+		return envRule{}, err
 	}
 	r := envRule{named: map[string]bool{}, targets: map[string]bool{}, compose: map[string]bool{}}
+	// A stack that can't be placed may name env files here, as in the
+	// history view.
+	for _, u := range unplaced {
+		slog.Warn("Treating every changed file of the folder as an env file: a stack folder could not be placed",
+			"stack", u.stack.ProjectName, "error", u.err)
+		r.composeUnreadable = true
+	}
 	src := diskComposeSource(top)
 	for _, st := range stacks {
+		stackDir := filepath.Join(top, filepath.FromSlash(st.rel))
 		if st.EnvFile != "" {
-			r.named[diskPath(realDir, st.EnvFile)] = true
+			r.named[diskPath(stackDir, st.EnvFile)] = true
 		}
 		if st.ComposeFile == "" {
 			continue
 		}
-		composePath := diskPath(realDir, st.ComposeFile)
+		composePath := diskPath(stackDir, st.ComposeFile)
 		r.compose[composePath] = true
 		// Only the stack's own compose file is exempt when composeUnreadable
 		// hides the rest: a file reached through include: or extends: stays
