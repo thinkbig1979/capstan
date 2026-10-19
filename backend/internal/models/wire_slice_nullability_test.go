@@ -12,7 +12,7 @@ import (
 // TypeScript `T[]` is a lie about any field that can arrive as null.
 //
 // This test PINS what the production construction paths actually produce. Every
-// one of the eleven fields now reaches the wire as an array: the five that used
+// one of the twelve fields now reaches the wire as an array: the five that used
 // to emit null (and carried a tstype "| null" tag saying so) are normalised at
 // their construction site (agent-os-e5pr), and the services and database
 // wire_slice_nullability tests drive those sites for real.
@@ -78,9 +78,16 @@ func TestWireSliceNullability(t *testing.T) {
 		},
 		{
 			name:     "DiffResult.files on a commit that touched nothing",
-			site:     "services/git.go getDiffCLI opens files := []string{} and only reassigns when diff-tree printed something",
+			site:     "services/git_history_diff.go historyDiff builds files with sortedKeys, which opens make([]string, 0, n)",
 			value:    DiffResult{Files: []string{}},
 			key:      "files",
+			wantNull: false,
+		},
+		{
+			name:     "DiffResult.hiddenFiles on a commit that hides nothing",
+			site:     "services/git_history_diff.go historyDiff builds hidden with sortedKeys, which opens make([]string, 0, n)",
+			value:    DiffResult{Files: []string{}, HiddenFiles: []string{}},
+			key:      "hiddenFiles",
 			wantNull: false,
 		},
 		{

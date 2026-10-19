@@ -16,7 +16,7 @@ import (
 // most likely to leave something unset (it already left Files nil before
 // agent-os-e5pr), so it is the arm that matters.
 func TestGetDiff_CommitIsAlwaysOnTheWire(t *testing.T) {
-	svc := NewGitService(&config.Config{}, nil)
+	svc := NewGitService(&config.Config{}, newTestDB(t))
 	dir := repoWithCommit(t, t.TempDir())
 	head := gitOutput(t, dir, "rev-parse", "HEAD")
 

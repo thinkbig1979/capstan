@@ -233,8 +233,15 @@ type DiffResult struct {
 	// the wire always carries an object and the generated type says so
 	// (agent-os-apmw).
 	Commit GitCommit `json:"commit"`
-	Diff   string    `json:"diff"`
-	Files  []string  `json:"files"`
+	// Diff is the commit's patch without the hidden files.
+	Diff string `json:"diff"`
+	// Files is every path the commit touched, against every parent, hidden
+	// files included. Never nil.
+	Files []string `json:"files"`
+	// HiddenFiles are the Files whose diff is left out because they are, or
+	// may be, env files, which can hold secrets (agent-os-2omy, D140). Never
+	// nil.
+	HiddenFiles []string `json:"hiddenFiles"`
 }
 
 type DashboardContainerInfo struct {

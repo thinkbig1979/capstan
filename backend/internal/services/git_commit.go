@@ -710,34 +710,47 @@ func (s *GitService) envRule(dirPath, realDir, top, user, token string) (envRule
 	for p := range r.named {
 		candidates = append(candidates, p)
 	}
+	targets, err := s.envLinkTargets(top, dirPath, user, token, candidates)
+	if err != nil {
+		return envRule{}, err
+	}
+	r.targets = targets
+	return r, nil
+}
+
+// envLinkTargets resolves, on today's disk, where env files really live: the
+// candidates (absolute), every env-named tracked path of the repository and
+// every env-named untracked path under untrackedDir, with symlinks resolved.
+func (s *GitService) envLinkTargets(top, untrackedDir, user, token string, candidates []string) (map[string]bool, error) {
 	// Tracked: the whole repository, so a link in a sibling stack folder
 	// (app/.env -> ../other/prod.secrets) flags its target here too.
 	tracked, _, err := s.gitRun(top, user, token, globPathspecEnv,
 		append([]string{"-c", "core.fsmonitor=false", "--no-optional-locks", "ls-files", "-z", "--full-name", "--"}, envNamePathspecs...)...)
 	if err != nil {
-		return envRule{}, fmt.Errorf("failed to list the tracked env files: %w", err)
+		return nil, fmt.Errorf("failed to list the tracked env files: %w", err)
 	}
 	// Untracked, ignored ones included: a .env is usually gitignored. Not
 	// --exclude-standard, which would drop exactly that file.
-	untracked, _, err := s.gitRun(dirPath, user, token, globPathspecEnv,
+	untracked, _, err := s.gitRun(untrackedDir, user, token, globPathspecEnv,
 		append([]string{"-c", "core.fsmonitor=false", "--no-optional-locks", "ls-files", "-z", "--full-name", "--others", "--"}, envNamePathspecs...)...)
 	if err != nil {
-		return envRule{}, fmt.Errorf("failed to list the untracked env files: %w", err)
+		return nil, fmt.Errorf("failed to list the untracked env files: %w", err)
 	}
 	for _, rel := range strings.Split(tracked+"\x00"+untracked, "\x00") {
 		if rel != "" && isEnvName(filepath.Base(rel)) {
 			candidates = append(candidates, filepath.Join(top, filepath.FromSlash(rel)))
 		}
 	}
+	targets := map[string]bool{}
 	for _, p := range candidates {
 		resolved, err := filepath.EvalSymlinks(p)
 		if err != nil {
 			// Missing or dangling: it points at nothing a change could be.
 			continue
 		}
-		r.targets[resolved] = true
+		targets[resolved] = true
 	}
-	return r, nil
+	return targets, nil
 }
 
 // composeEnvFiles reads the env_file: entries of every service in a compose
@@ -754,6 +767,11 @@ func composeEnvFiles(composePath string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	return parseComposeEnvFiles(content)
+}
+
+// parseComposeEnvFiles is composeEnvFiles on a compose file's content.
+func parseComposeEnvFiles(content []byte) ([]string, error) {
 	var doc struct {
 		Services map[string]struct {
 			EnvFile yaml.Node `yaml:"env_file"`

@@ -511,14 +511,10 @@ func (h *GitHandler) GetDiff(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"commit": result.Commit,
-		"diff":   result.Diff,
-		// agent-os-2613: services/git.go runs `git diff-tree --name-only` on
-		// every request to fill DiffResult.Files, and this literal used to drop
-		// it, so the changed-file list was computed and discarded each time.
-		"files": result.Files,
-	})
+	// The struct itself, not a hand-built map: a map literal here dropped
+	// Files (agent-os-2613) and would have dropped HiddenFiles, whose absence
+	// leaves the UI unable to say why a file's diff is missing (agent-os-2omy).
+	c.JSON(http.StatusOK, result)
 }
 
 func (h *GitHandler) logGitAction(c *gin.Context, absPath, action, detail string) {

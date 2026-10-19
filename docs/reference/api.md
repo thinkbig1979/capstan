@@ -253,7 +253,14 @@ With a live token, all four behave exactly as they did before.
   (the 64 upper bound is agent-os-tyl6; longer values answered 500). A
   well-formed hash that names no commit (unknown, or an object that is not a
   commit) answers **404 `NOT_FOUND` "Commit not found"**; it answered 500
-  before 2026-09-24 (agent-os-tyl6). Other git failures stay 500
+  before 2026-09-24 (agent-os-tyl6). Other git failures stay 500.
+  Answers `{commit, diff, files, hiddenFiles}`. `files` lists every path the
+  commit touched against every parent. Env files (an env-like name or folder,
+  a stack's env file or compose `env_file:` entry, or the target of an
+  env-named symlink, at that commit or a parent) are never shown: their paths
+  are in `hiddenFiles` and their contents are left out of `diff` by git
+  itself (agent-os-2omy). If the stack list can't be read, it answers 500
+  rather than an unchecked diff
 
 ### Commit and push
 

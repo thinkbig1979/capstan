@@ -18,7 +18,7 @@ import (
 // The tests below drive REAL production functions and marshal what they return,
 // so the claim "this field arrives as [] and never as JSON null" is measured
 // rather than asserted about a hand-built struct.
-// models/wire_slice_nullability_test.go pins the whole eleven-field table.
+// models/wire_slice_nullability_test.go pins the whole twelve-field table.
 //
 // Each carries both arms. A test that only ever sees [] cannot tell a
 // normalised field from an instrument that reports [] for everything.
@@ -29,7 +29,7 @@ import (
 // The second arm commits a file so the same instrument reports a populated
 // array on the same code path.
 func TestWireNullability_DiffResultFiles(t *testing.T) {
-	svc := NewGitService(&config.Config{}, nil)
+	svc := NewGitService(&config.Config{}, newTestDB(t))
 
 	t.Run("empty commit yields an empty array", func(t *testing.T) {
 		dir := repoWithCommit(t, t.TempDir())
