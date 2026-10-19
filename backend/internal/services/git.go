@@ -796,6 +796,7 @@ func (s *GitService) pullFailure(dirPath string, cred gitCreds, err error) error
 		if gitExitCode(probeErr) < 0 {
 			return fmt.Errorf("git pull failed (%w) and the remote probe could not run: %w", err, probeErr)
 		}
+		logPullRefusal(dirPath, models.ErrGitRemoteUnreachable, err)
 		return models.NewAppErrorWithDetails(502, models.ErrGitRemoteUnreachable,
 			"Could not read from the git remote", err.Error())
 	}
@@ -812,12 +813,23 @@ func (s *GitService) pullFailure(dirPath string, cred gitCreds, err error) error
 		// defect one level down: asserting a specific diagnosis from a generic
 		// failure, which is the thing pullFailure exists to stop doing.
 		if gitExitCode(ancestorErr) == 1 {
+			logPullRefusal(dirPath, models.ErrGitConflict, err)
 			return models.NewAppErrorWithDetails(409, models.ErrGitConflict,
 				"Local branch has diverged from the remote and cannot be fast-forwarded", err.Error())
 		}
 		return fmt.Errorf("git pull failed and the divergence probe could not run: %w", err)
 	}
 	return fmt.Errorf("git pull failed: %w", err)
+}
+
+// logPullRefusal records git's own text for a classified pull failure
+// (agent-os-kixy). The answer carries a fixed message and folds a refused
+// credential and an unreachable host into one 502, and Details reaches neither
+// the response nor the request log, so this line is the only place they
+// differ. err is already redacted by gitCommandWithCreds. The unclassified
+// failures are plain errors that handleError logs in full.
+func logPullRefusal(dirPath, code string, err error) {
+	slog.Warn("git pull failed", "path", dirPath, "code", code, "error", err.Error())
 }
 
 // gitExitCode returns the exit status of the git process behind err, or -1 when
