@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/pathutil"
 )
 
@@ -376,9 +377,9 @@ func (s *GitService) historyEnvRule(dirPath, top string, bare bool, user, token 
 	if s.db == nil {
 		return r, fmt.Errorf("cannot decide which files are env files: no database")
 	}
-	stacks, err := s.db.ListStacks()
+	stacks, unplaced, err := s.repoStacks(top)
 	if err != nil {
-		return r, fmt.Errorf("could not list the stacks to decide which files are env files: %w", err)
+		return r, err
 	}
 	h := &historyRuleReader{s: s, dirPath: dirPath, user: user, token: token, top: top, blobs: map[string]string{}}
 	unknown := func(msg string, args ...any) {
@@ -399,27 +400,15 @@ func (s *GitService) historyEnvRule(dirPath, top string, bare bool, user, token 
 	for _, n := range composeNames {
 		names[n] = true
 	}
+	// A stack that can't be placed may hold this repository's env files;
+	// hiding all but compose files keeps this diff closed without failing
+	// every history diff of every repository.
+	for _, u := range unplaced {
+		unknown("a stack folder could not be placed", "stack", u.stack.ProjectName, "error", u.err)
+	}
 	var composeRels []string
-	for _, st := range stacks {
-		// A stack that can't be placed may hold this repository's env files;
-		// hiding all but compose files keeps this diff closed without
-		// failing every history diff of every repository.
-		ok, err := pathutil.IsContained(top, st.Directory)
-		if err != nil {
-			unknown("a stack folder could not be placed", "stack", st.ProjectName, "error", err)
-			continue
-		}
-		if !ok {
-			continue
-		}
-		stackRel, ok, err := repoRel(top, st.Directory)
-		if err != nil {
-			unknown("a stack folder could not be placed", "stack", st.ProjectName, "error", err)
-			continue
-		}
-		if !ok {
-			continue
-		}
+	for _, rs := range stacks {
+		st, stackRel := rs.Stack, rs.rel
 		if st.EnvFile != "" {
 			p, ok, err := h.place(stackRel, st.EnvFile)
 			if err != nil {
@@ -538,6 +527,42 @@ func (s *GitService) historyEnvRule(dirPath, top string, bare bool, user, token 
 		}
 	}
 	return r, nil
+}
+
+// repoStack is a registered stack whose folder lies inside the repository,
+// with that folder as a repository-relative slash path.
+type repoStack struct {
+	models.Stack
+	rel string
+}
+
+// unplacedStack is a stack whose folder could not be checked against the
+// repository: it may lie inside it.
+type unplacedStack struct {
+	stack models.Stack
+	err   error
+}
+
+// repoStacks is every registered stack whose folder lies inside top, plus the
+// stacks it could not place. It never keys on the folder a request names: a
+// file of one folder can be another stack's env file (agent-os-0zjs).
+func (s *GitService) repoStacks(top string) ([]repoStack, []unplacedStack, error) {
+	stacks, err := s.db.ListStacks()
+	if err != nil {
+		return nil, nil, fmt.Errorf("could not list the stacks to decide which files are env files: %w", err)
+	}
+	var in []repoStack
+	var unplaced []unplacedStack
+	for _, st := range stacks {
+		rel, ok, err := repoRel(top, st.Directory)
+		switch {
+		case err != nil:
+			unplaced = append(unplaced, unplacedStack{stack: st, err: err})
+		case ok:
+			in = append(in, repoStack{Stack: st, rel: rel})
+		}
+	}
+	return in, unplaced, nil
 }
 
 // maxLinkHops bounds a chain of links, as the kernel's ELOOP does.
