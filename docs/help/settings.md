@@ -149,6 +149,39 @@ The token for git over HTTPS, paired with the username above (default `git`).
 - **The token is stored encrypted.** If the stored token cannot be read, for example
   after the `STORAGE_KEY` changed, the form says so and asks you to enter it again.
 
+### Allow commit and push
+
+Lets Capstan commit the files you choose in a stack's folder and push the branch to
+its upstream. It is off by default, so an existing install stays read-only until you
+turn it on.
+
+**Common tasks**
+
+- **Turn it on for a folder:** open the stack's git chip, go to Git Credentials, and
+  switch on "Allow commit and push".
+- **Commit and push:** save a file, then pick "Commit and push" in the save message or
+  in the git panel, tick the files, write a message and confirm.
+
+**Gotchas**
+
+- **It is per folder.** Each stack folder has its own switch.
+- **SSH remotes are not supported yet.** Use an HTTPS remote with a token.
+- **Capstan never force-pushes or sets an upstream.** If the remote has newer commits,
+  pull first.
+
+### Commit author
+
+The name and email on commits Capstan makes. Set them in Settings > Git.
+
+**Common tasks**
+
+- **Set the author:** fill in both fields and save.
+
+**Gotchas**
+
+- **Commits are blocked until both are set.**
+- **A saved value cannot be cleared from here.** Replace it with another one.
+
 ## Updates
 
 How Capstan finds newer images, and whether it applies them for you.

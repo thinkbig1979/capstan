@@ -28,6 +28,8 @@ export type FieldHelpId =
   | 'stack.backup-stop-policy'
   | 'git.ssh-key'
   | 'git.https-token'
+  | 'git.push'
+  | 'git.author'
   | 'directories.scan-depth'
   | 'directories.default-dir'
   | 'docker-cleanup.min-age'
@@ -84,6 +86,8 @@ export const FIELD_HELP: Record<FieldHelpId, HelpRef> = {
   'stack.backup-stop-policy': { doc: STACK, anchor: 'backup-and-stop-policy' },
   'git.ssh-key': { doc: SETTINGS, anchor: 'ssh-private-key-path' },
   'git.https-token': { doc: SETTINGS, anchor: 'personal-access-token' },
+  'git.push': { doc: SETTINGS, anchor: 'allow-commit-and-push' },
+  'git.author': { doc: SETTINGS, anchor: 'commit-author' },
   'directories.scan-depth': { doc: SETTINGS, anchor: 'directory-recursion-depth' },
   'directories.default-dir': { doc: SETTINGS, anchor: 'default-directory-for-new-stacks' },
   'docker-cleanup.min-age': { doc: DOCKER_HOST, anchor: 'age-floor' },

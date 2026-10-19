@@ -49,7 +49,7 @@ describe('help coverage (a): every view and field resolves to a real heading', (
       return why ? [`${id}: ${why}`] : []
     })
     expect(broken).toEqual([])
-    expect(Object.keys(FIELD_HELP)).toHaveLength(14)
+    expect(Object.keys(FIELD_HELP)).toHaveLength(16)
   })
 })
 
