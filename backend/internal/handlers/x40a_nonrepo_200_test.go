@@ -133,7 +133,7 @@ func TestGitGetStatus_NonRepoAnswers200(t *testing.T) {
 	nested := filepath.Join(parent, "stacks", "app")
 	require.NoError(t, os.MkdirAll(nested, 0o750))
 
-	// Arm 3: a directory that does not exist. pathutil.resolveExisting
+	// Arm 3: a directory that does not exist. pathutil.ResolveExisting
 	// re-appends trailing components that are not there yet, so this passes
 	// containment and reaches gitFailure rather than being turned away as a
 	// traversal attempt.
