@@ -232,14 +232,28 @@ func (s *GitService) httpsCredentials(dirPath string) (user, token string) {
 //     is what runs post-index-change. Writes still take the locks they need:
 //     OBSERVED, add, commit and pull --ff-only under this flag still wrote the
 //     index (post-index-change ran once each) and push succeeded.
+//   - log.follow=false: a file log does not follow renames, which in a
+//     blob:none partial clone lazy-fetches old blobs and so runs the repo's
+//     remote.origin.uploadpack (OBSERVED: 1 run with log.follow=true, 0 with
+//     false). Capstan never passes --follow, so this changes nothing unless
+//     the repository set log.follow itself.
 //
 // core.hooksPath is deliberately NOT cleared here: pull's hooks are the
 // repository's to run, and the pull fault tests inject faults through them.
-// Clean and process filters from .gitattributes still run on status and diff;
-// no git option disables them.
+//
+// RESIDUAL, no git option closes these:
+//   - Clean and process filters from .gitattributes still run on status and
+//     diff. With --no-optional-locks a stat-dirty tracked file also stays
+//     stat-dirty, so its filter runs on every status rather than once
+//     (OBSERVED: 3 runs over 3 statuses, against 1 without the flag); the
+//     dirty answer stays correct.
+//   - In a partial clone, a read that needs a missing blob (diff HEAD on a
+//     file never fetched) still lazy-fetches through the repo's upload-pack.
+//     noLazyFetchEnv cannot go here: pull's checkout needs lazy fetch.
 var gitHardeningArgs = []string{
 	"-c", "core.fsmonitor=false",
 	"-c", "log.showSignature=false",
+	"-c", "log.follow=false",
 	"--no-optional-locks",
 }
 

@@ -78,12 +78,18 @@ func newOjduFix(t *testing.T) *ojduFix {
 // ran reports how many times program ran since the last call, and resets.
 func (f *ojduFix) ran(t *testing.T, program string) int {
 	t.Helper()
-	b, err := os.ReadFile(f.marks)
+	return ojduMarks(t, f.marks, program)
+}
+
+// ojduMarks counts the lines naming program in the marks file, and removes it.
+func ojduMarks(t *testing.T, marks, program string) int {
+	t.Helper()
+	b, err := os.ReadFile(marks) //nolint:gosec // test-owned marks file under t.TempDir()
 	if os.IsNotExist(err) {
 		return 0
 	}
 	require.NoError(t, err)
-	require.NoError(t, os.Remove(f.marks))
+	require.NoError(t, os.Remove(marks))
 	n := 0
 	for _, line := range strings.Split(string(b), "\n") {
 		if line == program {
@@ -153,6 +159,82 @@ func TestOjduReadRoutesRunNoPostIndexChangeHook(t *testing.T) {
 	ojduRequireNoRouteRuns(t, "post-index-change", "status", "--porcelain")
 }
 
+// ojduRenamedHistory renames x to y, lightly edited, on top of the commit
+// fixture and pushes it, so a log of y lists one commit without rename
+// following and more with it. x is made long first: rename detection needs the
+// two blobs to be similar.
+func ojduRenamedHistory(t *testing.T, f *commitFix) {
+	t.Helper()
+	body := strings.Repeat("line\n", 50)
+	writeFile(t, filepath.Join(f.top, "x"), body)
+	runGit(t, f.top, "commit", "-qam", "long x")
+	runGit(t, f.top, "mv", "x", "y")
+	writeFile(t, filepath.Join(f.top, "y"), body+"more\n")
+	runGit(t, f.top, "add", "-A")
+	runGit(t, f.top, "commit", "-qm", "rename x to y")
+	runGit(t, f.top, "push", "-q", "origin", "main")
+}
+
+// ojduHashes is GetLogForFile's answer as a list of hashes.
+func ojduHashes(t *testing.T, svc *GitService, dir, file string) []string {
+	t.Helper()
+	res, err := svc.GetLogForFile(dir, file, 50)
+	require.NoError(t, err)
+	var hashes []string
+	for _, c := range res.Commits {
+		hashes = append(hashes, c.Hash)
+	}
+	return hashes
+}
+
+// TestOjduLogForFileRunsNoUploadPackInPartialClone: log.follow=false in the
+// prefix. In a blob:none partial clone, following a rename needs the old blobs,
+// which git lazy-fetches through the repository's remote.origin.uploadpack.
+func TestOjduLogForFileRunsNoUploadPackInPartialClone(t *testing.T) {
+	f := newCommitFix(t, false)
+	ojduRenamedHistory(t, f)
+	runGit(t, f.bare, "config", "uploadpack.allowFilter", "true")
+	runGit(t, f.bare, "config", "uploadpack.allowAnySHA1InWant", "true")
+
+	bin := t.TempDir()
+	marks := filepath.Join(bin, "marks")
+	up := filepath.Join(bin, "uploadpack")
+	//nolint:gosec // a program git runs must be executable; test-owned file under t.TempDir()
+	require.NoError(t, os.WriteFile(up, []byte("#!/bin/sh\necho uploadpack >> '"+marks+"'\nexec git-upload-pack \"$@\"\n"), 0o755))
+	clone := filepath.Join(t.TempDir(), "clone")
+	runGit(t, filepath.Dir(clone), "clone", "-q", "--filter=blob:none", "file://"+f.bare, clone)
+	runGit(t, clone, "config", "remote.origin.uploadpack", up)
+	runGit(t, clone, "config", "log.follow", "true")
+
+	ojduHashes(t, f.svc, clone, "y")
+	if n := ojduMarks(t, marks, "uploadpack"); n != 0 {
+		t.Errorf("GetLogForFile ran the repository's uploadpack %d time(s) in a partial clone", n)
+	}
+
+	// Control, after the route on the same clone: the blobs are still missing,
+	// so a raw log that follows renames fetches them.
+	runGit(t, clone, "log", "--format=%h", "--", "y")
+	require.Positive(t, ojduMarks(t, marks, "uploadpack"), "control: raw `git log -- y` with log.follow=true fetched nothing, so a silent route proves nothing")
+}
+
+// TestOjduLogForFileOutputUnchanged: log.follow=false keeps a file log what it
+// was for every repository that does not set log.follow, since Capstan never
+// passes --follow. A repository that sets it now gets the same answer as one
+// that does not, rather than a rename-following one.
+func TestOjduLogForFileOutputUnchanged(t *testing.T) {
+	f := newCommitFix(t, false)
+	ojduRenamedHistory(t, f)
+	plain := strings.Fields(runGit(t, f.top, "log", "--format=%H", "--", "y"))
+	require.Len(t, plain, 1, "fixture: without rename following, y has one commit")
+
+	require.Equal(t, plain, ojduHashes(t, f.svc, f.dir, "y"), "no log.follow in the repository")
+
+	runGit(t, f.top, "config", "log.follow", "true")
+	followed := strings.Fields(runGit(t, f.top, "log", "--format=%H", "--", "y"))
+	require.Greater(t, len(followed), len(plain), "control: the repository's log.follow does change a raw log, so the next assertion can fail")
+	require.Equal(t, plain, ojduHashes(t, f.svc, f.dir, "y"), "log.follow=true in the repository")
+}
+
 // TestOjduGitCmdWithCredsArgvPrefix pins the argv every git child starts with,
 // with and without a credential. The literals are spelled out rather than read
 // from gitHardeningArgs, so emptying that slice fails here too.
@@ -163,6 +245,7 @@ func TestOjduGitCmdWithCredsArgvPrefix(t *testing.T) {
 		"-c", "safe.directory=" + dir,
 		"-c", "core.fsmonitor=false",
 		"-c", "log.showSignature=false",
+		"-c", "log.follow=false",
 		"--no-optional-locks",
 	}
 	for _, tok := range []string{"", "a-token"} {
