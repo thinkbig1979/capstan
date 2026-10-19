@@ -691,15 +691,15 @@ func (s *GitService) envRule(dirPath, realDir, top, user, token string) (envRule
 		}
 		composePath := diskPath(realDir, st.ComposeFile)
 		r.compose[composePath] = true
-		named, files, err := composeSecretFiles(src, composePath)
+		// Only the stack's own compose file is exempt when composeUnreadable
+		// hides the rest: a file reached through include: or extends: stays
+		// hidden, as it was before the parser followed them.
+		named, _, err := composeSecretFiles(src, composePath)
 		if err != nil {
 			slog.Warn("Treating every changed file of the folder as an env file: the compose file's env_file entries are unknown",
 				"path", composePath, "error", err)
 			r.composeUnreadable = true
 			continue
-		}
-		for _, f := range files {
-			r.compose[f] = true
 		}
 		for _, p := range named {
 			r.named[p] = true

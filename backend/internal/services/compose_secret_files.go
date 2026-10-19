@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"gopkg.in/yaml.v3"
 
@@ -80,7 +82,7 @@ func composeSecretFiles(src composeSource, root string) (named, files []string, 
 			}
 			switch {
 			case !ok && e.compose:
-				return nil, nil, fmt.Errorf("%s: %q is outside the repository, so what it names is unknown", p, e.path)
+				return nil, nil, fmt.Errorf("%s: the file at line %d is outside the repository, so what it names is unknown", p, e.line)
 			case !ok:
 			case e.compose:
 				queue = append(queue, q)
@@ -96,14 +98,45 @@ func composeSecretFiles(src composeSource, root string) (named, files []string, 
 // (compose) another compose file to read.
 type composeEntry struct {
 	path    string
+	line    int
 	compose bool
 }
+
+// errComposeYAML replaces every YAML decoding error. yaml.v3 quotes the
+// value it could not decode, and an include: or extends: can point at an env
+// file, so its text would put a secret in an error and the log line that
+// carries it. Errors here name a path and a line, never a value.
+var errComposeYAML = errors.New("not YAML this rule can read")
 
 // parseComposeSecretEntries reads the paths one compose file writes, relative
 // to its folder or absolute: env_file: as a string, a list of strings or a
 // list of {path: ...}; secrets: <name>: file:; include: as a list of strings
 // or of {path: string|list, env_file: string|list}; extends: {file: ...}.
+//
+// Every YAML document of the file counts: compose merges them. A document
+// that does not decode makes the whole file unreadable.
 func parseComposeSecretEntries(content []byte) ([]composeEntry, error) {
+	dec := yaml.NewDecoder(bytes.NewReader(content))
+	var out []composeEntry
+	for {
+		var doc yaml.Node
+		err := dec.Decode(&doc)
+		if errors.Is(err, io.EOF) {
+			return out, nil
+		}
+		if err != nil {
+			return nil, errComposeYAML
+		}
+		entries, err := composeDocumentEntries(&doc)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, entries...)
+	}
+}
+
+// composeDocumentEntries reads one YAML document of a compose file.
+func composeDocumentEntries(node *yaml.Node) ([]composeEntry, error) {
 	var doc struct {
 		Include  yaml.Node `yaml:"include"`
 		Services map[string]struct {
@@ -114,15 +147,15 @@ func parseComposeSecretEntries(content []byte) ([]composeEntry, error) {
 			File yaml.Node `yaml:"file"`
 		} `yaml:"secrets"`
 	}
-	if err := yaml.Unmarshal(content, &doc); err != nil {
-		return nil, err
+	if err := node.Decode(&doc); err != nil {
+		return nil, errComposeYAML
 	}
 	var out []composeEntry
 	add := func(n *yaml.Node, what string, compose bool) error {
 		if n.Kind != yaml.ScalarNode || n.Value == "" || strings.Contains(n.Value, "$") || strings.Contains(n.Value, "://") {
 			return fmt.Errorf("%s entry at line %d is not a fixed path", what, n.Line)
 		}
-		out = append(out, composeEntry{path: n.Value, compose: compose})
+		out = append(out, composeEntry{path: n.Value, line: n.Line, compose: compose})
 		return nil
 	}
 	// paths reads a string or a list of strings; long, when set, decodes a
@@ -159,7 +192,7 @@ func parseComposeSecretEntries(content []byte) ([]composeEntry, error) {
 				Path yaml.Node `yaml:"path"`
 			}
 			if err := item.Decode(&l); err != nil {
-				return nil, err
+				return nil, errComposeYAML
 			}
 			return &l.Path, nil
 		})
@@ -174,7 +207,7 @@ func parseComposeSecretEntries(content []byte) ([]composeEntry, error) {
 				File yaml.Node `yaml:"file"`
 			}
 			if err := svc.Extends.Decode(&ext); err != nil {
-				return nil, err
+				return nil, errComposeYAML
 			}
 			if ext.File.Kind != 0 {
 				if err := add(&ext.File, "extends file", true); err != nil {
@@ -208,7 +241,7 @@ func parseComposeSecretEntries(content []byte) ([]composeEntry, error) {
 				ProjectDirectory yaml.Node `yaml:"project_directory"`
 			}
 			if err := item.Decode(&inc); err != nil {
-				return nil, err
+				return nil, errComposeYAML
 			}
 			// It moves where the included file's own relative paths point.
 			if inc.ProjectDirectory.Kind != 0 {
@@ -240,16 +273,26 @@ func diskComposeSource(top string) composeSource {
 			if !ok {
 				return nil, false, fmt.Errorf("compose file %s is outside the repository", p)
 			}
-			//nolint:gosec // p is a compose file inside the repository top, checked above
-			f, err := os.Open(p)
+			// Not a regular file is unreadable, and is never opened: opening a
+			// FIFO for reading blocks until a writer appears. O_NONBLOCK and
+			// the Stat below cover one swapped in between.
+			info, err := os.Stat(p)
 			if errors.Is(err, fs.ErrNotExist) {
 				return nil, false, nil
 			}
 			if err != nil {
 				return nil, false, err
 			}
+			if !info.Mode().IsRegular() {
+				return nil, false, fmt.Errorf("compose file %s is not a regular file", p)
+			}
+			//nolint:gosec,forbidigo // a read-only open of a compose file inside the repository top (checked above); OpenFile only for O_NONBLOCK, which os.Open can't set
+			f, err := os.OpenFile(p, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+			if err != nil {
+				return nil, false, err
+			}
 			defer func() { _ = f.Close() }()
-			info, err := f.Stat()
+			info, err = f.Stat()
 			if err != nil {
 				return nil, false, err
 			}

@@ -267,16 +267,31 @@ func (h *historyRuleReader) blob(oid string) (string, error) {
 }
 
 // resolve follows every symlink in p as the tree held it, component by
-// component (a link to a folder inside the path as well as a link at its
-// end), bounded like the kernel's ELOOP. ok is false when the path leaves the
-// repository or loops.
+// component as the kernel does: a link to a folder inside the path and a
+// link at its end, and a ".." after a link climbs from where the link led,
+// not lexically (lnk/../secret with lnk -> deep/dir is deep/secret). Bounded
+// like ELOOP. ok is false when the path leaves the repository or loops.
 func (h *historyRuleReader) resolve(t historyTree, p string) (string, bool, error) {
-	parts := strings.Split(p, "/")
+	pending := strings.Split(p, "/")
+	var done []string
 	hops := 0
-	for i := 0; i < len(parts); i++ {
-		prefix := strings.Join(parts[:i+1], "/")
-		e, ok := t.listing[prefix]
+	for len(pending) > 0 {
+		c := pending[0]
+		pending = pending[1:]
+		switch c {
+		case "", ".":
+			continue
+		case "..":
+			if len(done) == 0 {
+				return "", false, nil
+			}
+			done = done[:len(done)-1]
+			continue
+		}
+		cur := strings.Join(append(done, c), "/")
+		e, ok := t.listing[cur]
 		if !ok || e.mode != "120000" {
+			done = append(done, c)
 			continue
 		}
 		if hops++; hops > maxLinkHops {
@@ -284,23 +299,23 @@ func (h *historyRuleReader) resolve(t historyTree, p string) (string, bool, erro
 		}
 		dest, err := h.blob(e.oid)
 		if err != nil {
-			return "", false, fmt.Errorf("failed to read the link %s at %s: %w", prefix, t.name, err)
+			return "", false, fmt.Errorf("failed to read the link %s at %s: %w", cur, t.name, err)
 		}
-		var base string
 		if filepath.IsAbs(dest) {
-			if base, ok, err = repoRel(h.top, dest); err != nil {
+			rel, ok, err := repoRel(h.top, dest)
+			if err != nil {
 				return "", false, err
 			}
-		} else {
-			base, ok = repoJoin(path.Dir(prefix), dest)
+			if !ok {
+				return "", false, nil
+			}
+			done = nil
+			dest = rel
 		}
-		if !ok {
-			return "", false, nil
-		}
-		parts = append(strings.Split(base, "/"), parts[i+1:]...)
-		i = -1
+		// A relative target continues from the link's folder (done).
+		pending = append(strings.Split(dest, "/"), pending...)
 	}
-	return strings.Join(parts, "/"), true, nil
+	return strings.Join(done, "/"), true, nil
 }
 
 // treeSource reads compose files from tree t. A git failure is recorded in
@@ -309,15 +324,21 @@ func (h *historyRuleReader) resolve(t historyTree, p string) (string, bool, erro
 func (h *historyRuleReader) treeSource(t historyTree, gitErr *error) composeSource {
 	return composeSource{
 		read: func(p string) ([]byte, bool, error) {
-			p, ok, err := h.resolve(t, p)
+			resolved, ok, err := h.resolve(t, p)
 			if err != nil {
 				*gitErr = err
 				return nil, false, err
 			}
-			e, found := t.listing[p]
-			if !ok || !found || e.mode == "160000" || e.mode == "120000" {
+			// A compose file whose link leaves the repository (or loops)
+			// named something no tree here shows: unknown, not missing.
+			if !ok {
+				return nil, false, fmt.Errorf("compose file %s at %s is a link that leaves the repository or loops", p, t.name)
+			}
+			e, found := t.listing[resolved]
+			if !found || e.mode == "160000" || e.mode == "120000" {
 				return nil, false, nil
 			}
+			p = resolved
 			if e.size > maxComposeBytes {
 				return nil, false, fmt.Errorf("compose file %s at %s is larger than %d bytes", p, t.name, maxComposeBytes)
 			}
