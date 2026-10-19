@@ -3,6 +3,9 @@ package services
 import (
 	"encoding/json"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -451,5 +454,162 @@ func TestPullVerified_SiblingsTopFailureIsClassified(t *testing.T) {
 				t.Fatalf("a pull result came back, so something was pulled: %+v", pr)
 			}
 		})
+	}
+}
+
+// A sibling folder that is a symlink inside the repository, retargeted by the
+// pull: the stack now reads the new target's compose file, so it is listed.
+// Placed only before the pull, it would be checked against the old target and
+// reported unchanged (review r2-88xz, SHOULD-A).
+func TestPullVerified_SiblingsRetargetedSymlinkFolderIsListed(t *testing.T) {
+	work, seed, root := pullFixture(t)
+	if err := os.Symlink("real1", filepath.Join(seed, "stackB")); err != nil {
+		t.Fatal(err)
+	}
+	commitUpstream4d60(t, seed, root, map[string]string{
+		"stackA/compose.yaml": composeOld4d60,
+		"real1/compose.yaml":  composeOld4d60,
+	})
+	mustGit(t, work, "pull", "-q", "--ff-only")
+	if err := os.Remove(filepath.Join(seed, "stackB")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("real2", filepath.Join(seed, "stackB")); err != nil {
+		t.Fatal(err)
+	}
+	commitUpstream4d60(t, seed, root, map[string]string{"real2/compose.yaml": composeNew4d60})
+
+	db := newTestDB(t)
+	for _, id := range []string{"A", "B"} {
+		dir := filepath.Join(work, "stack"+id)
+		if err := db.UpsertDirectory(models.Directory{Path: dir, Name: id}); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.UpsertStack(models.Stack{ID: id, Directory: dir, ComposeFile: "compose.yaml", ProjectName: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	svc := NewGitService(&config.Config{}, db)
+	svc.SetOperationLock(NewOperationLock())
+
+	ar, _ := svc.PullVerified(filepath.Join(work, "stackA"), false, nil)
+
+	if tgt, err := os.Readlink(filepath.Join(work, "stackB")); err != nil || tgt != "real2" {
+		t.Fatalf("fixture: stackB points at %q (%v) after the pull, want real2", tgt, err)
+	}
+	sib, _ := ar.Details["siblingStacksChanged"].([]SiblingStack)
+	if len(sib) != 1 || sib[0].StackID != "B" {
+		t.Fatalf("a sibling whose symlinked folder the pull retargeted was not listed: outcome=%s reason=%q siblingStacksChanged=%v failures=%v",
+			ar.Outcome, ar.Reason, ar.Details["siblingStacksChanged"], ar.Details["siblingCheckFailures"])
+	}
+}
+
+// pullLockPathProblems reports how PullVerified's locked path (the body of
+// its `if s.opLock != nil` block) departs from the shape that keeps the
+// redeploy set inside the locked set: it must take the lock with
+// lockRepoStacks and must not read ListStacksByDirectory, whose second read
+// can name a stack registered after the lock was taken (agent-os-88xz,
+// review r2-88xz SHOULD-B).
+func pullLockPathProblems(t *testing.T, src string) []string {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), "git.go", src, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lockBlock *ast.BlockStmt
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "PullVerified" || fn.Recv == nil || fn.Body == nil {
+			continue
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			ifs, ok := n.(*ast.IfStmt)
+			if !ok || lockBlock != nil {
+				return lockBlock == nil
+			}
+			cond, ok := ifs.Cond.(*ast.BinaryExpr)
+			if !ok || cond.Op != token.NEQ {
+				return true
+			}
+			sel, ok := cond.X.(*ast.SelectorExpr)
+			if nilID, isID := cond.Y.(*ast.Ident); ok && sel.Sel.Name == "opLock" && isID && nilID.Name == "nil" {
+				lockBlock = ifs.Body
+			}
+			return true
+		})
+	}
+	if lockBlock == nil {
+		return []string{"no `if s.opLock != nil` block in PullVerified"}
+	}
+	var problems []string
+	sawLock := false
+	ast.Inspect(lockBlock, func(n ast.Node) bool {
+		if sel, ok := n.(*ast.SelectorExpr); ok {
+			switch sel.Sel.Name {
+			case "ListStacksByDirectory":
+				problems = append(problems, "the locked path reads ListStacksByDirectory")
+			case "lockRepoStacks":
+				sawLock = true
+			}
+		}
+		return true
+	})
+	if !sawLock {
+		problems = append(problems, "the locked path does not take the lock with lockRepoStacks")
+	}
+	return problems
+}
+
+// The redeploy set on the locked path comes from the list that was locked.
+// Read through go:embed (packageSources), so a `go test -overlay` mutant of
+// git.go is what this sees. Blind spot: a second read through another helper
+// that wraps ListStacksByDirectory is not followed.
+func TestPullVerified_SiblingsRedeploySetFromLockedList(t *testing.T) {
+	src, err := packageSources.ReadFile("git.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := pullLockPathProblems(t, string(src)); len(p) != 0 {
+		t.Fatalf("PullVerified's locked path: %v; redeploy only stacks from lockRepoStacks' result, or a stack registered after the lock is restarted without it (agent-os-88xz)", p)
+	}
+}
+
+// The checker fires on the 36cfc98 shape (a second read under the lock) and
+// on a lock taken some other way, and stays quiet on the fixed shape.
+func TestPullVerified_SiblingsRedeploySetGuardSeesTheShapes(t *testing.T) {
+	const head = "package services\n"
+	cases := []struct {
+		name string
+		src  string
+		want int
+	}{
+		{"fixed", head + `func (s *GitService) PullVerified() {
+	if s.opLock != nil {
+		st, release, _ := s.lockRepoStacks("", "")
+		defer release()
+		_ = st
+	}
+	_, _ = s.db.ListStacksByDirectory("")
+}`, 0},
+		{"second read under the lock", head + `func (s *GitService) PullVerified() {
+	if s.opLock != nil {
+		_, release, _ := s.lockRepoStacks("", "")
+		defer release()
+		stacks, _ := s.db.ListStacksByDirectory("")
+		_ = stacks
+	}
+}`, 1},
+		{"lock taken some other way", head + `func (s *GitService) PullVerified() {
+	if s.opLock != nil {
+		release, _ := s.lockRepo("", "")
+		defer release()
+	}
+}`, 1},
+		{"no lock block", head + `func (s *GitService) PullVerified() {}`, 1},
+	}
+	for _, c := range cases {
+		if got := pullLockPathProblems(t, c.src); len(got) != c.want {
+			t.Errorf("%s: problems %v, want %d", c.name, got, c.want)
+		}
 	}
 }

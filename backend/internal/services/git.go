@@ -1069,13 +1069,18 @@ func (s *GitService) PullVerified(dirPath string, redeploy bool, docker *DockerS
 
 // siblingPlacement is every stack inside the repository top other than the
 // ones registered in dirPath (the exact match ListStacksByDirectory makes),
-// each placed as a repository-relative folder where it could be.
+// each with the repository-relative folder it had when placed, if any.
 type siblingPlacement struct {
-	placed []repoStack
-	// unplaced lie inside the top (or could not be checked) but have no
-	// repository-relative folder yet: a symlinked path whose folder does not
-	// exist resolves to nothing git could name.
-	unplaced []unplacedStack
+	stacks []placedSibling
+}
+
+type placedSibling struct {
+	models.Stack
+	// rel is the folder when placed; empty with err set when it could not
+	// be: a symlinked path whose folder does not exist resolves to nothing
+	// git could name.
+	rel string
+	err error
 }
 
 // placeSiblings places stacks against top. It runs before the pull when it
@@ -1090,7 +1095,7 @@ func placeSiblings(top, dirPath string, stacks []models.Stack) *siblingPlacement
 		in, err := pathutil.IsContained(top, st.Directory)
 		switch {
 		case err != nil:
-			p.unplaced = append(p.unplaced, unplacedStack{stack: st, err: fmt.Errorf("could not tell whether %s is inside the repository: %w", st.Directory, err)})
+			p.stacks = append(p.stacks, placedSibling{Stack: st, err: fmt.Errorf("could not tell whether %s is inside the repository: %w", st.Directory, err)})
 			continue
 		case !in:
 			continue
@@ -1098,42 +1103,61 @@ func placeSiblings(top, dirPath string, stacks []models.Stack) *siblingPlacement
 		rel, ok, err := repoRel(top, st.Directory)
 		switch {
 		case err != nil:
-			p.unplaced = append(p.unplaced, unplacedStack{stack: st, err: err})
+			p.stacks = append(p.stacks, placedSibling{Stack: st, err: err})
 		case !ok:
-			p.unplaced = append(p.unplaced, unplacedStack{stack: st, err: fmt.Errorf("the stack folder %s cannot be placed in the repository at %s", st.Directory, top)})
+			p.stacks = append(p.stacks, placedSibling{Stack: st, err: fmt.Errorf("the stack folder %s cannot be placed in the repository at %s", st.Directory, top)})
 		default:
-			p.placed = append(p.placed, repoStack{Stack: st, rel: rel})
+			p.stacks = append(p.stacks, placedSibling{Stack: st, rel: rel})
 		}
 	}
 	return p
 }
 
-// changed is the placed stacks whose compose or env file is among
-// changedFiles. An unplaced stack is placed again, since the pull may have
-// created its folder; one that still cannot be placed, or whose files cannot
-// be, is a failure, never "unchanged".
+// changed is the stacks whose compose or env file is among changedFiles.
+// Every stack is placed again after the pull and matched under both folders:
+// the pull may have deleted its folder (only the earlier placement names it),
+// created it, or retargeted a symlinked one (only the later placement names
+// the files it now reads). A stack placed neither time, or whose later
+// placement fails, or whose files cannot be placed, is a failure, never
+// "unchanged".
 func (p *siblingPlacement) changed(top string, changedFiles []string) ([]SiblingStack, []RedeployFailure) {
-	placed := p.placed
+	out := []SiblingStack{}
 	var failures []RedeployFailure
-	for _, u := range p.unplaced {
-		rel, ok, err := repoRel(top, u.stack.Directory)
+	for _, st := range p.stacks {
+		var rels []string
+		if st.err == nil {
+			rels = append(rels, st.rel)
+		}
+		after, ok, err := repoRel(top, st.Directory)
 		switch {
 		case err != nil:
-			failures = append(failures, RedeployFailure{StackID: u.stack.ID, Reason: fmt.Sprintf("%v; after the pull: %v", u.err, err)})
-		case !ok:
-			failures = append(failures, RedeployFailure{StackID: u.stack.ID, Reason: u.err.Error()})
-		default:
-			placed = append(placed, repoStack{Stack: u.stack, rel: rel})
+			reason := fmt.Sprintf("after the pull: %v", err)
+			if st.err != nil {
+				reason = fmt.Sprintf("%v; %s", st.err, reason)
+			}
+			failures = append(failures, RedeployFailure{StackID: st.ID, Reason: reason})
+			continue
+		case ok && after != st.rel:
+			rels = append(rels, after)
 		}
-	}
-	out := []SiblingStack{}
-	for _, st := range placed {
-		ok, err := relFilesChanged(st.rel, st.Stack, changedFiles)
-		if err != nil {
-			failures = append(failures, RedeployFailure{StackID: st.ID, Reason: err.Error()})
+		if len(rels) == 0 {
+			failures = append(failures, RedeployFailure{StackID: st.ID, Reason: st.err.Error()})
 			continue
 		}
-		if ok {
+		hit := false
+		var fileErr error
+		for _, rel := range rels {
+			ok, err := relFilesChanged(rel, st.Stack, changedFiles)
+			if err != nil {
+				fileErr = err
+				break
+			}
+			hit = hit || ok
+		}
+		switch {
+		case fileErr != nil:
+			failures = append(failures, RedeployFailure{StackID: st.ID, Reason: fileErr.Error()})
+		case hit:
 			out = append(out, SiblingStack{StackID: st.ID, Name: st.ProjectName})
 		}
 	}
