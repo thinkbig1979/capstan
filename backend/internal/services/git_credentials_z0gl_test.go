@@ -356,3 +356,54 @@ func TestZ0gl_PullPrecheck(t *testing.T) {
 		require.NoError(t, err)
 	})
 }
+
+// SHOULD-1 of review r1-z0gl: accept-new only warns when it cannot write
+// known_hosts and connects anyway, so with an unwritable file every
+// connection is a first use and a changed host key is accepted. A key then
+// fails closed through sshErr. Root writes regardless of mode, so the
+// read-only arms need a non-root run.
+func TestZ0gl_KnownHostsMustBeWritable(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes regardless of mode: the read-only arms cannot be built")
+	}
+	svc, db, cfg := z0glService(t)
+	dir := z0glDir(t, db, "ssh", "/dir/key")
+	for _, tc := range []struct {
+		name    string
+		prep    func(t *testing.T, dd string)
+		refused bool
+	}{
+		{"writable dir, no file yet", func(t *testing.T, dd string) {}, false},
+		{"writable file", func(t *testing.T, dd string) {
+			require.NoError(t, os.WriteFile(filepath.Join(dd, "known_hosts"), nil, 0o600))
+		}, false},
+		{"read-only dir, no file", func(t *testing.T, dd string) {
+			require.NoError(t, os.Chmod(dd, 0o500))
+		}, true},
+		{"read-only file", func(t *testing.T, dd string) {
+			require.NoError(t, os.WriteFile(filepath.Join(dd, "known_hosts"), nil, 0o400))
+		}, true},
+		{"known_hosts is a directory", func(t *testing.T, dd string) {
+			require.NoError(t, os.Mkdir(filepath.Join(dd, "known_hosts"), 0o700))
+		}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dd := filepath.Join(t.TempDir(), "data")
+			require.NoError(t, os.Mkdir(dd, 0o700))
+			t.Cleanup(func() { require.NoError(t, os.Chmod(dd, 0o700)) })
+			tc.prep(t, dd)
+			cfg.DataDir = dd
+			c := svc.gitCredentials(dir)
+			cmd, _ := svc.gitCmdWithCreds(context.Background(), "/repo", c, "pull")
+			if !tc.refused {
+				require.NoError(t, c.sshErr)
+				assert.Equal(t, gitSSHCommand, lastEnv(cmd.Env, "GIT_SSH_COMMAND"))
+				return
+			}
+			require.Error(t, c.sshErr)
+			assert.Contains(t, c.sshErr.Error(), "host keys cannot be recorded")
+			assert.Equal(t, gitSSHRefused, lastEnv(cmd.Env, "GIT_SSH_COMMAND"), "an ssh child must fail, not connect")
+			assert.Equal(t, c.sshErr, c.sshReady(), "the network pre-check returns it")
+		})
+	}
+}

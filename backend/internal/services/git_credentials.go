@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"unicode"
 
 	"github.com/thinkbig1979/capstan/backend/internal/config"
@@ -539,7 +540,44 @@ func (s *GitService) useSSHKey(c *gitCreds, key, source string) {
 	c.knownHosts = filepath.Join(abs, "known_hosts")
 	if problem := sshPathProblem(c.knownHosts); problem != "" {
 		c.sshErr = fmt.Errorf("the SSH known_hosts path %q %s", c.knownHosts, problem)
+		return
 	}
+	if err := knownHostsWritable(c.knownHosts); err != nil {
+		c.sshErr = err
+	}
+}
+
+// access(2) mode bits; package syscall does not name them.
+const (
+	accessX = 0x1
+	accessW = 0x2
+)
+
+// knownHostsWritable refuses a known_hosts ssh could not record a host in.
+// accept-new only warns when the write fails and connects anyway, so every
+// connection is a first use and a CHANGED host key is accepted (OBSERVED,
+// review r1-z0gl: read-only data dir and 0400 file both connected to a new
+// host key). No ssh option turns that warning into a failure. The data
+// directory is deployment state, so this is a plain error (a server fault),
+// not a request-level refusal; the message names the fix for the operator.
+func knownHostsWritable(kh string) error {
+	fi, err := os.Stat(kh)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		dir := filepath.Dir(kh)
+		if err := syscall.Access(dir, accessW|accessX); err != nil {
+			return fmt.Errorf("SSH host keys cannot be recorded: the data directory %q is not writable by the user Capstan runs as (%w), so a changed host key would go unnoticed; make it writable by that user (PUID)", dir, err)
+		}
+		return nil
+	case err != nil:
+		return fmt.Errorf("cannot check the SSH known_hosts file %q: %w", kh, err)
+	case !fi.Mode().IsRegular():
+		return fmt.Errorf("SSH host keys cannot be recorded: %q is not a regular file", kh)
+	}
+	if err := syscall.Access(kh, accessW); err != nil {
+		return fmt.Errorf("SSH host keys cannot be recorded: %q is not writable by the user Capstan runs as (%w), so a changed host key would go unnoticed; chown it to that user (PUID) and chmod 600", kh, err)
+	}
+	return nil
 }
 
 // sshPathProblem says why ssh would not read p as the literal path, or "".

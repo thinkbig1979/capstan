@@ -286,3 +286,59 @@ func TestZ0gl_SSH_PushAndPullThroughTheRoutes(t *testing.T) {
 	requireRefusal(t, ar, http.StatusConflict, models.ErrGitSSHKeyUnusable)
 	assert.Contains(t, ar.Err.Error(), "chmod 600")
 }
+
+// TestZ0gl_SSH_UnwritableKnownHostsNeverAcceptsAChangedKey is the review's
+// probe through the real resolver: with a known_hosts ssh cannot write, a
+// changed host key must not connect. The writable arm is the positive
+// control on the same instrument: first contact connects, the changed key
+// is refused.
+func TestZ0gl_SSH_UnwritableKnownHostsNeverAcceptsAChangedKey(t *testing.T) {
+	requireSSHTools(t)
+	if os.Geteuid() == 0 {
+		t.Skip("root writes regardless of mode: the read-only arms cannot be built")
+	}
+	keyPath, _ := z0glSSHPaths(t)
+	d := newTestSSHD(t, keyPath+".pub")
+	repo := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, filepath.Dir(repo), "init", "-q", "--bare", repo)
+	svc, db, cfg := z0glService(t)
+	dir := z0glDir(t, db, "ssh", keyPath)
+
+	for _, mode := range []string{"writable", "ro-dir", "ro-file"} {
+		t.Run(mode, func(t *testing.T) {
+			dd := filepath.Join(t.TempDir(), "data")
+			require.NoError(t, os.Mkdir(dd, 0o700))
+			t.Cleanup(func() { require.NoError(t, os.Chmod(dd, 0o700)) })
+			switch mode {
+			case "ro-dir":
+				require.NoError(t, os.Chmod(dd, 0o500))
+			case "ro-file":
+				require.NoError(t, os.WriteFile(filepath.Join(dd, "known_hosts"), nil, 0o400))
+			}
+			cfg.DataDir = dd
+			c := svc.gitCredentials(dir)
+
+			d.start(t, d.hostKey)
+			_, first := svc.gitCommandWithCreds(t.TempDir(), c, "ls-remote", d.url(t, repo))
+			d.stop(t)
+			other := filepath.Join(d.dir, "host_"+mode)
+			sshKeygen(t, other)
+			d.start(t, other)
+			_, changed := svc.gitCommandWithCreds(t.TempDir(), c, "ls-remote", d.url(t, repo))
+			d.stop(t)
+
+			assert.Error(t, changed, "a CHANGED host key connected")
+			if mode == "writable" {
+				assert.NoError(t, first, "first contact must be accepted (accept-new)")
+				if changed != nil {
+					assert.Contains(t, changed.Error(), "Host key verification failed")
+				}
+				return
+			}
+			assert.Error(t, first, "an unwritable known_hosts must refuse before any trust is recorded")
+			err := c.sshReady()
+			require.Error(t, err, "the network pre-check must refuse")
+			assert.Contains(t, err.Error(), "host keys cannot be recorded")
+		})
+	}
+}

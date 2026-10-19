@@ -139,7 +139,8 @@ auth is not set to its own SSH key or HTTPS.
   push over SSH is refused. Any other path that is missing is refused.
 - **Capstan trusts a server's host key the first time it connects** and keeps it in
   `known_hosts` in its data directory. If the server's host key later changes, git
-  over SSH to it is refused.
+  over SSH to it is refused. If Capstan cannot write that file, git over SSH is
+  refused too, since a changed host key would otherwise go unnoticed.
 
 ### Personal access token
 
