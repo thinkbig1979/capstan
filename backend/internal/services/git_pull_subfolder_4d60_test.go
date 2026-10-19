@@ -356,4 +356,36 @@ func TestPullRedeploy_TopLevelFaultFailsClosed_4d60(t *testing.T) {
 		t.Fatalf("a failed repository-top lookup did not fail closed: outcome=%s reason=%q failed=%v",
 			got.ar.Outcome, got.ar.Reason, got.failed)
 	}
+	// Without the guard repoRel("", dir) fails too and also lands in
+	// failedRedeploys, so the outcome alone cannot tell the two apart: the
+	// guard's own message can.
+	if r := got.reason["A"]; !strings.Contains(r, "could not find the repository top") {
+		t.Fatalf("failure reason %q does not come from the repository-top guard", r)
+	}
+}
+
+// A stack file that cannot be placed under the stack folder fails the stack
+// (fail closed) instead of being skipped: skipping reads as "nothing changed".
+// Unreachable through today's producers (scanner and stack_crud store bare
+// names), so this is a unit test on stackFilesChanged.
+func TestStackFilesChanged_UnplaceableFileFailsClosed_4d60(t *testing.T) {
+	top := t.TempDir()
+	dir := filepath.Join(top, "stackA")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	changed := []string{"stackA/compose.yaml"}
+	for name, st := range map[string]models.Stack{
+		"absolute compose": {Directory: dir, ComposeFile: "/etc/compose.yaml"},
+		"escaping env":     {Directory: dir, ComposeFile: "compose.yaml", EnvFile: "../../.env"},
+	} {
+		if _, err := stackFilesChanged(top, st, changed); err == nil {
+			t.Errorf("%s: want an error, got none", name)
+		}
+	}
+	// Same instrument, placeable names: no error, and the match is found.
+	ok, err := stackFilesChanged(top, models.Stack{Directory: dir, ComposeFile: "compose.yaml", EnvFile: ".env"}, changed)
+	if err != nil || !ok {
+		t.Errorf("placeable names: changed=%v err=%v, want true,nil", ok, err)
+	}
 }

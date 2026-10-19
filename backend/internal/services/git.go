@@ -638,7 +638,7 @@ func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
 			// the loose object for ORIG_HEAD: `outcome = "success" (reason
 			// "pulled new commits", changedFiles [])` on a ref that had moved.
 			//
-			// err is safe to surface: gitCommandWithCreds redacts the token out
+			// err is safe to surface: gitRun redacts the token out
 			// of the git output it wraps.
 			diffError = err.Error()
 			slog.Error("Git diff failed after pull; changed files unknown, redeploy will be skipped",
@@ -988,9 +988,13 @@ func stackFilesChanged(top string, stack models.Stack, changedFiles []string) (b
 		if name == "" {
 			continue
 		}
-		if p, ok := repoJoin(rel, name); ok {
-			want[p] = true
+		p, ok := repoJoin(rel, name)
+		if !ok {
+			// Fail closed like an unplaceable folder: skipping it would report
+			// "nothing to redeploy" for a file that was never compared.
+			return false, fmt.Errorf("the stack file %q cannot be placed under %s in the repository", name, stack.Directory)
 		}
+		want[p] = true
 	}
 	for _, f := range changedFiles {
 		if want[f] {
