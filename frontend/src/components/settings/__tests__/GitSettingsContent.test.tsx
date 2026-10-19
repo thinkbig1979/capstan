@@ -398,4 +398,10 @@ describe('GitSettingsContent — field help (agent-os-pkq9)', () => {
     renderPanel()
     await expectHintOpensHelp(user, 'Personal access token', 'git.https-token')
   })
+
+  it('git.author: the commit author hint opens help at its topic', async () => {
+    const user = userEvent.setup()
+    renderPanel()
+    await expectHintOpensHelp(user, 'Commit author', 'git.author')
+  })
 })

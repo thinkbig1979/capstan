@@ -152,8 +152,8 @@ The token for git over HTTPS, paired with the username above (default `git`).
 ### Allow commit and push
 
 Lets Capstan commit the files you choose in a stack's folder and push the branch to
-its upstream. It is off by default, so an existing install stays read-only until you
-turn it on.
+its upstream. It is off by default, so Capstan cannot commit or push from a folder
+until you turn it on.
 
 **Common tasks**
 
@@ -165,7 +165,9 @@ turn it on.
 **Gotchas**
 
 - **It is per folder.** Each stack folder has its own switch.
-- **SSH remotes are not supported yet.** Use an HTTPS remote with a token.
+- **Only HTTPS remotes are supported (plain HTTP and local paths also work).** SSH is
+  not supported yet, and `git://` and other transports are refused. Use an HTTPS
+  remote with a token.
 - **Capstan never force-pushes or sets an upstream.** If the remote has newer commits,
   pull first.
 

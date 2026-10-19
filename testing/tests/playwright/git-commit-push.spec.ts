@@ -11,7 +11,9 @@
  * Prerequisites (same backend as backup-flow.spec.ts):
  *   - App on CAPSTAN_BASE_URL, backend on CAPSTAN_API_URL.
  *   - AUTH_DISABLED=true (backend and this process).
- *   - git on PATH, and a backend that can write to its stacks directory.
+ *   - git on PATH, and a backend that shares this process's filesystem (not the dev
+ *     container): the stack folder is under its stacks directory and the bare remote
+ *     is in this process's temp dir, and both must be visible to the backend.
  * No Docker daemon: the stack is never started.
  *
  * FIXTURE, built here rather than seeded by the workflow. CI does not export
@@ -20,11 +22,12 @@
  * dir, so the folder is itself the repository (the push switch is per stack
  * folder, backend/internal/services/git_commit.go). A rescan registers it.
  *
- * LEAVES THE SHARED FIXTURE AS IT FOUND IT: the stack, its folder and the temp
- * dir are removed in afterAll. The author settings are put back when they had a
- * value; PUT /settings/git reads "" as "no change", so an author that was unset
- * cannot be cleared again. CI starts from a fresh DATA_DIR, where nothing else
- * reads it.
+ * CLEANUP, in afterAll: DELETE the stack (the clone's .git counts as collateral, so
+ * the request carries confirmCollateral=true and its status is asserted), remove
+ * the folder and the temp dir, rescan, then assert the stack row is gone. The author
+ * settings are put back when they had a value. PUT /settings/git reads "" as "no
+ * change", so an author that was unset STAYS set (afterAll warns). CI starts from a
+ * fresh DATA_DIR, where nothing else reads it.
  */
 
 import { test, expect, APIRequestContext } from 'playwright/test'
@@ -102,16 +105,31 @@ function git(cwd: string, ...args: string[]): string {
 const remote = (...args: string[]): string =>
   execFileSync('git', [`--git-dir=${bareDir}`, ...args], { encoding: 'utf8' }).trim()
 
+/**
+ * Remove the stack (when it exists), its folder and the temp dir, then assert the
+ * row is gone. No row is fine: it is the normal state before the first run.
+ */
 async function removeFixture(request: APIRequestContext): Promise<void> {
   const row = findFixtureStack(await listStacks(request))
+  let deleteStatus: number | null = null
   if (row) {
-    await request.delete(`${API_URL}/api/v1/stacks/${encodeURIComponent(row.id)}?confirm=true`, {
-      headers: mutationHeaders(),
-    })
+    // .git is collateral to the delete, which answers 428 STACK_DELETE_COLLATERAL
+    // without confirmCollateral=true (backend/internal/handlers/stack_crud.go).
+    const resp = await request.delete(
+      `${API_URL}/api/v1/stacks/${encodeURIComponent(row.id)}?confirm=true&confirmCollateral=true`,
+      { headers: mutationHeaders() },
+    )
+    deleteStatus = resp.status()
   }
   if (stackFolder) rmSync(stackFolder, { recursive: true, force: true })
   if (tempRoot) rmSync(tempRoot, { recursive: true, force: true })
   await rescan(request)
+
+  if (deleteStatus !== null) {
+    expect(deleteStatus, `DELETE /stacks/${row!.id} returned ${deleteStatus}`).toBeLessThan(300)
+  }
+  // A check, not a hope: the rescan prune would hide a refused delete.
+  expect(findFixtureStack(await listStacks(request)), 'fixture stack row still listed after cleanup').toBeUndefined()
 }
 
 // ─── Suite ───────────────────────────────────────────────────────────────────
@@ -177,6 +195,10 @@ test.describe('git: commit and push from the UI', () => {
         headers: mutationHeaders(),
         data: { authorName: priorAuthor.name, authorEmail: priorAuthor.email },
       })
+    } else {
+      console.warn(
+        `git-commit-push.spec.ts: the commit author was unset and cannot be cleared through the API; it is still "${AUTHOR_NAME} <${AUTHOR_EMAIL}>". Clear it in Settings > Git if this is not a throwaway DATA_DIR.`,
+      )
     }
   })
 
@@ -211,7 +233,8 @@ test.describe('git: commit and push from the UI', () => {
     await dialog.getByLabel('Commit message').fill(COMMIT_MESSAGE)
     await dialog.getByRole('button', { name: 'Commit and push', exact: true }).click()
 
-    await expect(dialog.getByRole('status')).toContainText('Commit ')
+    // "Commit <hash>: committed and pushed <branch> to <remote>" (CommitPushDialog outcomeOfResult).
+    await expect(dialog.getByRole('status')).toContainText('committed and pushed')
 
     // Read the bare remote: message, author, and the file's content.
     await expect.poll(() => remote('log', '-1', '--format=%s', 'main')).toBe(COMMIT_MESSAGE)
