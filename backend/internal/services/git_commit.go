@@ -634,11 +634,14 @@ type envRule struct {
 	// are unknown. Every change but the compose files is then flagged.
 	composeUnreadable bool
 	compose           map[string]bool
-	// head is the history view's rule over HEAD (agent-os-odjs): a file a
-	// compose file named at HEAD stays an env file when today's compose file
-	// is deleted, renamed or no longer names it. nil on an unborn branch.
-	head *historyEnvRule
-	top  string
+	// git is the history view's rule over HEAD (agent-os-odjs) and the index
+	// (agent-os-7l76): a file a compose file named at HEAD or names in the
+	// index stays an env file when today's compose file is deleted, renamed
+	// or no longer names it, and a compose file staged for a stack not yet
+	// registered names its files too. nil when it could not be built, and
+	// composeUnreadable is then set.
+	git *historyEnvRule
+	top string
 }
 
 // matches takes rel, a repository-root-relative slash path as git status
@@ -647,7 +650,7 @@ func (r envRule) matches(rel string) bool {
 	abs := filepath.Join(r.top, filepath.FromSlash(rel))
 	switch {
 	case isEnvName(filepath.Base(abs)), r.named[abs], resolvesInto(abs, r.targets),
-		r.head != nil && r.head.hides(rel):
+		r.git != nil && r.git.hides(rel):
 		return true
 	case r.composeUnreadable:
 		return !r.compose[abs]
@@ -726,27 +729,29 @@ func (s *GitService) envRule(dirPath, top string, cred gitCreds) (envRule, error
 	}
 	r.targets = targets
 
-	// The union with HEAD. A fault reading HEAD (a missing or corrupt object)
-	// hides every change but the compose files rather than failing the
-	// dialog. An unborn branch (exit 1) has no HEAD to name anything.
+	// The union with HEAD and the index. A fault reading either (a missing
+	// or corrupt object, a git too old for ls-files --format) hides every
+	// change but the compose files rather than failing the dialog. An unborn
+	// branch (exit 1) has no HEAD to name anything, but its index can.
+	var trees []string
 	_, err = s.gitCommandWithCreds(top, cred, "rev-parse", "-q", "--verify", "HEAD^{commit}")
 	switch {
-	case gitExitCode(err) == 1:
-		return r, nil
-	case err != nil:
+	case err == nil:
+		trees = []string{"HEAD"}
+	case gitExitCode(err) != 1:
 		slog.Warn("Treating every changed file of the folder as an env file: HEAD could not be read",
 			"path", top, "error", err)
 		r.composeUnreadable = true
 		return r, nil
 	}
-	head, err := s.historyEnvRule(dirPath, top, false, cred, []string{"HEAD"}, "commit dialog")
+	git, err := s.historyEnvRule(dirPath, top, false, cred, trees, true, "commit dialog")
 	if err != nil {
-		slog.Warn("Treating every changed file of the folder as an env file: the env files named at HEAD are unknown",
+		slog.Warn("Treating every changed file of the folder as an env file: the env files named at HEAD or in the index are unknown",
 			"path", top, "error", err)
 		r.composeUnreadable = true
 		return r, nil
 	}
-	r.head = &head
+	r.git = &git
 	return r, nil
 }
 

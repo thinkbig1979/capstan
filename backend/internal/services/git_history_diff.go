@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"path"
 	"path/filepath"
 	"sort"
@@ -97,7 +98,7 @@ func (s *GitService) historyDiff(dirPath string, cred gitCreds, oid string, pare
 	if err != nil {
 		return nil, err
 	}
-	rule, err := s.historyEnvRule(dirPath, top, bare, cred, append([]string{oid}, parents...), "history diff")
+	rule, err := s.historyEnvRule(dirPath, top, bare, cred, append([]string{oid}, parents...), false, "history diff")
 	if err != nil {
 		return nil, err
 	}
@@ -233,7 +234,8 @@ type treeEntry struct {
 // since, or a compose file renamed since, still named its env files then.
 var composeNames = []string{"compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml"}
 
-// historyTree is one tree the rule reads (the commit or a parent).
+// historyTree is one tree the rule reads (the commit, a parent, or a stage of
+// the index).
 type historyTree struct {
 	name    string
 	listing map[string]treeEntry
@@ -370,10 +372,13 @@ func (h *historyRuleReader) place(dir, entry string) (string, bool, error) {
 }
 
 // historyEnvRule builds the rule from every stack inside top and from trees
-// (the commit and its parents). A git or database failure is an error: the
-// caller refuses rather than show a diff it could not check. A nil database
-// is one too. view names the caller in log lines.
-func (s *GitService) historyEnvRule(dirPath, top string, bare bool, cred gitCreds, trees []string, view string) (historyEnvRule, error) {
+// (the commit and its parents). With index it also reads the index as trees,
+// and today's disk copy of every compose-named file the index tracks,
+// registered or not (agent-os-7l76): the commit dialog commits the index. A
+// git or database failure is an error: the caller refuses rather than show a
+// diff it could not check. A nil database is one too. view names the caller
+// in log lines.
+func (s *GitService) historyEnvRule(dirPath, top string, bare bool, cred gitCreds, trees []string, index bool, view string) (historyEnvRule, error) {
 	r := historyEnvRule{named: map[string]bool{}, targets: map[string]bool{}, compose: map[string]bool{}}
 	if s.db == nil {
 		return r, fmt.Errorf("cannot decide which files are env files: no database")
@@ -396,6 +401,13 @@ func (s *GitService) historyEnvRule(dirPath, top string, bare bool, cred gitCred
 		}
 		tl = append(tl, historyTree{name: t, listing: l})
 	}
+	var il []historyTree
+	if index {
+		if il, err = s.lsIndex(top, cred); err != nil {
+			return r, err
+		}
+		tl = append(tl, il...)
+	}
 
 	names := map[string]bool{}
 	for _, n := range composeNames {
@@ -406,6 +418,28 @@ func (s *GitService) historyEnvRule(dirPath, top string, bare bool, cred gitCred
 	// every history diff of every repository.
 	for _, u := range unplaced {
 		unknown("a stack folder could not be placed", "stack", u.stack.ProjectName, "error", u.err)
+	}
+	// diskNamed reads composeRel from today's disk.
+	diskNamed := func(composeRel string) error {
+		named, files, err := composeSecretFiles(diskComposeSource(top), filepath.Join(top, filepath.FromSlash(composeRel)))
+		if err != nil {
+			unknown("a compose file's env_file entries are unknown", "path", composeRel, "error", err)
+			return nil
+		}
+		for i, abs := range append(named, files...) {
+			rel, ok, err := repoRel(top, abs)
+			if err != nil {
+				return err
+			}
+			switch {
+			case !ok:
+			case i < len(named):
+				r.named[rel] = true
+			default:
+				r.compose[rel] = true
+			}
+		}
+		return nil
 	}
 	var composeRels []string
 	for _, rs := range stacks {
@@ -435,22 +469,28 @@ func (s *GitService) historyEnvRule(dirPath, top string, bare bool, cred gitCred
 		if bare {
 			continue
 		}
-		named, files, err := composeSecretFiles(diskComposeSource(top), filepath.Join(top, filepath.FromSlash(composeRel)))
-		if err != nil {
-			unknown("a compose file's env_file entries are unknown", "path", composeRel, "error", err)
-			continue
+		if err := diskNamed(composeRel); err != nil {
+			return r, err
 		}
-		for i, abs := range append(named, files...) {
-			rel, ok, err := repoRel(top, abs)
-			if err != nil {
-				return r, err
+	}
+	// A tracked compose-named file edited on disk names what the next
+	// commit's compose file may name, whether or not a stack is registered
+	// for it. il[0] is the index's stage 0.
+	if index && !bare {
+		registered := map[string]bool{}
+		for _, p := range composeRels {
+			registered[p] = true
+		}
+		var rels []string
+		for p, e := range il[0].listing {
+			if names[path.Base(p)] && e.mode != "160000" && !registered[p] {
+				rels = append(rels, p)
 			}
-			switch {
-			case !ok:
-			case i < len(named):
-				r.named[rel] = true
-			default:
-				r.compose[rel] = true
+		}
+		sort.Strings(rels)
+		for _, p := range rels {
+			if err := diskNamed(p); err != nil {
+				return r, err
 			}
 		}
 	}
@@ -528,6 +568,59 @@ func (s *GitService) historyEnvRule(dirPath, top string, bare bool, cred gitCred
 		}
 	}
 	return r, nil
+}
+
+// lsIndexFormat is `ls-files -s` with each blob's size, laid out as
+// `ls-tree -l` lays out a tree: mode, object, size ("-" for a gitlink),
+// stage, then a tab and the path. --format needs git 2.38; an older git
+// refuses the option, and the caller fails closed on that error.
+const lsIndexFormat = "--format=%(objectmode) %(objectname) %(objectsize) %(stage)%x09%(path)"
+
+// lsIndex lists the index as lsTree lists a tree, run from top so every path
+// is repository-relative. A conflicted path has an entry per stage, so there
+// is one listing per stage present: the stage-0 entries plus that stage's.
+// The first is stage 0.
+func (s *GitService) lsIndex(top string, cred gitCreds) ([]historyTree, error) {
+	out, _, err := s.gitRun(top, cred, noLazyFetchEnv, "-c", "core.fsmonitor=false", "ls-files", "-z", lsIndexFormat)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list the index: %w", err)
+	}
+	stages := [4]map[string]treeEntry{{}}
+	for _, rec := range strings.Split(out, "\x00") {
+		if rec == "" {
+			continue
+		}
+		meta, p, ok := strings.Cut(rec, "\t")
+		f := strings.Fields(meta)
+		if !ok || len(f) != 4 {
+			return nil, fmt.Errorf("unexpected git ls-files record %q", rec)
+		}
+		stage, err := strconv.Atoi(f[3])
+		if err != nil {
+			return nil, fmt.Errorf("unexpected git ls-files stage in %q: %w", rec, err)
+		}
+		if stage < 0 || stage > 3 {
+			return nil, fmt.Errorf("unexpected git ls-files stage in %q", rec)
+		}
+		size, err := strconv.ParseInt(f[2], 10, 64)
+		if err != nil {
+			size = -1 // "-": not a blob
+		}
+		if stages[stage] == nil {
+			stages[stage] = map[string]treeEntry{}
+		}
+		stages[stage][p] = treeEntry{mode: f[0], oid: f[1], size: size}
+	}
+	tl := []historyTree{{name: "the index", listing: stages[0]}}
+	for i := 1; i < len(stages); i++ {
+		if stages[i] == nil {
+			continue
+		}
+		l := maps.Clone(stages[0])
+		maps.Copy(l, stages[i])
+		tl = append(tl, historyTree{name: fmt.Sprintf("the index (stage %d)", i), listing: l})
+	}
+	return tl, nil
 }
 
 // repoStack is a registered stack whose folder lies inside the repository,
