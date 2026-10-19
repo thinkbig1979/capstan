@@ -380,7 +380,7 @@ func TestZ0gl_KnownHostsMustBeWritable(t *testing.T) {
 			require.NoError(t, os.WriteFile(filepath.Join(dd, "known_hosts"), nil, 0o600))
 		}, false},
 		{"read-only dir, no file", func(t *testing.T, dd string) {
-			require.NoError(t, os.Chmod(dd, 0o500))
+			require.NoError(t, os.Chmod(dd, 0o500)) //nolint:gosec // test: directory modes are the fault under test
 		}, true},
 		{"read-only file", func(t *testing.T, dd string) {
 			require.NoError(t, os.WriteFile(filepath.Join(dd, "known_hosts"), nil, 0o400))
@@ -392,7 +392,7 @@ func TestZ0gl_KnownHostsMustBeWritable(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dd := filepath.Join(t.TempDir(), "data")
 			require.NoError(t, os.Mkdir(dd, 0o700))
-			t.Cleanup(func() { require.NoError(t, os.Chmod(dd, 0o700)) })
+			t.Cleanup(func() { require.NoError(t, os.Chmod(dd, 0o700)) }) //nolint:gosec // test: directory modes are the fault under test
 			tc.prep(t, dd)
 			cfg.DataDir = dd
 			c := svc.gitCredentials(dir)

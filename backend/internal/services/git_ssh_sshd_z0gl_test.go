@@ -308,10 +308,10 @@ func TestZ0gl_SSH_UnwritableKnownHostsNeverAcceptsAChangedKey(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			dd := filepath.Join(t.TempDir(), "data")
 			require.NoError(t, os.Mkdir(dd, 0o700))
-			t.Cleanup(func() { require.NoError(t, os.Chmod(dd, 0o700)) })
+			t.Cleanup(func() { require.NoError(t, os.Chmod(dd, 0o700)) }) //nolint:gosec // test: directory modes are the fault under test
 			switch mode {
 			case "ro-dir":
-				require.NoError(t, os.Chmod(dd, 0o500))
+				require.NoError(t, os.Chmod(dd, 0o500)) //nolint:gosec // test: directory modes are the fault under test
 			case "ro-file":
 				require.NoError(t, os.WriteFile(filepath.Join(dd, "known_hosts"), nil, 0o400))
 			}
