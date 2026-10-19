@@ -1,6 +1,7 @@
 package services
 
 import (
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -132,4 +133,42 @@ func TestGetChanges_EnvFileScope_UnplaceableStack(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, d.Hidden, "control: the compose file's diff is still served")
 	assert.Contains(t, d.Diff, "image: z")
+}
+
+// A stacks root reached through a symlink: the stacks are registered and
+// requested by the link path, while git answers the real top. Each stack is
+// placed with its symlinks resolved, or its relative entries name nothing
+// git lists.
+func TestGetChanges_EnvFileScope_SymlinkedStacksRoot(t *testing.T) {
+	f := newEnvScopeFix(t)
+	link := filepath.Join(t.TempDir(), "stacks")
+	require.NoError(t, os.Symlink(filepath.Dir(f.top), link))
+	ltop := filepath.Join(link, filepath.Base(f.top))
+	lapp := filepath.Join(ltop, "app")
+	f.registerStack(t, lapp, "s-app", "app")
+	f.registerStack(t, filepath.Join(ltop, "other"), "s-other", "other")
+
+	assertEnvScope(t, f, lapp, []string{"app/sub/secrets.conf", "app/b.conf"}, []string{"app/sub/plain.txt"})
+	assertEnvScope(t, f, filepath.Join(lapp, "sub"), []string{"app/sub/secrets.conf"}, []string{"app/sub/plain.txt"})
+	assertEnvScope(t, f, ltop, []string{"app/sub/secrets.conf", "app/b.conf"}, []string{"app/sub/plain.txt"})
+}
+
+// Committing reads the same rule: a compose-named file needs confirmEnv from
+// a subfolder and from the repository top too.
+func TestCommitVerified_EnvFileScope_ConfirmEnv(t *testing.T) {
+	for _, sub := range []string{"sub", ".."} {
+		t.Run(sub, func(t *testing.T) {
+			f := newEnvScopeFix(t)
+			dir := filepath.Clean(filepath.Join(f.dir, sub))
+			require.NoError(t, f.db.UpsertDirectory(models.Directory{Path: dir, Name: filepath.Base(dir)}))
+			require.NoError(t, f.db.SetDirectoryPushEnabled(dir, true))
+			before := f.head(t)
+			ar, _ := f.svc.CommitVerified(dir, CommitRequest{Message: "m", Files: []string{"app/sub/secrets.conf"}})
+			requireRefusal(t, ar, http.StatusBadRequest, models.ErrGitEnvConfirmRequired)
+			require.Equal(t, before, f.head(t), "nothing is committed without confirmEnv")
+
+			ar, _ = f.svc.CommitVerified(dir, CommitRequest{Message: "m", Files: []string{"app/sub/plain.txt"}})
+			require.NotEqual(t, before, f.head(t), "control: plain.txt commits without confirm (%v)", ar)
+		})
+	}
 }
