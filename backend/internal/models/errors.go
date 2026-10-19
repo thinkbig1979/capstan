@@ -100,6 +100,11 @@ const (
 	// repository, which has none. 409: the server is fine, the repository is
 	// in a state that refuses the request (agent-os-00zg).
 	ErrGitBareRepo = "GIT_BARE_REPO"
+	// ErrStackDeleteNestedStacks refuses a stack delete that would remove its
+	// whole folder while other registered stacks live in subfolders of it:
+	// their files would go and their rows would stay (agent-os-0s68). 409: the
+	// request is fine, the folder's contents refuse it until those go first.
+	ErrStackDeleteNestedStacks = "STACK_DELETE_NESTED_STACKS"
 
 	// The commit and push refusals (agent-os-k81p.2). Every one is a 4xx or a
 	// 502 and none is a 401: the frontend logs the user out on a 401 whose
