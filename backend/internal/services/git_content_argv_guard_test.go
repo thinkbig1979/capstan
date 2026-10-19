@@ -54,6 +54,9 @@ var contentSites = map[string][]string{
 	// A blob's raw bytes (past compose files and link targets), parsed here
 	// and never sent.
 	"catBlob": {`-c core.fsmonitor=false cat-file blob`},
+	// A staged blob's size, a number, read before catBlob so maxComposeBytes
+	// bounds an index entry (agent-os-7l76).
+	"blobSize": {`-c core.fsmonitor=false cat-file -s`},
 }
 
 // TestGitContentArgvCensus keeps every git child that can emit file contents

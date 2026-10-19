@@ -278,7 +278,7 @@ func TestOdjsCommitDialogPlainFileStaysVisibleWithHeadRule(t *testing.T) {
 
 	rule, err := f.svc.envRule(f.dir, f.top, gitCreds{})
 	require.NoError(t, err)
-	require.NotNil(t, rule.head, "the HEAD rule is built")
+	require.NotNil(t, rule.git, "the HEAD rule is built")
 	assert.False(t, rule.composeUnreadable, "the HEAD rule hides nothing extra here")
 
 	got, err := f.svc.GetChanges(f.dir)
@@ -335,7 +335,7 @@ func TestOdjsLongLinkTargetIsBoundedInLogsAndErrors(t *testing.T) {
 	require.NoError(t, err)
 	// Never print the log or the error whole: on failure it holds the target.
 	logged := buf.String()
-	require.True(t, strings.Contains(logged, "the env files named at HEAD are unknown"), "the long target faults the HEAD rule")
+	require.True(t, strings.Contains(logged, "the env files named at HEAD or in the index are unknown"), "the long target faults the HEAD rule")
 	assert.False(t, strings.Contains(logged, target), "the log holds the whole target (%d bytes logged)", len(logged))
 	assert.Less(t, strings.Count(logged, "TOPSECRETVALUE"), 2*200/len("TOPSECRETVALUE")+2, "at most two bounded copies")
 	assert.True(t, strings.Contains(logged, fmt.Sprintf("(%d bytes)", len(target))), "the cut says how long the target was")
