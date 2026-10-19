@@ -50,7 +50,7 @@ var contentSites = map[string][]string{
 	// Names only, -z, no program.
 	"historyNameArgs": {`-c core.fsmonitor=false -c core.quotePath=false --no-optional-locks diff-tree -z -r --root -m -M --name-status --no-commit-id --no-ext-diff --no-textconv`},
 	// Names only.
-	"pullCLI": {`diff --name-only`},
+	"pullCLI": {`diff --name-only -z --no-renames --no-relative`},
 	// A blob's raw bytes (past compose files and link targets), parsed here
 	// and never sent.
 	"catBlob": {`-c core.fsmonitor=false cat-file blob`},
