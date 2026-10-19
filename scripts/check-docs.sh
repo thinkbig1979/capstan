@@ -1056,7 +1056,8 @@ check_settings_writes() {
 
 # check_push_switch_writers delegates to scripts/check-push-switch-writers.sh:
 # only SetDirectoryPushEnabled writes directories.git_push_enabled, so a
-# rescan or a credential save cannot arm a later push (agent-os-k81p.6).
+# rescan or a credential save cannot arm a later push, whether by writing the
+# column or by calling the setter (agent-os-k81p.6).
 # Self-test first, same reasoning as ws-registration.
 check_push_switch_writers() {
   local script="$SCRIPT_DIR/check-push-switch-writers.sh"
@@ -1081,7 +1082,7 @@ check_push_switch_writers() {
     echo "PASS: push-switch-writers - ${self#push-switch-writers }; ${out#check-push-switch-writers: }"
     return 0
   fi
-  echo "FAIL: push-switch-writers - something other than SetDirectoryPushEnabled writes git_push_enabled (keep it out of every other SET list, column list and REPLACE):"
+  echo "FAIL: push-switch-writers - something other than SetDirectoryPushEnabled writes git_push_enabled, or something other than UpdatePushEnabled calls it:"
   echo "$out"
   return 1
 }
@@ -1572,7 +1573,7 @@ Valid check names:
   rclone-delete-argv no rclone delete-capable argv (sync, move, purge, ...) outside RcloneManager.Sync and RestoreRepo
   goroutine-sends no bare channel send inside a goroutine body (a select case, or an allowlisted reason)
   settings-writes no handler func with more than one raw SetSetting, or one inside a loop (SetSettings instead)
-  push-switch-writers nothing but SetDirectoryPushEnabled writes directories.git_push_enabled (no SET, INSERT, REPLACE or directoryColumns reuse)
+  push-switch-writers only SetDirectoryPushEnabled writes directories.git_push_enabled, and only UpdatePushEnabled calls it (writer AND caller)
   full-row-selects no database reader hand-copies a full-row column or Scan list (<x>Columns / scan<X> instead)
   arm-refusal     no scheduler arm function refuses with only a log line (a record...() call, or a reasoned marker)
   pipefail-grep-q no pipe into grep -q in a script that sets pipefail (a here-string instead)

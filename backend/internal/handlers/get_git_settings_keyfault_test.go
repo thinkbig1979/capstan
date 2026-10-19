@@ -34,6 +34,12 @@ var gitSettingsKeyFaultSeed = map[string]string{
 	models.SettingGitAuthorEmail: "stored@example.com",
 }
 
+// gitSettingsUnrelatedKey is seeded in every fixture and is the key the control
+// faults. It has to EXIST: a fault aimed at an absent row never evaluates, so a
+// view that broke every read whenever the target row was present would still
+// pass the control (agent-os-k81p.5 review, S4).
+const gitSettingsUnrelatedKey = "zz_unrelated_key"
+
 const (
 	gitSettingsEnvSSHKey    = "/env/fallback_key"
 	gitSettingsEnvHTTPSUser = "env-fallback-user"
@@ -53,6 +59,7 @@ func keyFaultDB(t *testing.T, faultKey string) *database.DB {
 	for k, v := range gitSettingsKeyFaultSeed {
 		require.NoError(t, db.SetSetting(k, v), "seed %s", k)
 	}
+	require.NoError(t, db.SetSetting(gitSettingsUnrelatedKey, "unrelated-value"), "seed %s", gitSettingsUnrelatedKey)
 
 	side, err := sql.Open("sqlite", filepath.Join(dataDir, "capstan.db"))
 	require.NoError(t, err, "open side connection")
@@ -110,11 +117,12 @@ func TestGetGitSettings_AuthorEmailReadFaultRefuses(t *testing.T) {
 }
 
 // CONTROL (two-sided half of the four above): the same view fixture faulting a
-// key GetGitSettings does not read leaves all four settings answering. A
-// fixture that broke every read would turn the four refusal tests green for
-// the wrong reason; this one goes red if it did.
+// SEEDED key GetGitSettings does not read leaves all four settings answering.
+// A fixture that broke every read whenever the target row exists would turn
+// the four refusal tests green for the wrong reason; this one goes red if it
+// did.
 func TestGetGitSettings_UnrelatedKeyFaultStillAnswersAllFour(t *testing.T) {
-	code, body := getGitSettingsWithKeyFault(t, "some_unrelated_key")
+	code, body := getGitSettingsWithKeyFault(t, gitSettingsUnrelatedKey)
 	require.Equal(t, http.StatusOK, code, "body: %s", body)
 	require.Contains(t, body, `"sshKey":"`+gitSettingsKeyFaultSeed["git_ssh_key"]+`"`)
 	require.Contains(t, body, `"httpsUser":"`+gitSettingsKeyFaultSeed["git_https_user"]+`"`)

@@ -5,39 +5,54 @@
 #
 #   Outside the one setter, SetDirectoryPushEnabled in
 #   backend/internal/database/directories.go, no non-test Go file under
-#   backend/ writes directories.git_push_enabled.
+#   backend/ writes directories.git_push_enabled; and the setter itself is
+#   called only from DirectoriesHandler.UpdatePushEnabled, the toggle handler.
 #
 # WHY. The switch arms a later network write (the push action refuses unless it
 # is on). UpsertDirectory, InsertDirectoryIfAbsent and UpdateDirectoryCredentials
 # leave the column out on purpose, so a rescan or a credential save can neither
 # arm nor disarm it. Nothing enforced that: a later edit adding the column to
 # another SET list or column list was caught only if some behavioural test
-# happened to set the switch to TRUE first.
+# happened to set the switch to TRUE first. A rescan that CALLS the setter
+# would arm or disarm it just as surely, so the callers are pinned too.
 #
 # WHAT IS A VIOLATION. Default-deny. After stripping // comments, any line that
 # names git_push_enabled as a whole word (so the migration Name
 # "directories_git_push_enabled" is not a mention) is a violation unless it is
 # one of these:
 #   a. inside func (d *DB) SetDirectoryPushEnabled in
-#      backend/internal/database/directories.go;
+#      backend/internal/database/directories.go (the func region ends at the
+#      next top-level `}`, var, const, type or import line, so file-scope code
+#      after the setter is not inside it);
 #   b. inside `const directoryColumns` in that file, the one SELECT column list;
-#   c. a line that has SELECT and none of INSERT, UPDATE, REPLACE (a reader);
-#   d. the `ADD COLUMN git_push_enabled` line in
+#   c. the `ADD COLUMN git_push_enabled` line in
 #      backend/internal/database/migrations.go. A later migration that
 #      backfills the column is flagged on purpose: it writes the switch.
-# Two arms need no mention of the column:
+# A reader that needs the column uses directoryColumns; a line that merely has
+# SELECT on it is NOT exempt (a subquery can be the value of a write).
+# Four arms need no mention of the column:
 #   - `directoryColumns` on any line that is not its definition and is not a
-#     SELECT: INSERT INTO directories (` + directoryColumns + `) would write
-#     the column without naming it. This is the consumer arm of (b).
+#     plain SELECT line (SELECT as a whole word, no INSERT/UPDATE/REPLACE):
+#     INSERT INTO directories (` + directoryColumns + `) would write the column
+#     without naming it. This is the consumer arm of (b).
 #   - `REPLACE INTO directories` (also `INSERT OR REPLACE INTO`): it deletes
 #     and re-creates the row, which resets the switch to 0.
+#   - `INSERT INTO directories` with no column list (VALUES, SELECT, DEFAULT
+#     VALUES, or nothing more on the line): every column is written
+#     positionally, the switch included. Both real INSERTs put the `(` on the
+#     INTO line.
+#   - CALLER arm: any `.SetDirectoryPushEnabled(` in non-test code outside
+#     func (h *DirectoriesHandler) UpdatePushEnabled in
+#     backend/internal/handlers/directories.go.
 #
-# LIMIT. Line-based. A multi-line SELECT naming the column on a continuation
-# line trips the default-deny (use directoryColumns); SQL assembled at run time
-# is invisible; /* */ comments are not stripped; a // inside a string literal
-# truncates that line. There is no allow marker: a reasoned exception is an
-# edit to this script. The scan must also see the setter, or it fails: that
-# proves it reached directories.go and did not read a rename as clean.
+# LIMIT. Line-based. A `directoryColumns` use on a continuation line of a
+# multi-line INSERT ... SELECT is not seen as a write; SQL assembled at run
+# time is invisible; /* */ comments are not stripped; a // inside a string
+# literal truncates that line; REPLACE or INTO split from its table over two
+# lines is invisible; only *.go is scanned. There is no allow marker: a
+# reasoned exception is an edit to this script. The scan must also see the
+# setter, or it fails: that proves it reached directories.go and did not read
+# a rename as clean.
 #
 # USAGE
 #   check-push-switch-writers.sh              scan this repo
@@ -54,33 +69,42 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SCAN_ROOT=backend
 DIR_FILE=backend/internal/database/directories.go
 MIG_FILE=backend/internal/database/migrations.go
+CALLER_FILE=backend/internal/handlers/directories.go
 
 # The awk program reports "FILE:LINE: FUNC: reason" per violation. It is run
-# with -v dirfile=... -v migfile=... and prints "SETTER-SEEN" in END only when
-# the setter was reached.
+# with -v dirfile=... -v migfile=... -v callerfile=... and prints "SETTER-SEEN"
+# in END only when the setter was reached.
 # shellcheck disable=SC2016
 AWK_PROG='
 function strip(s) { sub(/\/\/.*/, "", s); return s }
+function where() { return (fname == "" ? "(file scope)" : fname) }
 FNR == 1 { fname = ""; inconst = 0 }
 {
   s = strip($0)
   u = toupper(s)
   if (s ~ /^func /) { fname = s; sub(/[[:space:]]*\{[[:space:]]*$/, "", fname) }
+  else if (s ~ /^(\}|var |const |type |import )/) fname = ""
   isdir = (FILENAME == dirfile)
   ismig = (FILENAME == migfile)
   if (isdir && s ~ /^(const|var) directoryColumns[[:space:]=]/) inconst = 1
-  reads = (u ~ /SELECT/ && u !~ /(INSERT|UPDATE|REPLACE)/)
+  plainselect = (u ~ /(^|[^A-Z0-9_])SELECT([^A-Z0-9_]|$)/ && u !~ /(^|[^A-Z0-9_])(INSERT|UPDATE|REPLACE)([^A-Z0-9_]|$)/)
 
   if (s ~ /(^|[^A-Za-z0-9_])git_push_enabled([^A-Za-z0-9_]|$)/) {
     insetter = (isdir && fname ~ /^func \([A-Za-z_][A-Za-z0-9_]* \*?DB\) SetDirectoryPushEnabled\(/)
     if (insetter) seen = 1
-    ok = insetter || (isdir && inconst) || reads || (ismig && s ~ /ADD COLUMN git_push_enabled/)
-    if (!ok) printf "%s:%d: %s: names git_push_enabled outside SetDirectoryPushEnabled\n", FILENAME, FNR, (fname == "" ? "(file scope)" : fname)
+    ok = insetter || (isdir && inconst) || (ismig && s ~ /ADD COLUMN git_push_enabled/)
+    if (!ok) printf "%s:%d: %s: names git_push_enabled outside SetDirectoryPushEnabled\n", FILENAME, FNR, where()
   }
-  if (s ~ /(^|[^A-Za-z0-9_])directoryColumns([^A-Za-z0-9_]|$)/ && s !~ /^(const|var) directoryColumns[[:space:]=]/ && !(inconst) && !reads)
-    printf "%s:%d: %s: directoryColumns used outside a SELECT (it names git_push_enabled)\n", FILENAME, FNR, (fname == "" ? "(file scope)" : fname)
+  if (s ~ /(^|[^A-Za-z0-9_])directoryColumns([^A-Za-z0-9_]|$)/ && s !~ /^(const|var) directoryColumns[[:space:]=]/ && !(inconst) && !plainselect)
+    printf "%s:%d: %s: directoryColumns used outside a SELECT (it names git_push_enabled)\n", FILENAME, FNR, where()
   if (u ~ /REPLACE[[:space:]]+INTO[[:space:]]+DIRECTORIES/)
-    printf "%s:%d: %s: REPLACE INTO directories re-creates the row and resets the push switch\n", FILENAME, FNR, (fname == "" ? "(file scope)" : fname)
+    printf "%s:%d: %s: REPLACE INTO directories re-creates the row and resets the push switch\n", FILENAME, FNR, where()
+  else if (u ~ /INTO[[:space:]]+DIRECTORIES([[:space:]]*$|[[:space:]]+[^([:space:]])/)
+    printf "%s:%d: %s: INSERT INTO directories with no column list writes every column, the push switch included\n", FILENAME, FNR, where()
+  if (s ~ /\.SetDirectoryPushEnabled([^A-Za-z0-9_]|$)/) {
+    iscaller = (FILENAME == callerfile && fname ~ /^func \([A-Za-z_][A-Za-z0-9_]* \*?DirectoriesHandler\) UpdatePushEnabled\(/)
+    if (!iscaller) printf "%s:%d: %s: calls SetDirectoryPushEnabled outside DirectoriesHandler.UpdatePushEnabled\n", FILENAME, FNR, where()
+  }
 
   if (inconst && s !~ /\+[[:space:]]*$/) inconst = 0
 }
@@ -102,7 +126,7 @@ check_dir() {
   fi
 
   local out status
-  out=$(cd "$dir" && awk -v dirfile="$DIR_FILE" -v migfile="$MIG_FILE" "$AWK_PROG" "${files[@]}" 2>&1)
+  out=$(cd "$dir" && awk -v dirfile="$DIR_FILE" -v migfile="$MIG_FILE" -v callerfile="$CALLER_FILE" "$AWK_PROG" "${files[@]}" 2>&1)
   status=$?
   if [ "$status" -ne 0 ]; then
     echo "check-push-switch-writers: awk failed ($status): $out" >&2
@@ -115,7 +139,7 @@ check_dir() {
   fi
   if [ -n "$out" ]; then
     echo "$out"
-    echo "check-push-switch-writers: git_push_enabled is written only by SetDirectoryPushEnabled; keep the column out of every other SET list, column list and REPLACE (agent-os-k81p.6)"
+    echo "check-push-switch-writers: git_push_enabled is written only by SetDirectoryPushEnabled, which only DirectoriesHandler.UpdatePushEnabled calls; keep the column out of every other SET list, column list, REPLACE and positional INSERT (agent-os-k81p.6)"
   fi
   if [ "$seen" -eq 0 ]; then
     echo "check-push-switch-writers: the scan never reached SetDirectoryPushEnabled in $DIR_FILE, so a clean result proves nothing (renamed, moved, or the scan root is wrong)"
@@ -128,11 +152,15 @@ check_dir() {
 
 ST_RUN=0
 ST_FAILS=0
+ST_GREEN=0
+ST_RED=0
+ST_ERR=0
 
 # selftest_case NAME WANT_EXIT WANT_OUTPUT_REGEX DIR
 selftest_case() {
   local name="$1" want="$2" pat="$3" dir="$4" out status
   ST_RUN=$((ST_RUN + 1))
+  case "$want" in 0) ST_GREEN=$((ST_GREEN + 1)) ;; 1) ST_RED=$((ST_RED + 1)) ;; *) ST_ERR=$((ST_ERR + 1)) ;; esac
   out=$(check_dir "$dir" 2>&1)
   status=$?
   if [ "$status" -ne "$want" ] || ! command grep -qE -- "$pat" <<<"$out"; then
@@ -162,6 +190,14 @@ func (d *DB) UpsertDirectory(path string) error {
 		ON CONFLICT(path) DO UPDATE SET
 			name = excluded.name,
 			scanned_at = excluded.scanned_at`
+	_, err := d.db.Exec(query, path)
+	return err
+}
+
+func (d *DB) InsertDirectoryIfAbsent(path string) error {
+	query := `INSERT INTO directories (path, name, scanned_at)
+		VALUES (?, ?, ?)
+		ON CONFLICT(path) DO NOTHING`
 	_, err := d.db.Exec(query, path)
 	return err
 }
@@ -198,6 +234,15 @@ ALTER TABLE directories ADD COLUMN git_push_enabled INTEGER NOT NULL DEFAULT 0;
 }
 EOF
   printf 'package handlers\n\nfunc (h *H) get() {\n\t// reads git_push_enabled through the setter only\n}\n' > "$d/backend/internal/handlers/h.go"
+  cat > "$d/$CALLER_FILE" <<'EOF'
+package handlers
+
+func (h *DirectoriesHandler) UpdatePushEnabled(c *gin.Context) {
+	if err := h.db.SetDirectoryPushEnabled(path, true); err != nil {
+		return
+	}
+}
+EOF
 }
 
 fresh() {
@@ -220,14 +265,14 @@ selftest() {
   # GREEN: the base tree, with the setter, the column list and the migration.
   d=$(fresh); selftest_case "clean base tree" 0 "0 violations" "$d"
 
-  # GREEN: a narrow reader, a comment and a test file may name the column.
+  # GREEN: a reader through directoryColumns, a comment and a test file.
   d=$(fresh)
   plant "$d" backend/internal/handlers/h.go 'func (h *H) read() {
-	_ = db.Query(`SELECT git_push_enabled FROM directories WHERE path = ?`)
+	_ = db.Query(`SELECT ` + directoryColumns + ` FROM directories WHERE path = ?`)
 	// UPDATE directories SET git_push_enabled = 1
 }'
   printf 'package handlers\n\nfunc f() {\n\t_ = db.Exec(`UPDATE directories SET git_push_enabled = 1`)\n}\n' > "$d/backend/internal/handlers/h_test.go"
-  selftest_case "reader, comment, test file" 0 "0 violations" "$d"
+  selftest_case "directoryColumns reader, comment, test file" 0 "0 violations" "$d"
 
   # RED: the UPDATE form, in another func of the setter's own file (the recall
   # shape: UpdateDirectoryCredentials gaining the column).
@@ -292,6 +337,52 @@ selftest() {
   plant "$d" "$MIG_FILE" 'func backfill(tx *sql.Tx) { tx.Exec(`UPDATE directories SET git_push_enabled = 1`) }'
   selftest_case "migration backfill" 1 "migrations\.go:[0-9]+: func backfill.*names git_push_enabled" "$d"
 
+  # RED (R1): file-scope code after the setter is not inside the setter.
+  d=$(fresh)
+  plant "$d" "$DIR_FILE" 'var armAllQuery = `UPDATE directories SET git_push_enabled = 1`'
+  selftest_case "file-scope var after the setter" 1 "directories\.go:[0-9]+: \(file scope\): names git_push_enabled" "$d"
+
+  # RED (R2): rule (c) is gone. A subquery as the value of a write, on a
+  # continuation line of a multi-line SET, is a write.
+  d=$(fresh)
+  sed -i 's/SET git_auth_type = ?, git_https_user = ? WHERE path = ?`/SET git_auth_type = ?,\n\t\tgit_push_enabled = (SELECT 1 FROM defaults LIMIT 1),\n\t\tgit_https_user = ? WHERE path = ?`/' "$d/$DIR_FILE"
+  selftest_case "subquery value on a SET continuation line" 1 "directories\.go:[0-9]+: func \(d \*DB\) UpdateDirectoryCredentials.*names git_push_enabled" "$d"
+
+  # RED (R2): an identifier containing "select" on a writer line.
+  d=$(fresh)
+  plant "$d" backend/internal/handlers/h.go 'func (h *H) build() {
+	sets = append(sets, fmt.Sprintf("git_push_enabled = %d", opts.SelectedPush))
+}'
+  selftest_case "select-like identifier on a writer line" 1 "h\.go:[0-9]+: func \(h \*H\) build\(\): names git_push_enabled" "$d"
+
+  # RED (R3): INSERT INTO directories with no column list writes every column.
+  d=$(fresh)
+  plant "$d" backend/internal/handlers/h.go 'func (h *H) positional() {
+	_ = db.Exec(`INSERT INTO directories VALUES (?, ?, ?, 1)`)
+}'
+  selftest_case "INSERT INTO directories VALUES" 1 "h\.go:[0-9]+: func \(h \*H\) positional\(\): INSERT INTO directories with no column list" "$d"
+  d=$(fresh)
+  plant "$d" backend/internal/handlers/h.go 'func (h *H) copyAll() {
+	_ = db.Exec(`INSERT INTO directories SELECT * FROM directories_old`)
+}'
+  selftest_case "INSERT INTO directories SELECT" 1 "h\.go:[0-9]+: func \(h \*H\) copyAll\(\): INSERT INTO directories with no column list" "$d"
+  d=$(fresh)
+  plant "$d" backend/internal/handlers/h.go 'func (h *H) blank() {
+	_ = db.Exec(`INSERT INTO directories DEFAULT VALUES`)
+}'
+  selftest_case "INSERT INTO directories DEFAULT VALUES" 1 "h\.go:[0-9]+: func \(h \*H\) blank\(\): INSERT INTO directories with no column list" "$d"
+
+  # RED (R4): the setter is called only from the toggle handler. A rescan that
+  # calls it arms or disarms the switch just as surely as a second writer.
+  d=$(fresh)
+  sed -i '/^func (d \*DB) UpsertDirectory(path string) error {$/a\\t_ = d.SetDirectoryPushEnabled(path, false)' "$d/$DIR_FILE"
+  selftest_case "setter called from UpsertDirectory" 1 "directories\.go:[0-9]+: func \(d \*DB\) UpsertDirectory\(path string\) error: calls SetDirectoryPushEnabled outside" "$d"
+  d=$(fresh)
+  plant "$d" backend/internal/handlers/h.go 'func (h *H) rescan() {
+	_ = h.db.SetDirectoryPushEnabled(path, false)
+}'
+  selftest_case "setter called from another handler" 1 "h\.go:[0-9]+: func \(h \*H\) rescan\(\): calls SetDirectoryPushEnabled outside" "$d"
+
   # RED: the scan never reaching the setter is not a clean tree.
   d=$(fresh)
   sed -i 's/SetDirectoryPushEnabled/SetPushSwitch/' "$d/$DIR_FILE"
@@ -307,7 +398,7 @@ selftest() {
     echo "FAIL: push-switch-writers self-test - $ST_FAILS of $ST_RUN control(s) failed"
     return 1
   fi
-  echo "push-switch-writers self-test: $ST_RUN control(s) passed (2 green, 10 red, 2 error)"
+  echo "push-switch-writers self-test: $ST_RUN control(s) passed ($ST_GREEN green, $ST_RED red, $ST_ERR error)"
   return 0
 }
 
