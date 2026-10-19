@@ -309,7 +309,7 @@ export function GitSettingsSection({
               onCheckedChange={(enabled) => pushMutation.mutate(enabled)}
             />
             <Label htmlFor={`git-push-${directoryPath}`} className="text-sm">Allow commit and push</Label>
-            <HelpHint label="Allow commit and push">
+            <HelpHint label="Allow commit and push" topic="git.push">
               <p>Off by default. When on, you can commit the files you choose in this folder and push the branch to its upstream.</p>
               <p>Pushing over SSH is not supported yet; use an HTTPS remote.</p>
             </HelpHint>

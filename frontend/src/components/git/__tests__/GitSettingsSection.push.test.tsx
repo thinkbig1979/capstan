@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { QueryClient } from '@tanstack/react-query'
 import { renderWithProviders } from '../../../test/utils'
 import { queryKeys } from '@/lib/query-keys'
+import { expectHintOpensHelp } from '@/test/helpHint'
 
 /**
  * The per-directory "Allow commit and push" switch (agent-os-k81p.3): it
@@ -87,5 +88,11 @@ describe('GitSettingsSection: Allow commit and push', () => {
     resolve([{ path: DIR, name: 'app', gitAuthType: 'inherit', gitPushEnabled: true }])
     await waitFor(() => expect(sw).toBeEnabled())
     expect(sw).toBeChecked()
+  })
+
+  it('git.push: the hint opens help at its topic', async () => {
+    const user = userEvent.setup()
+    renderSection()
+    await expectHintOpensHelp(user, 'Allow commit and push', 'git.push')
   })
 })

@@ -177,7 +177,7 @@ export function GitSettingsContent() {
       <div className="space-y-4 pt-4 border-t">
         <div className="flex items-center gap-1.5">
           <h3 className="text-lg font-medium">Commit author</h3>
-          <HelpHint label="Commit author">
+          <HelpHint label="Commit author" topic="git.author">
             <p>The name and email on commits Capstan makes when you commit from a stack.</p>
             <p>Committing and pushing are off by default. Turn them on per folder with &ldquo;Allow commit and push&rdquo; under the stack&apos;s git chip, in Git Credentials. Pushing over SSH is not supported yet.</p>
           </HelpHint>
