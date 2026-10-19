@@ -40,6 +40,17 @@ import (
 // hook's OWN stdout onto git's stderr, so "any hook that prints" — the most
 // reachable vector of all, since most repositories with a linter or formatter
 // hook write something — is entirely a stderr vector and is closed by the split.
+//
+// The second and third rows no longer reach any service call: agent-os-ojdu's
+// argv prefix in gitCmdWithCreds turns fsmonitor off and stops status writing
+// the index, so neither program runs there (OBSERVED: the fsmonitor fault's
+// 132 bytes became 0 under the prefix). The status fixtures below therefore use
+// a vector the prefix leaves open, a clean filter from .git/info/attributes
+// that writes to stderr and exits 0 (git-lfs is the common real one). MEASURED,
+// git 2.47.3, with and without the prefix, two consecutive statuses each:
+//
+//	clean repo, two-line stderr filter       exit=0  stdout 0 bytes   stderr 2 lines
+//	dirty repo, two-line stderr filter       exit=0  stdout " M f.txt" stderr 2 lines
 
 // vwi7Repo builds a repository with one committed TRACKED file, modified
 // afterwards only when dirty is true.
@@ -69,43 +80,58 @@ func vwi7Repo(t *testing.T, dirty bool) string {
 	return dir
 }
 
-// vwi7FsmonitorFault points core.fsmonitor at a path that cannot be executed.
-// git reports it twice on stderr and still exits 0, because a broken fsmonitor
-// hook degrades to a full scan rather than failing the command.
-func vwi7FsmonitorFault(t *testing.T, dir string) {
-	t.Helper()
-	mustGit(t, dir, "config", "core.fsmonitor", "/nonexistent/hook")
-}
-
-// vwi7PrintingHook installs a post-index-change hook that writes to its own
-// stdout. `git status` runs it and exits 0.
+// vwi7StderrFilter commits a second tracked file, filtered.txt, and gives it
+// a clean filter that writes lines to stderr and exits 0, leaving the file's
+// content untouched. `git status` runs the filter whenever it re-hashes the
+// file, and exits 0.
 //
-// post-index-change runs only when status actually WRITES the index, and status
-// writes it only when a refresh changed an entry. On a clean tree that happens
-// only for a "racily clean" entry, one whose mtime is not older than the index
-// file, and git 2.47.3 compares those in WHOLE SECONDS. So left alone, the hook
-// fires only when writing f.txt and committing it land in the same second:
-// agent-os-b9nw, a CI run whose precondition read an empty stderr. MEASURED:
-// sleeping 1.1s between the write and the commit, or back-dating f.txt before
-// `git add`, silences the hook on every run.
+// A file of its own, never f.txt: a dirty f.txt differs in size, and status
+// reports a size change as modified WITHOUT re-hashing, so a filter on f.txt
+// would stay silent in exactly the faulted-and-dirty arm (OBSERVED: 0 stderr
+// lines). The filter is in .git/config and .git/info/attributes, so it adds
+// nothing to the worktree that status could list.
 //
-// Dating f.txt a day into the FUTURE keeps the entry racy against any index
-// timestamp, so every status (the precondition's AND the one inside GetStatus)
-// re-checks it, rewrites the index and runs the hook. MEASURED: three
-// consecutive statuses all print. Both matter: if only the precondition's fired,
-// GetStatus would read an unfaulted repository and pass against the unsplit
-// streams.
-func vwi7PrintingHook(t *testing.T, dir string) {
+// filtered.txt is dated a day into the FUTURE so its stat never matches the
+// index and every status (the precondition's AND the one inside GetStatus)
+// re-hashes it. Left alone, it would be re-hashed only when writing and
+// committing it land in the same second (agent-os-b9nw, where a racy entry
+// made a hook fixture fire on some runs only). MEASURED: two consecutive
+// statuses each print, with and without the agent-os-ojdu prefix.
+func vwi7StderrFilter(t *testing.T, dir string, lines ...string) {
 	t.Helper()
-	hook := filepath.Join(dir, ".git", "hooks", "post-index-change")
-	//nolint:gosec // a hook must be executable to run at all, and this one is written into this test's own t.TempDir() under a fixed name — not user input, and gone when the test ends
-	if err := os.WriteFile(hook, []byte("#!/bin/sh\necho 'noise-from-a-printing-hook'\nexit 0\n"), 0o700); err != nil {
-		t.Fatalf("write post-index-change hook: %v", err)
+	path := filepath.Join(dir, "filtered.txt")
+	if err := os.WriteFile(path, []byte("filtered\n"), 0o600); err != nil {
+		t.Fatalf("write filtered.txt: %v", err)
+	}
+	mustGit(t, dir, "add", "filtered.txt")
+	mustGit(t, dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "filtered")
+	clean := ""
+	for _, l := range lines {
+		clean += "echo '" + l + "' >&2; "
+	}
+	mustGit(t, dir, "config", "filter.vwi7.clean", clean+"cat")
+	if err := os.WriteFile(filepath.Join(dir, ".git", "info", "attributes"), []byte("filtered.txt filter=vwi7\n"), 0o600); err != nil {
+		t.Fatalf("write .git/info/attributes: %v", err)
 	}
 	future := time.Now().Add(24 * time.Hour)
-	if err := os.Chtimes(filepath.Join(dir, "f.txt"), future, future); err != nil {
-		t.Fatalf("future-date f.txt: %v", err)
+	if err := os.Chtimes(path, future, future); err != nil {
+		t.Fatalf("future-date filtered.txt: %v", err)
 	}
+}
+
+// vwi7FilterFault writes two diagnostic lines, the shape the fsmonitor fault
+// this fixture replaces produced (two `fatal: cannot exec` lines), so a merged
+// stream reads as two fabricated changes.
+func vwi7FilterFault(t *testing.T, dir string) {
+	t.Helper()
+	vwi7StderrFilter(t, dir, "filter: cannot reach the object store", "filter: falling back to the local file")
+}
+
+// vwi7PrintingFilter writes one ordinary line, the way a filter such as git-lfs
+// reports progress.
+func vwi7PrintingFilter(t *testing.T, dir string) {
+	t.Helper()
+	vwi7StderrFilter(t, dir, "noise-from-a-printing-filter")
 }
 
 // vwi7StatusPrecondition measures the two streams of `git status --porcelain`
@@ -157,9 +183,9 @@ func vwi7StatusPrecondition(t *testing.T, dir, wantStdout string, wantStderr boo
 //
 // A CLEAN worktree whose `git status --porcelain` writes a zero-exit diagnostic
 // to stderr was reported as having uncommitted changes, because CombinedOutput
-// handed that diagnostic to the parser as data. On the fsmonitor fault the two
-// `fatal: cannot exec` lines counted as dirtyCount=2 for a repository with no
-// changes at all.
+// handed that diagnostic to the parser as data. On the original fsmonitor fault
+// the two `fatal: cannot exec` lines counted as dirtyCount=2 for a repository
+// with no changes at all; the two-line filter fault reproduces that count.
 //
 // Four arms on one instrument, and they must come out DIFFERENTLY. Arms 1 and 2
 // alone are satisfied by an implementation that reports every repository clean —
@@ -179,11 +205,10 @@ func TestGetStatus_ZeroExitStderrIsNotCountedAsChanges(t *testing.T) {
 		t.Fatalf("control: undamaged clean repo reported dirty=%v count=%d, want false/0", st.Dirty, st.DirtyCount)
 	}
 
-	// ARM 2 — THE DEFECT. Same clean repository, fsmonitor pointed at a hook
-	// that cannot be executed. stdout is still empty; only stderr carries the
-	// two fatal lines.
+	// ARM 2 — THE DEFECT. Same clean repository, with a filter that writes two
+	// diagnostic lines. stdout is still empty; only stderr carries them.
 	faulted := vwi7Repo(t, false)
-	vwi7FsmonitorFault(t, faulted)
+	vwi7FilterFault(t, faulted)
 	vwi7StatusPrecondition(t, faulted, "", true)
 	st, err = svc.GetStatus(faulted)
 	if err != nil {
@@ -213,7 +238,7 @@ func TestGetStatus_ZeroExitStderrIsNotCountedAsChanges(t *testing.T) {
 	// fabricated lines — so a fix that only stopped `dirty` flipping, without
 	// isolating stdout, still fails this arm.
 	both := vwi7Repo(t, true)
-	vwi7FsmonitorFault(t, both)
+	vwi7FilterFault(t, both)
 	vwi7StatusPrecondition(t, both, " M f.txt", true)
 	st, err = svc.GetStatus(both)
 	if err != nil {
@@ -227,24 +252,25 @@ func TestGetStatus_ZeroExitStderrIsNotCountedAsChanges(t *testing.T) {
 	}
 }
 
-// TestGetStatus_PrintingHookIsNotCountedAsChanges pins the most reachable vector
-// of agent-os-vwi7: a repository with a hook that prints. This needs no
-// misconfiguration whatsoever — a linter or formatter hook that writes a line is
-// ordinary — which is why it matters more than the fsmonitor fault it shares a
-// mechanism with.
-func TestGetStatus_PrintingHookIsNotCountedAsChanges(t *testing.T) {
+// TestGetStatus_PrintingFilterIsNotCountedAsChanges pins the most reachable
+// vector of agent-os-vwi7 left open: a repository with a filter that prints.
+// This needs no misconfiguration whatsoever — a filter reporting progress is
+// ordinary — which is why it matters more than a broken-config fault. It was a
+// printing post-index-change hook until agent-os-ojdu stopped status running
+// that hook.
+func TestGetStatus_PrintingFilterIsNotCountedAsChanges(t *testing.T) {
 	svc := NewGitService(&config.Config{}, nil)
 
 	dir := vwi7Repo(t, false)
-	vwi7PrintingHook(t, dir)
+	vwi7PrintingFilter(t, dir)
 	vwi7StatusPrecondition(t, dir, "", true)
 
 	st, err := svc.GetStatus(dir)
 	if err != nil {
-		t.Fatalf("GetStatus on a clean repo with a printing hook returned err=%v", err)
+		t.Fatalf("GetStatus on a clean repo with a printing filter returned err=%v", err)
 	}
 	if st.Dirty || st.DirtyCount != 0 {
-		t.Errorf("clean repo with a printing post-index-change hook reported dirty=%v dirtyCount=%d, want false/0 — the hook's own output was parsed as porcelain lines",
+		t.Errorf("clean repo with a printing clean filter reported dirty=%v dirtyCount=%d, want false/0 — the filter's own output was parsed as porcelain lines",
 			st.Dirty, st.DirtyCount)
 	}
 }
@@ -265,9 +291,9 @@ func TestGetStatus_PrintingHookIsNotCountedAsChanges(t *testing.T) {
 func TestPull_ZeroExitStderrDoesNotRefuseACleanRepo(t *testing.T) {
 	svc := NewGitService(&config.Config{}, nil)
 
-	// ARM 1 — THE DEFECT. Clean worktree, fsmonitor fault.
+	// ARM 1 — THE DEFECT. Clean worktree, filter fault.
 	faulted := vwi7Repo(t, false)
-	vwi7FsmonitorFault(t, faulted)
+	vwi7FilterFault(t, faulted)
 	vwi7StatusPrecondition(t, faulted, "", true)
 
 	_, err := svc.pullCLI(faulted)
