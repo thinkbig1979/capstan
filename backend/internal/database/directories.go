@@ -187,7 +187,8 @@ func (d *DB) UpdateDirectoryCredentials(path, authType, sshKeyPath, httpsUser, h
 // disarm a later network write. A deleted row (DeleteDirectory, when a scan no
 // longer finds the directory) takes the switch with it and a re-created row
 // starts off. An unregistered path is errdefs.ErrNotFound rather than a silent
-// no-op.
+// no-op. scripts/check-push-switch-writers.sh keeps it the only writer
+// (agent-os-k81p.6).
 //
 // A reader that gates on the switch uses GetDirectory(path).GitPushEnabled and
 // treats the error as "not allowed": a read error must never read as false
