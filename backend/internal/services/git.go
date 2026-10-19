@@ -1210,7 +1210,7 @@ func (s *GitService) getDiffCLI(dirPath string, commitHash string) (*models.Diff
 	}
 
 	// No signature check: with log.showSignature set, it runs gpg.program.
-	logOutput, _, err := s.gitRun(dirPath, user, token, nil, "-c", "log.showSignature=false",
+	logOutput, _, err := s.gitRun(dirPath, user, token, noLazyFetchEnv, "-c", "log.showSignature=false",
 		"log", "-1", "--no-show-signature", "--format=%H%n%h%n%an%n%ae%n%s%n%aI", oid)
 	logOutput = strings.TrimSpace(logOutput)
 	if err != nil {

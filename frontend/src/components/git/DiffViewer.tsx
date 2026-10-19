@@ -64,6 +64,9 @@ export function DiffViewer({ stackId, commitHash }: DiffViewerProps) {
     )
   }
 
+  // A server older than the field sends none; the view must not crash on it.
+  const hidden = diffData.hiddenFiles ?? []
+
   return (
     <>
       {/* agent-os-lurn: past the guard, `error` means a REFRESH failed over a
@@ -72,10 +75,10 @@ export function DiffViewer({ stackId, commitHash }: DiffViewerProps) {
       {/* agent-os-2omy: env files are never shown (D140). The server leaves
           them out of the patch and names them here. Outside ParsedDiffView,
           which the commit dialog shares. */}
-      {diffData.hiddenFiles.length > 0 && <HiddenFilesNotice files={diffData.hiddenFiles} />}
+      {hidden.length > 0 && <HiddenFilesNotice files={hidden} />}
       {/* With every file hidden there is no patch, and "No diff available"
           under the notice would contradict it. */}
-      {(diffData.diff !== '' || diffData.hiddenFiles.length === 0) && <ParsedDiffView diff={diffData.diff} />}
+      {(diffData.diff !== '' || hidden.length === 0) && <ParsedDiffView diff={diffData.diff} />}
     </>
   )
 }

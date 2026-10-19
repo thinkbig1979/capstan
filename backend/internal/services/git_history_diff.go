@@ -8,6 +8,7 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/thinkbig1979/capstan/backend/internal/pathutil"
@@ -53,6 +54,14 @@ var historyShowArgs = []string{
 	"--src-prefix=a/", "--dst-prefix=b/", "--no-relative",
 }
 
+// noLazyFetchEnv stops a partial clone fetching a missing object, which runs
+// the repository's core.sshCommand or remote helper. Every child of the
+// history view runs with it. git before 2.45 ignores it.
+var noLazyFetchEnv = []string{"GIT_NO_LAZY_FETCH=1"}
+
+// showEnv is the show's environment: exclude magic on, no lazy fetch.
+var showEnv = append(append([]string{}, globPathspecEnv...), noLazyFetchEnv...)
+
 // excludePathspecMagic marks a hidden path: excluded, matched literally,
 // relative to the repository top whatever the working directory. It needs
 // GIT_LITERAL_PATHSPECS=0 (globPathspecEnv), which would otherwise turn the
@@ -79,7 +88,7 @@ func (s *GitService) historyDiff(dirPath, user, token, oid string, parents []str
 	if err != nil {
 		return nil, err
 	}
-	out, _, err := s.gitRun(dirPath, user, token, nil, append(append([]string{}, historyNameArgs...), oid)...)
+	out, _, err := s.gitRun(dirPath, user, token, noLazyFetchEnv, append(append([]string{}, historyNameArgs...), oid)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list changed files: %w", err)
 	}
@@ -122,7 +131,7 @@ func (s *GitService) historyDiff(dirPath, user, token, oid string, parents []str
 		return res, nil
 	}
 	args := append(append(append([]string{}, historyShowArgs...), oid, "--"), pathspecs...)
-	diff, _, err := s.gitRun(dirPath, user, token, globPathspecEnv, args...)
+	diff, _, err := s.gitRun(dirPath, user, token, showEnv, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get diff: %w", err)
 	}
@@ -210,15 +219,137 @@ func (r historyEnvRule) hides(rel string) bool {
 	return r.composeUnreadable && !r.compose[rel]
 }
 
-// treeEntry is one `ls-tree -r` record.
+// treeEntry is one `ls-tree -r -l` record.
 type treeEntry struct {
 	mode string
 	oid  string
+	size int64 // -1 for an entry that is not a blob
+}
+
+// composeNames are the file names compose looks for by default. A file with
+// one of these names anywhere in a commit's tree is read as a compose file,
+// as is every registered stack's ComposeFile name (D144): a stack removed
+// since, or a compose file renamed since, still named its env files then.
+var composeNames = []string{"compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml"}
+
+// historyTree is one tree the rule reads (the commit or a parent).
+type historyTree struct {
+	name    string
+	listing map[string]treeEntry
+}
+
+// historyRuleReader holds what one rule build reads, so a blob shared by the
+// commit and its parents is read once.
+type historyRuleReader struct {
+	s                    *GitService
+	dirPath, user, token string
+	top                  string
+	blobs                map[string]string
+}
+
+// catBlob is the only cat-file the history view runs: `blob`, so no textconv
+// or filter, and never a lazy fetch.
+func (s *GitService) catBlob(dirPath, user, token, oid string) (string, error) {
+	out, _, err := s.gitRun(dirPath, user, token, noLazyFetchEnv, "-c", "core.fsmonitor=false", "cat-file", "blob", oid)
+	return out, err
+}
+
+func (h *historyRuleReader) blob(oid string) (string, error) {
+	if b, ok := h.blobs[oid]; ok {
+		return b, nil
+	}
+	b, err := h.s.catBlob(h.dirPath, h.user, h.token, oid)
+	if err != nil {
+		return "", err
+	}
+	h.blobs[oid] = b
+	return b, nil
+}
+
+// resolve follows every symlink in p as the tree held it, component by
+// component (a link to a folder inside the path as well as a link at its
+// end), bounded like the kernel's ELOOP. ok is false when the path leaves the
+// repository or loops.
+func (h *historyRuleReader) resolve(t historyTree, p string) (string, bool, error) {
+	parts := strings.Split(p, "/")
+	hops := 0
+	for i := 0; i < len(parts); i++ {
+		prefix := strings.Join(parts[:i+1], "/")
+		e, ok := t.listing[prefix]
+		if !ok || e.mode != "120000" {
+			continue
+		}
+		if hops++; hops > maxLinkHops {
+			return "", false, nil
+		}
+		dest, err := h.blob(e.oid)
+		if err != nil {
+			return "", false, fmt.Errorf("failed to read the link %s at %s: %w", prefix, t.name, err)
+		}
+		var base string
+		if filepath.IsAbs(dest) {
+			if base, ok, err = repoRel(h.top, dest); err != nil {
+				return "", false, err
+			}
+		} else {
+			base, ok = repoJoin(path.Dir(prefix), dest)
+		}
+		if !ok {
+			return "", false, nil
+		}
+		parts = append(strings.Split(base, "/"), parts[i+1:]...)
+		i = -1
+	}
+	return strings.Join(parts, "/"), true, nil
+}
+
+// treeSource reads compose files from tree t. A git failure is recorded in
+// gitErr, so the caller can tell it (refuse) from a compose file it can't
+// read (hide all but compose files).
+func (h *historyRuleReader) treeSource(t historyTree, gitErr *error) composeSource {
+	return composeSource{
+		read: func(p string) ([]byte, bool, error) {
+			p, ok, err := h.resolve(t, p)
+			if err != nil {
+				*gitErr = err
+				return nil, false, err
+			}
+			e, found := t.listing[p]
+			if !ok || !found || e.mode == "160000" || e.mode == "120000" {
+				return nil, false, nil
+			}
+			if e.size > maxComposeBytes {
+				return nil, false, fmt.Errorf("compose file %s at %s is larger than %d bytes", p, t.name, maxComposeBytes)
+			}
+			b, err := h.blob(e.oid)
+			if err != nil {
+				*gitErr = fmt.Errorf("failed to read %s at %s: %w", p, t.name, err)
+				return nil, false, *gitErr
+			}
+			return []byte(b), true, nil
+		},
+		place: func(dir, entry string) (string, bool, error) {
+			return h.place(dir, entry)
+		},
+		dir: path.Dir,
+	}
+}
+
+// place is an entry written in folder dir as a repository-relative path. An
+// absolute entry is placed through the containment helper; ok is false only
+// for a path outside the repository, which no commit of it holds.
+func (h *historyRuleReader) place(dir, entry string) (string, bool, error) {
+	if filepath.IsAbs(entry) {
+		return repoRel(h.top, entry)
+	}
+	p, ok := repoJoin(dir, filepath.ToSlash(entry))
+	return p, ok, nil
 }
 
 // historyEnvRule builds the rule from every stack inside top and from trees
-// (the commit and its parents). Any failure is an error: the caller refuses
-// rather than show a diff it could not check. A nil database is one too.
+// (the commit and its parents). A git or database failure is an error: the
+// caller refuses rather than show a diff it could not check. A nil database
+// is one too.
 func (s *GitService) historyEnvRule(dirPath, top string, bare bool, user, token string, trees []string) (historyEnvRule, error) {
 	r := historyEnvRule{named: map[string]bool{}, targets: map[string]bool{}, compose: map[string]bool{}}
 	if s.db == nil {
@@ -228,88 +359,140 @@ func (s *GitService) historyEnvRule(dirPath, top string, bare bool, user, token 
 	if err != nil {
 		return r, fmt.Errorf("could not list the stacks to decide which files are env files: %w", err)
 	}
+	h := &historyRuleReader{s: s, dirPath: dirPath, user: user, token: token, top: top, blobs: map[string]string{}}
+	unknown := func(msg string, args ...any) {
+		slog.Warn("Hiding every file but the compose files in the history diff: "+msg, args...)
+		r.composeUnreadable = true
+	}
 
-	listings := make([]map[string]treeEntry, 0, len(trees))
+	tl := make([]historyTree, 0, len(trees))
 	for _, t := range trees {
 		l, err := s.lsTree(dirPath, user, token, t)
 		if err != nil {
 			return r, err
 		}
-		listings = append(listings, l)
+		tl = append(tl, historyTree{name: t, listing: l})
 	}
 
-	addEntries := func(composeRel string, entries []string) {
-		for _, e := range entries {
-			if rel, ok := repoJoin(path.Dir(composeRel), e); ok {
-				r.named[rel] = true
-			}
-		}
+	names := map[string]bool{}
+	for _, n := range composeNames {
+		names[n] = true
 	}
+	var composeRels []string
 	for _, st := range stacks {
+		// A stack that can't be placed may hold this repository's env files;
+		// hiding all but compose files keeps this diff closed without
+		// failing every history diff of every repository.
 		ok, err := pathutil.IsContained(top, st.Directory)
 		if err != nil {
-			return r, fmt.Errorf("could not tell whether stack %s is inside the repository: %w", st.ProjectName, err)
+			unknown("a stack folder could not be placed", "stack", st.ProjectName, "error", err)
+			continue
 		}
 		if !ok {
 			continue
 		}
 		stackRel, ok, err := repoRel(top, st.Directory)
 		if err != nil {
-			return r, err
+			unknown("a stack folder could not be placed", "stack", st.ProjectName, "error", err)
+			continue
 		}
 		if !ok {
 			continue
 		}
 		if st.EnvFile != "" {
-			if rel, ok := repoJoin(stackRel, st.EnvFile); ok {
-				r.named[rel] = true
+			p, ok, err := h.place(stackRel, st.EnvFile)
+			if err != nil {
+				return r, err
+			}
+			if ok {
+				r.named[p] = true
 			}
 		}
 		if st.ComposeFile == "" {
 			continue
 		}
-		composeRel, ok := repoJoin(stackRel, st.ComposeFile)
+		names[path.Base(filepath.ToSlash(st.ComposeFile))] = true
+		composeRel, ok, err := h.place(stackRel, st.ComposeFile)
+		if err != nil {
+			return r, err
+		}
 		if !ok {
 			continue
 		}
+		composeRels = append(composeRels, composeRel)
 		r.compose[composeRel] = true
-		if !bare {
-			entries, err := composeEnvFiles(filepath.Join(st.Directory, filepath.FromSlash(st.ComposeFile)))
-			if err != nil {
-				slog.Warn("Hiding every file but the compose files in the history diff: a compose file's env_file entries are unknown",
-					"path", st.Directory, "error", err)
-				r.composeUnreadable = true
-			}
-			addEntries(composeRel, entries)
+		if bare {
+			continue
 		}
-		for i, l := range listings {
-			e, ok := l[composeRel]
-			if !ok || e.mode == "160000" || e.mode == "040000" {
-				continue
-			}
-			content, _, err := s.gitRun(dirPath, user, token, nil, "-c", "core.fsmonitor=false", "cat-file", "blob", e.oid)
+		named, files, err := composeSecretFiles(diskComposeSource(top), filepath.Join(top, filepath.FromSlash(composeRel)))
+		if err != nil {
+			unknown("a compose file's env_file entries are unknown", "path", composeRel, "error", err)
+			continue
+		}
+		for i, abs := range append(named, files...) {
+			rel, ok, err := repoRel(top, abs)
 			if err != nil {
-				return r, fmt.Errorf("failed to read %s at %s: %w", composeRel, trees[i], err)
+				return r, err
 			}
-			entries, err := parseComposeEnvFiles([]byte(content))
-			if err != nil {
-				slog.Warn("Hiding every file but the compose files in the history diff: a past compose file's env_file entries are unknown",
-					"path", composeRel, "commit", trees[i], "error", err)
-				r.composeUnreadable = true
+			switch {
+			case !ok:
+			case i < len(named):
+				r.named[rel] = true
+			default:
+				r.compose[rel] = true
 			}
-			addEntries(composeRel, entries)
 		}
 	}
 
-	// Symlinks as they were: an env-named (or named) link in a tree hides
-	// what it points at in that commit, whether or not the link exists today.
-	for i, l := range listings {
-		for p, e := range l {
-			if e.mode != "120000" || (!r.named[p] && !anyEnvComponent(p)) {
+	// Every compose file as each tree held it: the registered ones and any
+	// file with a compose name, wherever it sits.
+	for _, t := range tl {
+		roots := append([]string(nil), composeRels...)
+		for p := range t.listing {
+			if names[path.Base(p)] {
+				roots = append(roots, p)
+			}
+		}
+		sort.Strings(roots)
+		for _, root := range roots {
+			var gitErr error
+			named, files, err := composeSecretFiles(h.treeSource(t, &gitErr), root)
+			if gitErr != nil {
+				return r, gitErr
+			}
+			if err != nil {
+				unknown("a past compose file's env_file entries are unknown", "path", root, "commit", t.name, "error", err)
 				continue
 			}
-			if err := s.followTreeLink(dirPath, user, token, trees[i], top, l, p, r.targets); err != nil {
+			for _, f := range files {
+				r.compose[f] = true
+			}
+			for _, n := range named {
+				r.named[n] = true
+			}
+		}
+	}
+
+	// Symlinks as they were: an env-named or named path that went through a
+	// link in a tree (at its end or in a folder above it) hides where it led,
+	// whether or not the links exist today.
+	for _, t := range tl {
+		var cands []string
+		for p := range r.named {
+			cands = append(cands, p)
+		}
+		for p, e := range t.listing {
+			if e.mode == "120000" && anyEnvComponent(p) {
+				cands = append(cands, p)
+			}
+		}
+		for _, p := range cands {
+			dest, ok, err := h.resolve(t, p)
+			if err != nil {
 				return r, err
+			}
+			if ok && dest != p {
+				r.targets[dest] = true
 			}
 		}
 	}
@@ -339,39 +522,10 @@ func (s *GitService) historyEnvRule(dirPath, top string, bare bool, user, token 
 // maxLinkHops bounds a chain of links, as the kernel's ELOOP does.
 const maxLinkHops = 40
 
-// followTreeLink adds every path the link at p leads to in listing l to
-// targets, resolved lexically inside the tree. A target outside the
-// repository is no file of its commits and is dropped.
-func (s *GitService) followTreeLink(dirPath, user, token, tree, top string, l map[string]treeEntry, p string, targets map[string]bool) error {
-	for hop := 0; hop < maxLinkHops; hop++ {
-		e, ok := l[p]
-		if !ok || e.mode != "120000" {
-			return nil
-		}
-		dest, _, err := s.gitRun(dirPath, user, token, nil, "-c", "core.fsmonitor=false", "cat-file", "blob", e.oid)
-		if err != nil {
-			return fmt.Errorf("failed to read the link %s at %s: %w", p, tree, err)
-		}
-		var next string
-		if filepath.IsAbs(dest) {
-			if next, ok, err = repoRel(top, dest); err != nil {
-				return err
-			}
-		} else {
-			next, ok = repoJoin(path.Dir(p), dest)
-		}
-		if !ok || targets[next] {
-			return nil
-		}
-		targets[next] = true
-		p = next
-	}
-	return nil
-}
-
-// lsTree lists every entry of tree-ish t by path, recursively.
+// lsTree lists every entry of tree-ish t by path, recursively, with blob
+// sizes.
 func (s *GitService) lsTree(dirPath, user, token, t string) (map[string]treeEntry, error) {
-	out, _, err := s.gitRun(dirPath, user, token, nil, "-c", "core.fsmonitor=false", "-c", "core.quotePath=false", "ls-tree", "-r", "-z", t)
+	out, _, err := s.gitRun(dirPath, user, token, noLazyFetchEnv, "-c", "core.fsmonitor=false", "ls-tree", "-r", "-l", "-z", t)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list the files of %s: %w", t, err)
 	}
@@ -382,10 +536,14 @@ func (s *GitService) lsTree(dirPath, user, token, t string) (map[string]treeEntr
 		}
 		meta, p, ok := strings.Cut(rec, "\t")
 		f := strings.Fields(meta)
-		if !ok || len(f) != 3 {
+		if !ok || len(f) != 4 {
 			return nil, fmt.Errorf("unexpected git ls-tree record %q", rec)
 		}
-		l[p] = treeEntry{mode: f[0], oid: f[2]}
+		size, err := strconv.ParseInt(f[3], 10, 64)
+		if err != nil {
+			size = -1 // "-": not a blob
+		}
+		l[p] = treeEntry{mode: f[0], oid: f[2], size: size}
 	}
 	return l, nil
 }

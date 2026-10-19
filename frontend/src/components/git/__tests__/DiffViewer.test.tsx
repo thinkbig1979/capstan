@@ -375,6 +375,14 @@ describe('DiffViewer — hidden env files (agent-os-2omy)', () => {
     expect(screen.queryByText('No diff available')).not.toBeInTheDocument()
   })
 
+  it('renders the diff when the server sends no hiddenFiles field', async () => {
+    mockDiff.mockResolvedValue({ diff: DIFF })
+    renderWithProviders(<DiffViewer stackId="s1" commitHash="abc123" />)
+
+    expect(await screen.findByText('compose.yml')).toBeInTheDocument()
+    expect(screen.queryByRole('note')).not.toBeInTheDocument()
+  })
+
   it('shows no notice when nothing is hidden', async () => {
     mockDiff.mockResolvedValue({ diff: DIFF, hiddenFiles: [] })
     renderWithProviders(<DiffViewer stackId="s1" commitHash="abc123" />)
