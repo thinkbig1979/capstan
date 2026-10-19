@@ -1709,8 +1709,8 @@ var composeFilePatterns = []string{
 }
 
 // isComposeFileName reports whether base matches composeFilePatterns. It is
-// wider than what the scanner registers (which also skips dotfiles and
-// .override files): the env rule errs toward reading a file as compose.
+// wider than what the scanner registers, which also skips .override files:
+// the env rule errs toward reading a file as compose.
 func isComposeFileName(base string) bool {
 	for _, p := range composeFilePatterns {
 		ok, err := filepath.Match(p, base)

@@ -243,3 +243,21 @@ func TestStagedEnvConflictResolvedOnDiskNamesSecret(t *testing.T) {
 
 	requireOdjsHidden(t, f, f.dir, "app/sub/key.conf")
 }
+
+// The history view reads the same compose names: a commit's unregistered
+// compose.prod.yaml names key.conf, so key.conf is hidden in that commit's
+// diff while a plain file beside it shows.
+func TestStagedEnvHistoryVariantComposeNameHides(t *testing.T) {
+	f := newCommitFix(t, true)
+	writeFile(t, filepath.Join(f.dir, "extra/compose.prod.yaml"), "services:\n  x:\n    image: x\n    env_file: key.conf\n")
+	writeFile(t, filepath.Join(f.dir, "extra/key.conf"), odjsSecret+"=1\n")
+	writeFile(t, filepath.Join(f.dir, "extra/readme.txt"), "plain readme\n")
+	runGit(t, f.top, "add", "-A")
+	runGit(t, f.top, "commit", "-q", "-m", "unregistered stack")
+
+	d, err := f.svc.GetDiff(f.dir, f.head(t))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"app/extra/key.conf"}, d.HiddenFiles)
+	assert.NotContains(t, d.Diff, odjsSecret)
+	assert.Contains(t, d.Diff, "+plain readme")
+}
