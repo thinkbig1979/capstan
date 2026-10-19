@@ -235,6 +235,8 @@ func TestZ0gl_GitCredentials_Resolution(t *testing.T) {
 	})
 	t.Run("relative DataDir becomes absolute", func(t *testing.T) {
 		svc, db, cfg := z0glService(t)
+		t.Chdir(t.TempDir())
+		require.NoError(t, os.Mkdir("rel-data", 0o700))
 		cfg.DataDir = "rel-data"
 		c := svc.gitCredentials(z0glDir(t, db, "ssh", "/dir/key"))
 		require.NoError(t, c.sshErr)
