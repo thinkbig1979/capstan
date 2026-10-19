@@ -174,7 +174,7 @@ export function useGitPull() {
         const names = siblings
           .map((s) => {
             const sib = s as { name?: unknown; stack?: unknown } | null
-            return stringOr(sib?.name, stringOr(sib?.stack, 'unknown'))
+            return stringOr(sib?.name, '') || stringOr(sib?.stack, 'unknown')
           })
           .join(', ')
         toast.info(`Other stacks changed by this pull need a redeploy: ${names}`)

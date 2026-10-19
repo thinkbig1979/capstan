@@ -33,6 +33,12 @@ type siblingsPull struct {
 	// held are stack ids whose lock is taken (as a backup) before the pull.
 	held     []string
 	redeploy bool
+	// mount maps the work tree to the path the stacks are registered under
+	// (a symlink to it); nil registers them under the work tree itself.
+	mount func(t *testing.T, root, work string) string
+	// noLock runs PullVerified with no OperationLock and over a closed
+	// database: the post-pull stack list fails.
+	noLock bool
 }
 
 type siblingsPulled struct {
@@ -58,6 +64,10 @@ func runSiblings(t *testing.T, c siblingsPull) siblingsPulled {
 	commitUpstream4d60(t, seed, root, c.files)
 	mustGit(t, work, "pull", "-q", "--ff-only")
 	commitUpstream4d60(t, seed, root, c.changes)
+	base := work
+	if c.mount != nil {
+		base = c.mount(t, root, work)
+	}
 
 	db, err := database.NewWithMigrations(":memory:")
 	if err != nil {
@@ -65,7 +75,7 @@ func runSiblings(t *testing.T, c siblingsPull) siblingsPulled {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	for _, st := range c.stacks {
-		dir := filepath.Join(work, filepath.FromSlash(st.dir))
+		dir := filepath.Join(base, filepath.FromSlash(st.dir))
 		if err := db.UpsertDirectory(models.Directory{Path: dir, Name: st.id}); err != nil {
 			t.Fatal(err)
 		}
@@ -84,7 +94,11 @@ func runSiblings(t *testing.T, c siblingsPull) siblingsPulled {
 
 	svc := NewGitService(&config.Config{}, db)
 	lock := NewOperationLock()
-	svc.SetOperationLock(lock)
+	if c.noLock {
+		svc = NewGitService(&config.Config{}, closedTestDB(t))
+	} else {
+		svc.SetOperationLock(lock)
+	}
 	out := siblingsPulled{work: work, before: headOf(t, work), lock: lock, tokens: map[string]string{}}
 	for _, id := range c.held {
 		tok, err := lock.Acquire(id, OpKindBackup)
@@ -94,7 +108,7 @@ func runSiblings(t *testing.T, c siblingsPull) siblingsPulled {
 		out.tokens[id] = tok
 	}
 
-	out.ar, _ = svc.PullVerified(filepath.Join(work, filepath.FromSlash(c.pullDir)), c.redeploy,
+	out.ar, _ = svc.PullVerified(filepath.Join(base, filepath.FromSlash(c.pullDir)), c.redeploy,
 		&DockerService{config: &config.Config{DataDir: t.TempDir()}})
 	if b, err := os.ReadFile(rec); err == nil { //nolint:gosec // rec is a path this test built in its own temp dir
 		out.docker = string(b)
@@ -315,5 +329,127 @@ func TestPullVerified_SiblingsBareRepoKeepsPullRefusal(t *testing.T) {
 	}
 	if !strings.Contains(appErr.Message, "pull into") {
 		t.Fatalf("message %q is not the pull's bare-repository refusal", appErr.Message)
+	}
+}
+
+func symlinkMount(t *testing.T, root, work string) string {
+	t.Helper()
+	link := filepath.Join(root, "stacks-link")
+	if err := os.Symlink(work, link); err != nil {
+		t.Fatal(err)
+	}
+	return link
+}
+
+// Stacks registered through a symlink: once the pull deleted stackB's folder,
+// the link path no longer resolves and cannot be placed after the pull. The
+// sibling is placed before the pull, so it is still reported as changed.
+func TestPullVerified_SiblingsDeletedFolderViaSymlinkIsListed(t *testing.T) {
+	got := runSiblings(t, siblingsPull{
+		files:   siblingFiles,
+		changes: map[string]string{"stackB/compose.yaml": "", "stackB/.env": ""},
+		stacks:  siblingStacks,
+		pullDir: "stackA",
+		mount:   symlinkMount,
+	})
+	if ids := got.changedIDs(); len(ids) != 1 || ids[0] != "B" {
+		t.Fatalf("a sibling whose folder the pull deleted was not listed: outcome=%s reason=%q siblingStacksChanged=%v",
+			got.ar.Outcome, got.ar.Reason, ids)
+	}
+}
+
+// The other direction: the pull creates the sibling's folder, so it can be
+// placed only after the pull. It is listed, not a check failure.
+func TestPullVerified_SiblingsCreatedFolderViaSymlinkIsListed(t *testing.T) {
+	got := runSiblings(t, siblingsPull{
+		files:   siblingFiles,
+		changes: map[string]string{"stackC/compose.yaml": composeNew4d60},
+		stacks: []stack4d60{
+			{id: "A", dir: "stackA", compose: "compose.yaml"},
+			{id: "C", dir: "stackC", compose: "compose.yaml"},
+		},
+		pullDir: "stackA",
+		mount:   symlinkMount,
+	})
+	if got.ar.Outcome != truth.OutcomeSuccess {
+		t.Fatalf("outcome=%s reason=%q details=%#v", got.ar.Outcome, got.ar.Reason, got.ar.Details)
+	}
+	if ids := got.changedIDs(); len(ids) != 1 || ids[0] != "C" {
+		t.Fatalf("a sibling whose folder the pull created was not listed: siblingStacksChanged=%v", ids)
+	}
+}
+
+// A sibling inside the repository (it is locked) whose folder cannot be
+// placed before or after the pull, here a symlinked path to a folder that
+// never exists, is a check failure, never "unchanged".
+func TestPullVerified_SiblingsUnplaceableSiblingIsPartial(t *testing.T) {
+	got := runSiblings(t, siblingsPull{
+		files:   siblingFiles,
+		changes: map[string]string{"stackB/compose.yaml": composeNew4d60},
+		stacks: []stack4d60{
+			{id: "A", dir: "stackA", compose: "compose.yaml"},
+			{id: "C", dir: "stackC", compose: "compose.yaml"},
+		},
+		pullDir: "stackA",
+		mount:   symlinkMount,
+	})
+	if got.ar.Outcome != truth.OutcomePartial {
+		t.Fatalf("an unplaceable sibling did not make the outcome partial: outcome=%s reason=%q changed=%v",
+			got.ar.Outcome, got.ar.Reason, got.changedIDs())
+	}
+	fails, ok := got.ar.Details["siblingCheckFailures"].([]RedeployFailure)
+	if !ok || len(fails) != 1 || fails[0].StackID != "C" {
+		t.Fatalf("siblingCheckFailures = %#v, want stack C", got.ar.Details["siblingCheckFailures"])
+	}
+}
+
+// When the stack list cannot be read after the pull (no lock wired, so the
+// list is not read before it), the siblings are unknown: partial, with
+// siblingListError, not success.
+func TestPullVerified_SiblingsListFaultIsPartial(t *testing.T) {
+	got := runSiblings(t, siblingsPull{
+		files:   siblingFiles,
+		changes: map[string]string{"stackB/compose.yaml": composeNew4d60},
+		pullDir: "stackA",
+		noLock:  true,
+	})
+	if got.ar.Outcome != truth.OutcomePartial {
+		t.Fatalf("an unreadable stack list did not make the outcome partial: outcome=%s reason=%q", got.ar.Outcome, got.ar.Reason)
+	}
+	if e, _ := got.ar.Details["siblingListError"].(string); e == "" {
+		t.Fatalf("details.siblingListError is empty: %#v", got.ar.Details)
+	}
+}
+
+// With the lock wired the repository top is found before the pull, and its
+// classified answers reach the client: 404 GIT_NOT_REPO for a folder outside
+// any repository, 404 STACK_DIR_MISSING for a folder that is gone. Nothing is
+// pulled either way.
+func TestPullVerified_SiblingsTopFailureIsClassified(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		dir  func(t *testing.T) string
+		code string
+	}{
+		{"not a repository", func(t *testing.T) string { return t.TempDir() }, models.ErrGitNotRepo},
+		{"missing folder", func(t *testing.T) string { return filepath.Join(t.TempDir(), "gone") }, models.ErrStackDirMissing},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := NewGitService(&config.Config{}, newTestDB(t))
+			svc.SetOperationLock(NewOperationLock())
+
+			ar, pr := svc.PullVerified(tc.dir(t), false, nil)
+
+			var appErr *models.AppError
+			if ar.Outcome != truth.OutcomeFailed || !errors.As(ar.Err, &appErr) {
+				t.Fatalf("outcome=%s err=%v, want a classified failure", ar.Outcome, ar.Err)
+			}
+			if appErr.Status != http.StatusNotFound || appErr.Code != tc.code {
+				t.Fatalf("got %d %s, want 404 %s", appErr.Status, appErr.Code, tc.code)
+			}
+			if pr != nil {
+				t.Fatalf("a pull result came back, so something was pulled: %+v", pr)
+			}
+		})
 	}
 }

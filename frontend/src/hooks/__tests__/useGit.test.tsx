@@ -227,6 +227,7 @@ describe('useGitPull — siblings changed by the pull', () => {
         siblingStacksChanged: [
           { stack: 'stacks~b:web', name: 'web' },
           { stack: 'stacks~c:db', name: 'db' },
+          { stack: 'stacks~d:cache', name: '' },
         ],
       },
     } satisfies GitPullResult)
@@ -240,7 +241,7 @@ describe('useGitPull — siblings changed by the pull', () => {
 
     expect(toast.success).toHaveBeenCalledWith('pulled and redeployed')
     expect(toast.info).toHaveBeenCalledTimes(1)
-    expect(toast.info).toHaveBeenCalledWith('Other stacks changed by this pull need a redeploy: web, db')
+    expect(toast.info).toHaveBeenCalledWith('Other stacks changed by this pull need a redeploy: web, db, stacks~d:cache')
   })
 
   it('says nothing more when no sibling changed', async () => {

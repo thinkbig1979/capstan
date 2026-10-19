@@ -255,7 +255,12 @@ With a live token, all four behave exactly as they did before.
   A pull moves the whole work tree,
   so it locks every stack of the repository, not only the requested stack's
   folder, and answers **409 `OPERATION_IN_PROGRESS`** naming the busy stack
-  before pulling anything. With `?redeploy=true` it redeploys only the
+  before pulling anything. The locks are held until the pull, and any
+  redeploy and its verification, finish, so a lifecycle operation on any
+  stack of the repository answers 409 meanwhile. A folder outside any
+  repository answers **404 `GIT_NOT_REPO`**, a folder that no longer exists
+  **404 `STACK_DIR_MISSING`**, and a bare repository **409 `GIT_BARE_REPO`**,
+  all before pulling anything. With `?redeploy=true` it redeploys only the
   requested folder's stacks whose compose or env file changed. Every result
   after a successful diff carries `details.siblingStacksChanged`,
   `[{stack, name}]`: the repository's other stacks whose compose or env file
