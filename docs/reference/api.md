@@ -174,7 +174,14 @@ code at all until 2026-09-24.
 - `POST /api/v1/stacks/:id/stop` — stop a stack
 - `POST /api/v1/stacks/:id/restart` — restart a stack
 - `POST /api/v1/stacks/:id/pull` — pull images for a stack
-- `DELETE /api/v1/stacks/:id` — delete a stack
+- `DELETE /api/v1/stacks/:id` — delete a stack. When it is the only stack in
+  its folder the whole folder is removed, so a folder holding other files
+  answers 428 `STACK_DELETE_COLLATERAL` until `?confirmCollateral=true`, and a
+  folder holding other registered stacks in subfolders answers 409
+  `STACK_DELETE_NESTED_STACKS`, naming them in the message and in
+  `details.stacks` (`id`, `projectName`, `directory`); delete those first. A
+  stack registered in the same folder through a symlink counts as a sibling:
+  only the deleted stack's own files go (agent-os-0s68).
 - `GET /api/v1/stacks/:id/logs` — fetch recent logs for a stack
 - `GET /api/v1/ws/logs/:id` — WebSocket stream of a stack's logs, tailing
 - `GET /api/v1/stacks/:id/containers` — list a stack's containers with live

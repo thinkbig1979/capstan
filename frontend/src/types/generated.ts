@@ -496,6 +496,13 @@ export const ErrBackupRepoUninitialized = "BACKUP_REPO_UNINITIALIZED";
  */
 export const ErrGitBareRepo = "GIT_BARE_REPO";
 /**
+ * ErrStackDeleteNestedStacks refuses a stack delete that would remove its
+ * whole folder while other registered stacks live in subfolders of it:
+ * their files would go and their rows would stay (agent-os-0s68). 409: the
+ * request is fine, the folder's contents refuse it until those go first.
+ */
+export const ErrStackDeleteNestedStacks = "STACK_DELETE_NESTED_STACKS";
+/**
  * The commit and push refusals (agent-os-k81p.2). Every one is a 4xx or a
  * 502 and none is a 401: the frontend logs the user out on a 401 whose
  * body has no top-level code (agent-os-318), and these render through an

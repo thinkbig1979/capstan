@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
@@ -506,11 +507,40 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 	// fresh data; a stale answer here is harmless, since the worst case is an
 	// unnecessary prompt or a skipped one followed by the (always safe) per-file
 	// removal path.
-	survivorsBeforePrompt, survErr := h.listSurvivors(*stack)
+	survivorsBeforePrompt, nestedBeforePrompt, survErr := h.listSurvivors(*stack)
 	if survErr != nil {
 		renderResult(c, truth.Failed("failed to list stacks registered under stack directory", survErr,
 			truth.KV("id", id),
 			truth.KV("directory", stack.Directory),
+		))
+		return
+	}
+
+	// With no survivor the whole folder goes, and a registered stack in a
+	// subfolder would go with it while its row stays (agent-os-0s68). Refuse
+	// and name them: they are stacks, not collateral files, and deleting them
+	// is their own delete's job. With a survivor only this stack's own files
+	// are removed, so nothing nested is at risk.
+	if len(survivorsBeforePrompt) == 0 && len(nestedBeforePrompt) > 0 {
+		names := make([]string, 0, len(nestedBeforePrompt))
+		nested := make([]map[string]any, 0, len(nestedBeforePrompt))
+		for _, s := range nestedBeforePrompt {
+			names = append(names, fmt.Sprintf("%s (%s)", s.ProjectName, s.Directory))
+			nested = append(nested, map[string]any{
+				"id":          s.ID,
+				"projectName": s.ProjectName,
+				"directory":   s.Directory,
+			})
+		}
+		c.JSON(http.StatusConflict, models.NewAppErrorWithDetails(
+			http.StatusConflict,
+			models.ErrStackDeleteNestedStacks,
+			"Deleting this stack would remove its folder, which holds other registered stacks: "+
+				strings.Join(names, ", ")+". Delete those stacks first.",
+			map[string]any{
+				"directory": stack.Directory,
+				"stacks":    nested,
+			},
 		))
 		return
 	}
@@ -627,26 +657,56 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 	))
 }
 
-// listSurvivors returns the other stacks still registered under stack's
-// directory (every row under the same directory except stack.ID itself). Both
-// the collateral check and removeStackFiles need to know whether stack is the
-// sole one registered there, so Delete computes this once and threads it
-// through rather than querying the DB twice.
-func (h *StacksHandler) listSurvivors(stack models.Stack) ([]models.Stack, error) {
+// listSurvivors returns the other stacks registered in stack's folder
+// (survivors) and those registered strictly inside it (nested). Both the
+// collateral check and removeStackFiles need to know whether stack is the sole
+// one there, since only then does the whole folder go.
+//
+// The folder is compared resolved, not by its stored path (agent-os-0s68): a
+// stack registered through a symlink to this folder is a survivor, and one in a
+// subfolder is nested, though neither row carries this directory's path. When
+// stack's own folder is a symlink, RemoveAll removes only the link, so counting
+// the target's stacks over-refuses; that is the safe direction. Any containment
+// check that cannot be answered refuses, since guessing destroys another
+// stack's files.
+func (h *StacksHandler) listSurvivors(stack models.Stack) (survivors, nested []models.Stack, err error) {
 	registered, err := h.db.ListStacksByDirectory(stack.Directory)
 	if err != nil {
-		// Without the sibling list we cannot tell a sole stack from one of
-		// several, and guessing wrong destroys another stack's files. Refuse.
-		return nil, fmt.Errorf("failed to list stacks registered under %s: %w", stack.Directory, err)
+		return nil, nil, fmt.Errorf("failed to list stacks registered under %s: %w", stack.Directory, err)
 	}
-
-	survivors := make([]models.Stack, 0, len(registered))
 	for _, s := range registered {
 		if s.ID != stack.ID {
 			survivors = append(survivors, s)
 		}
 	}
-	return survivors, nil
+
+	all, err := h.db.ListStacks()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to list stacks to check for stacks inside %s: %w", stack.Directory, err)
+	}
+	for _, s := range all {
+		if s.ID == stack.ID || s.Directory == stack.Directory {
+			continue
+		}
+		inside, err := pathutil.IsContained(stack.Directory, s.Directory)
+		if err != nil {
+			return nil, nil, fmt.Errorf("could not tell whether stack %s is inside %s: %w", s.ProjectName, stack.Directory, err)
+		}
+		if !inside {
+			continue
+		}
+		// Contained both ways is the same folder reached by another path.
+		same, err := pathutil.IsContained(s.Directory, stack.Directory)
+		if err != nil {
+			return nil, nil, fmt.Errorf("could not tell whether stack %s shares the folder %s: %w", s.ProjectName, stack.Directory, err)
+		}
+		if same {
+			survivors = append(survivors, s)
+		} else {
+			nested = append(nested, s)
+		}
+	}
+	return survivors, nested, nil
 }
 
 // collateralEntries lists what a sole-stack delete would destroy beyond the
@@ -704,12 +764,14 @@ func collateralEntries(stack models.Stack, absStackDir string) ([]string, error)
 // newly-registered sibling's compose file) through a widened race instead of
 // through the logic xa7 already guards against.
 func (h *StacksHandler) removeStackFiles(stack models.Stack, absStackDir, absRoot string) error {
-	survivors, err := h.listSurvivors(stack)
+	survivors, nested, err := h.listSurvivors(stack)
 	if err != nil {
 		return err
 	}
 
-	if len(survivors) == 0 {
+	// A nested stack here was registered after Delete's refusal check, during
+	// compose down: keep the folder and take only this stack's files.
+	if len(survivors) == 0 && len(nested) == 0 {
 		return os.RemoveAll(absStackDir)
 	}
 
