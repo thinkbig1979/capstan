@@ -225,7 +225,7 @@ func (r historyEnvRule) hides(rel string) bool {
 type treeEntry struct {
 	mode string
 	oid  string
-	size int64 // -1 for an entry that is not a blob
+	size int64 // -1 for an entry that is not a blob, or a size not listed
 }
 
 // composeNames are the file names compose looks for by default. A file with
@@ -256,6 +256,19 @@ type historyRuleReader struct {
 func (s *GitService) catBlob(dirPath string, cred gitCreds, oid string) (string, error) {
 	out, _, err := s.gitRun(dirPath, cred, noLazyFetchEnv, "-c", "core.fsmonitor=false", "cat-file", "blob", oid)
 	return out, err
+}
+
+// blobSize is the size of blob oid, for a listing that does not carry it (the
+// index): `cat-file -s`, never a lazy fetch.
+func (h *historyRuleReader) blobSize(oid string) (int64, error) {
+	if b, ok := h.blobs[oid]; ok {
+		return int64(len(b)), nil
+	}
+	out, _, err := h.s.gitRun(h.dirPath, h.cred, noLazyFetchEnv, "-c", "core.fsmonitor=false", "cat-file", "-s", oid)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.ParseInt(strings.TrimSpace(out), 10, 64)
 }
 
 func (h *historyRuleReader) blob(oid string) (string, error) {
@@ -343,6 +356,12 @@ func (h *historyRuleReader) treeSource(t historyTree, gitErr *error) composeSour
 				return nil, false, nil
 			}
 			p = resolved
+			if e.size < 0 {
+				if e.size, err = h.blobSize(e.oid); err != nil {
+					*gitErr = fmt.Errorf("failed to read the size of %s at %s: %w", p, t.name, err)
+					return nil, false, *gitErr
+				}
+			}
 			if e.size > maxComposeBytes {
 				return nil, false, fmt.Errorf("compose file %s at %s is larger than %d bytes", p, t.name, maxComposeBytes)
 			}
@@ -570,18 +589,14 @@ func (s *GitService) historyEnvRule(dirPath, top string, bare bool, cred gitCred
 	return r, nil
 }
 
-// lsIndexFormat is `ls-files -s` with each blob's size, laid out as
-// `ls-tree -l` lays out a tree: mode, object, size ("-" for a gitlink),
-// stage, then a tab and the path. --format needs git 2.38; an older git
-// refuses the option, and the caller fails closed on that error.
-const lsIndexFormat = "--format=%(objectmode) %(objectname) %(objectsize) %(stage)%x09%(path)"
-
 // lsIndex lists the index as lsTree lists a tree, run from top so every path
-// is repository-relative. A conflicted path has an entry per stage, so there
-// is one listing per stage present: the stage-0 entries plus that stage's.
-// The first is stage 0.
+// is repository-relative. `ls-files -s` carries no sizes (ls-files --format's
+// %(objectsize) needs a newer git: OBSERVED, git 2.39.5 answers "bad ls-files
+// format"), so each entry's size is unknown and treeSource asks for it. A
+// conflicted path has an entry per stage, so there is one listing per stage
+// present: the stage-0 entries plus that stage's. The first is stage 0.
 func (s *GitService) lsIndex(top string, cred gitCreds) ([]historyTree, error) {
-	out, _, err := s.gitRun(top, cred, noLazyFetchEnv, "-c", "core.fsmonitor=false", "ls-files", "-z", lsIndexFormat)
+	out, _, err := s.gitRun(top, cred, noLazyFetchEnv, "-c", "core.fsmonitor=false", "ls-files", "-s", "-z")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list the index: %w", err)
 	}
@@ -592,24 +607,20 @@ func (s *GitService) lsIndex(top string, cred gitCreds) ([]historyTree, error) {
 		}
 		meta, p, ok := strings.Cut(rec, "\t")
 		f := strings.Fields(meta)
-		if !ok || len(f) != 4 {
+		if !ok || len(f) != 3 {
 			return nil, fmt.Errorf("unexpected git ls-files record %q", rec)
 		}
-		stage, err := strconv.Atoi(f[3])
+		stage, err := strconv.Atoi(f[2])
 		if err != nil {
 			return nil, fmt.Errorf("unexpected git ls-files stage in %q: %w", rec, err)
 		}
 		if stage < 0 || stage > 3 {
 			return nil, fmt.Errorf("unexpected git ls-files stage in %q", rec)
 		}
-		size, err := strconv.ParseInt(f[2], 10, 64)
-		if err != nil {
-			size = -1 // "-": not a blob
-		}
 		if stages[stage] == nil {
 			stages[stage] = map[string]treeEntry{}
 		}
-		stages[stage][p] = treeEntry{mode: f[0], oid: f[1], size: size}
+		stages[stage][p] = treeEntry{mode: f[0], oid: f[1], size: -1}
 	}
 	tl := []historyTree{{name: "the index", listing: stages[0]}}
 	for i := 1; i < len(stages); i++ {

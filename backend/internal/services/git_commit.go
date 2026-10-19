@@ -730,8 +730,8 @@ func (s *GitService) envRule(dirPath, top string, cred gitCreds) (envRule, error
 	r.targets = targets
 
 	// The union with HEAD and the index. A fault reading either (a missing
-	// or corrupt object, a git too old for ls-files --format) hides every
-	// change but the compose files rather than failing the dialog. An unborn
+	// or corrupt object) hides every change but the compose files rather
+	// than failing the dialog. An unborn
 	// branch (exit 1) has no HEAD to name anything, but its index can.
 	var trees []string
 	_, err = s.gitCommandWithCreds(top, cred, "rev-parse", "-q", "--verify", "HEAD^{commit}")

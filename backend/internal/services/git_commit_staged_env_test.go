@@ -179,3 +179,17 @@ func TestStagedEnvPlainStagedFileShown(t *testing.T) {
 	ar, _ := f.svc.CommitVerified(f.dir, CommitRequest{Message: "m", Files: []string{p}})
 	require.Equal(t, "success", string(ar.Outcome), "reason %q err %v", ar.Reason, ar.Err)
 }
+
+// ls-files -s lists no sizes, so a staged compose file's size is read before
+// its blob: one past maxComposeBytes is unknown, not read whole, and hides
+// every change but the compose files. Only the index holds it.
+func TestStagedEnvOversizedIndexComposeHides(t *testing.T) {
+	f := newCommitFix(t, true)
+	big := "services: {}\n" + strings.Repeat("# padding\n", maxComposeBytes/10+1)
+	writeFile(t, filepath.Join(f.dir, "extra/compose.yaml"), big)
+	runGit(t, f.top, "add", "app/extra/compose.yaml")
+	require.NoError(t, os.Remove(filepath.Join(f.dir, "extra/compose.yaml")))
+	writeFile(t, filepath.Join(f.dir, "a.txt"), "changed plain\n")
+
+	requireOdjsHidden(t, f, f.dir, "app/a.txt")
+}
