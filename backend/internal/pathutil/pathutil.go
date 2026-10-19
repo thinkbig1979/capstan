@@ -32,11 +32,11 @@ func IsContained(root, target string) (bool, error) {
 		return false, err
 	}
 
-	realRoot, err := resolveExisting(absRoot)
+	realRoot, err := ResolveExisting(absRoot)
 	if err != nil {
 		return false, err
 	}
-	realTarget, err := resolveExisting(absTarget)
+	realTarget, err := ResolveExisting(absTarget)
 	if err != nil {
 		return false, err
 	}
@@ -51,10 +51,12 @@ func IsContained(root, target string) (bool, error) {
 	return strings.HasPrefix(realTarget, prefix), nil
 }
 
-// resolveExisting resolves symlinks for the longest existing prefix of p and
+// ResolveExisting resolves symlinks for the longest existing prefix of p and
 // re-appends any trailing components that do not exist yet. It returns a cleaned
-// absolute-ish path with all symlinks in the existing portion dereferenced.
-func resolveExisting(p string) (string, error) {
+// absolute-ish path with all symlinks in the existing portion dereferenced, so a
+// deleted file reached through a symlinked folder still maps to where it was.
+// Any error but "does not exist" (ENOTDIR, EACCES) is returned.
+func ResolveExisting(p string) (string, error) {
 	p = filepath.Clean(p)
 
 	if resolved, err := filepath.EvalSymlinks(p); err == nil {
@@ -70,7 +72,7 @@ func resolveExisting(p string) (string, error) {
 		return p, nil
 	}
 
-	resolvedParent, err := resolveExisting(parent)
+	resolvedParent, err := ResolveExisting(parent)
 	if err != nil {
 		return "", err
 	}

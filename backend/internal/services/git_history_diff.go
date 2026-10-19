@@ -1,9 +1,7 @@
 package services
 
 import (
-	"errors"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"path"
 	"path/filepath"
@@ -568,10 +566,11 @@ func (s *GitService) repoStacks(top string) ([]repoStack, []unplacedStack, error
 // maxLinkHops bounds a chain of links, as the kernel's ELOOP does.
 const maxLinkHops = 40
 
-// lsTree lists every entry of tree-ish t by path, recursively, with blob
-// sizes.
+// lsTree lists every entry of tree-ish t by repository-relative path,
+// recursively, with blob sizes. --full-tree: run from a stack folder below
+// the top, ls-tree would list only that folder, relative to it (agent-os-odjs).
 func (s *GitService) lsTree(dirPath, user, token, t string) (map[string]treeEntry, error) {
-	out, _, err := s.gitRun(dirPath, user, token, noLazyFetchEnv, "-c", "core.fsmonitor=false", "ls-tree", "-r", "-l", "-z", t)
+	out, _, err := s.gitRun(dirPath, user, token, noLazyFetchEnv, "-c", "core.fsmonitor=false", "ls-tree", "--full-tree", "-r", "-l", "-z", t)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list the files of %s: %w", t, err)
 	}
@@ -595,9 +594,10 @@ func (s *GitService) lsTree(dirPath, user, token, t string) (map[string]treeEntr
 }
 
 // repoRel is abs, a path on disk, as a repository-relative slash path;
-// false when it lies outside top. Symlinks are resolved where they exist. A
-// path it cannot check is an error, never "outside": the caller would then
-// show a file it meant to hide.
+// false when it lies outside top. Symlinks are resolved in its deepest
+// existing ancestor, so a file deleted from disk under a symlinked stacks root
+// still maps (agent-os-odjs). A path it cannot check is an error, never
+// "outside": the caller would then show a file it meant to hide.
 func repoRel(top, abs string) (string, bool, error) {
 	ok, err := pathutil.IsContained(top, abs)
 	if err != nil {
@@ -606,19 +606,16 @@ func repoRel(top, abs string) (string, bool, error) {
 	if !ok {
 		return "", false, nil
 	}
-	resolved, err := filepath.EvalSymlinks(abs)
-	switch {
-	case err == nil:
-		abs = resolved
-	case !errors.Is(err, fs.ErrNotExist):
+	resolved, err := pathutil.ResolveExisting(abs)
+	if err != nil {
 		return "", false, fmt.Errorf("could not resolve %s: %w", abs, err)
 	}
-	rel, err := filepath.Rel(top, abs)
+	rel, err := filepath.Rel(top, resolved)
 	if err != nil {
-		return "", false, fmt.Errorf("could not place %s in the repository: %w", abs, err)
+		return "", false, fmt.Errorf("could not place %s in the repository: %w", resolved, err)
 	}
-	// Contained, yet not local: a path that does not exist reached through a
-	// symlinked folder. It names no file git could list under this name.
+	// Contained, yet not local: top was passed with a symlink in it. It names
+	// no file git could list under this name.
 	if !filepath.IsLocal(rel) {
 		return "", false, nil
 	}

@@ -548,9 +548,9 @@ func (s *GitService) listChanges(dirPath, top, user, token string) ([]models.Git
 		if !ok {
 			continue
 		}
-		isEnv := rule.matches(abs)
+		isEnv := rule.matches(e.path)
 		if e.origPath != "" {
-			isEnv = isEnv || rule.matches(filepath.Join(top, filepath.FromSlash(e.origPath)))
+			isEnv = isEnv || rule.matches(e.origPath)
 		}
 		changes = append(changes, models.GitChange{
 			Path:     e.path,
@@ -639,12 +639,20 @@ type envRule struct {
 	// are unknown. Every change but the compose files is then flagged.
 	composeUnreadable bool
 	compose           map[string]bool
+	// head is the history view's rule over HEAD (agent-os-odjs): a file a
+	// compose file named at HEAD stays an env file when today's compose file
+	// is deleted, renamed or no longer names it. nil on an unborn branch.
+	head *historyEnvRule
+	top  string
 }
 
-func (r envRule) matches(abs string) bool {
-	abs = filepath.Clean(abs)
+// matches takes rel, a repository-root-relative slash path as git status
+// lists it.
+func (r envRule) matches(rel string) bool {
+	abs := filepath.Join(r.top, filepath.FromSlash(rel))
 	switch {
-	case isEnvName(filepath.Base(abs)), r.named[abs], resolvesInto(abs, r.targets):
+	case isEnvName(filepath.Base(abs)), r.named[abs], resolvesInto(abs, r.targets),
+		r.head != nil && r.head.hides(rel):
 		return true
 	case r.composeUnreadable:
 		return !r.compose[abs]
@@ -679,7 +687,7 @@ func (s *GitService) envRule(dirPath, top, user, token string) (envRule, error) 
 	if err != nil {
 		return envRule{}, err
 	}
-	r := envRule{named: map[string]bool{}, targets: map[string]bool{}, compose: map[string]bool{}}
+	r := envRule{named: map[string]bool{}, targets: map[string]bool{}, compose: map[string]bool{}, top: top}
 	// A stack that can't be placed may name env files here, as in the
 	// history view.
 	for _, u := range unplaced {
@@ -722,6 +730,28 @@ func (s *GitService) envRule(dirPath, top, user, token string) (envRule, error) 
 		return envRule{}, err
 	}
 	r.targets = targets
+
+	// The union with HEAD. A fault reading HEAD (a missing or corrupt object)
+	// hides every change but the compose files rather than failing the
+	// dialog. An unborn branch (exit 1) has no HEAD to name anything.
+	_, err = s.gitCommandWithCreds(top, user, token, "rev-parse", "-q", "--verify", "HEAD^{commit}")
+	switch {
+	case gitExitCode(err) == 1:
+		return r, nil
+	case err != nil:
+		slog.Warn("Treating every changed file of the folder as an env file: HEAD could not be read",
+			"path", top, "error", err)
+		r.composeUnreadable = true
+		return r, nil
+	}
+	head, err := s.historyEnvRule(dirPath, top, false, user, token, []string{"HEAD"})
+	if err != nil {
+		slog.Warn("Treating every changed file of the folder as an env file: the env files named at HEAD are unknown",
+			"path", top, "error", err)
+		r.composeUnreadable = true
+		return r, nil
+	}
+	r.head = &head
 	return r, nil
 }
 
@@ -748,11 +778,14 @@ func (s *GitService) envLinkTargets(top, untrackedDir, user, token string, candi
 			candidates = append(candidates, filepath.Join(top, filepath.FromSlash(rel)))
 		}
 	}
+	// Resolved by the deepest existing ancestor, so a deleted file named
+	// through a symlinked stacks root still maps to where it was
+	// (agent-os-odjs). A dangling link maps to itself.
 	targets := map[string]bool{}
 	for _, p := range candidates {
-		resolved, err := filepath.EvalSymlinks(p)
+		resolved, err := pathutil.ResolveExisting(p)
 		if err != nil {
-			// Missing or dangling: it points at nothing a change could be.
+			// Its lexical spelling is still in named.
 			continue
 		}
 		targets[resolved] = true
@@ -760,12 +793,12 @@ func (s *GitService) envLinkTargets(top, untrackedDir, user, token string, candi
 	return targets, nil
 }
 
-// resolvesInto reports whether abs, with symlinks resolved, is in targets. A
-// path that does not resolve (a deleted file) is not.
+// resolvesInto reports whether abs, resolved as envLinkTargets resolves its
+// candidates, is in targets. A path that can't be resolved is (fail closed).
 func resolvesInto(abs string, targets map[string]bool) bool {
-	resolved, err := filepath.EvalSymlinks(abs)
+	resolved, err := pathutil.ResolveExisting(abs)
 	if err != nil {
-		return false
+		return true
 	}
 	return targets[resolved]
 }
