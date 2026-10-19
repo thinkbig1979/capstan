@@ -4,7 +4,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,14 +18,16 @@ import (
 // built anywhere else gets neither the SSH key nor the HTTPS helper nor
 // ojdu's hardening prefix. It finds every call to a process constructor
 // whose arguments include the string literal "git" in this package's
-// non-test files. A program name held in a variable or constant is not seen.
+// non-test files, read through go:embed (packageSources) so a `go test
+// -overlay` mutant reaches it. A program name held in a variable or constant
+// is not seen.
 func TestZ0gl_GitChildrenOnlyFromGitCmdWithCreds(t *testing.T) {
 	constructors := map[string]bool{
 		"boundCommand": true, "commandWithDeadline": true,
 		"execCommand": true, "execCommandContext": true,
 		"exec.Command": true, "exec.CommandContext": true, "execx.Command": true,
 	}
-	entries, err := os.ReadDir(".")
+	entries, err := packageSources.ReadDir(".")
 	require.NoError(t, err)
 	fset := token.NewFileSet()
 	var sites []string
@@ -35,7 +36,9 @@ func TestZ0gl_GitChildrenOnlyFromGitCmdWithCreds(t *testing.T) {
 		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-		f, err := parser.ParseFile(fset, name, nil, 0)
+		src, err := packageSources.ReadFile(name)
+		require.NoError(t, err)
+		f, err := parser.ParseFile(fset, name, src, 0)
 		require.NoError(t, err)
 		for _, d := range f.Decls {
 			fn, ok := d.(*ast.FuncDecl)
