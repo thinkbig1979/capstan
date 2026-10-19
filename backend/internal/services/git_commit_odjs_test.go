@@ -1,9 +1,14 @@
 package services
 
 import (
+	"bytes"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -263,4 +268,89 @@ func TestOdjsCommitDialogUnbornHeadHidesNothingExtra(t *testing.T) {
 
 	ar, _ := f.svc.CommitVerified(f.dir, CommitRequest{Message: "m", Files: []string{"app/new.txt"}})
 	require.Equal(t, "success", string(ar.Outcome), "reason %q err %v", ar.Reason, ar.Err)
+}
+
+// A plain change stays a plain change while the HEAD rule is in force: the
+// union must not hide everything.
+func TestOdjsCommitDialogPlainFileStaysVisibleWithHeadRule(t *testing.T) {
+	f := odjsFix(t, odjsRelEntry)
+	writeFile(t, filepath.Join(f.dir, "sub/plain.txt"), "plain change\n")
+
+	rule, err := f.svc.envRule(f.dir, f.top, "", "")
+	require.NoError(t, err)
+	require.NotNil(t, rule.head, "the HEAD rule is built")
+	assert.False(t, rule.composeUnreadable, "the HEAD rule hides nothing extra here")
+
+	got, err := f.svc.GetChanges(f.dir)
+	require.NoError(t, err)
+	var change *models.GitChange
+	for i := range got.Changes {
+		if got.Changes[i].Path == "app/sub/plain.txt" {
+			change = &got.Changes[i]
+		}
+	}
+	require.NotNil(t, change, "app/sub/plain.txt is not listed: %+v", got.Changes)
+	assert.False(t, change.IsEnv)
+	d, err := f.svc.GetChangeDiff(f.dir, "app/sub/plain.txt")
+	require.NoError(t, err)
+	assert.False(t, d.Hidden)
+	assert.Contains(t, d.Diff, "+plain change")
+	ar, _ := f.svc.CommitVerified(f.dir, CommitRequest{Message: "m", Files: []string{"app/sub/plain.txt"}})
+	require.Equal(t, "success", string(ar.Outcome), "reason %q err %v", ar.Reason, ar.Err)
+}
+
+// D162: a compose-named file anywhere in HEAD whose env_file: is unknown (an
+// unregistered template with ${ENV_FILE}) hides every change but the compose
+// files, and a plain change needs confirmEnv, as D147 does for the history
+// view. The log line names the commit dialog.
+func TestOdjsCommitDialogUnknownEntryInHeadTemplateHidesAll(t *testing.T) {
+	f := newCommitFix(t, true)
+	buf := odjsCaptureSlog(t)
+	writeFile(t, filepath.Join(f.top, "templates/compose.yaml"), "services:\n  x:\n    image: x\n    env_file: ${ENV_FILE}\n")
+	runGit(t, f.top, "add", "-A")
+	runGit(t, f.top, "commit", "-q", "-m", "template")
+	writeFile(t, filepath.Join(f.dir, "a.txt"), "changed plain\n")
+
+	requireOdjsHidden(t, f, f.dir, "app/a.txt")
+	assert.Contains(t, buf.String(), "Hiding every file but the compose files in the commit dialog")
+	assert.NotContains(t, buf.String(), "history diff")
+}
+
+// A committed link's target is the repository author's text; an error that
+// quotes it is cut, so it can't fill a log line on every request.
+func TestOdjsLongLinkTargetIsBoundedInLogsAndErrors(t *testing.T) {
+	f := newCommitFix(t, true)
+	buf := odjsCaptureSlog(t)
+	target := "/" + strings.Repeat("TOPSECRETVALUE", 400)
+	cmd := exec.Command("git", "hash-object", "-w", "--stdin")
+	cmd.Dir = f.top
+	cmd.Stdin = strings.NewReader(target)
+	out, err := cmd.Output()
+	require.NoError(t, err)
+	runGit(t, f.top, "update-index", "--add", "--cacheinfo", "120000,"+strings.TrimSpace(string(out))+",app/.env.link")
+	runGit(t, f.top, "commit", "-q", "-m", "link")
+	writeFile(t, filepath.Join(f.dir, "a.txt"), "changed plain\n")
+
+	_, err = f.svc.GetChanges(f.dir)
+	require.NoError(t, err)
+	// Never print the log or the error whole: on failure it holds the target.
+	logged := buf.String()
+	require.True(t, strings.Contains(logged, "the env files named at HEAD are unknown"), "the long target faults the HEAD rule")
+	assert.False(t, strings.Contains(logged, target), "the log holds the whole target (%d bytes logged)", len(logged))
+	assert.Less(t, strings.Count(logged, "TOPSECRETVALUE"), 2*200/len("TOPSECRETVALUE")+2, "at most two bounded copies")
+	assert.True(t, strings.Contains(logged, fmt.Sprintf("(%d bytes)", len(target))), "the cut says how long the target was")
+
+	_, err = f.svc.GetDiff(f.dir, f.head(t))
+	if err != nil {
+		assert.False(t, strings.Contains(err.Error(), target), "the history error holds the whole target (%d bytes)", len(err.Error()))
+	}
+}
+
+func odjsCaptureSlog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
 }

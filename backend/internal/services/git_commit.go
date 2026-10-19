@@ -744,7 +744,7 @@ func (s *GitService) envRule(dirPath, top, user, token string) (envRule, error) 
 		r.composeUnreadable = true
 		return r, nil
 	}
-	head, err := s.historyEnvRule(dirPath, top, false, user, token, []string{"HEAD"})
+	head, err := s.historyEnvRule(dirPath, top, false, user, token, []string{"HEAD"}, "commit dialog")
 	if err != nil {
 		slog.Warn("Treating every changed file of the folder as an env file: the env files named at HEAD are unknown",
 			"path", top, "error", err)
