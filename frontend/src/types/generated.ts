@@ -800,8 +800,21 @@ export interface DiffResult {
    * (agent-os-apmw).
    */
   commit: GitCommit;
+  /**
+   * Diff is the commit's patch without the hidden files.
+   */
   diff: string;
+  /**
+   * Files is every path the commit touched, against every parent, hidden
+   * files included. Never nil.
+   */
   files: string[];
+  /**
+   * HiddenFiles are the Files whose diff is left out because they are, or
+   * may be, env files, which can hold secrets (agent-os-2omy, D140). Never
+   * nil.
+   */
+  hiddenFiles: string[];
 }
 export interface DashboardContainerInfo {
   id: string;

@@ -5,15 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"net/http"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
-
-	"gopkg.in/yaml.v3"
 
 	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
@@ -635,7 +631,7 @@ func inFolder(dirPath, abs string) (bool, error) {
 // well as what needs confirmEnv, so it errs toward flagging.
 type envRule struct {
 	// named holds the env files named by path: each stack's EnvFile and every
-	// env_file: entry of each stack's compose file, absolute under realDir.
+	// file its compose file names as secret (composeSecretFiles), absolute.
 	named map[string]bool
 	// targets holds where env files really live: named, every env-named
 	// tracked path of the repository and every env-named untracked path of
@@ -685,24 +681,28 @@ func (s *GitService) envRule(dirPath, realDir, top, user, token string) (envRule
 		return envRule{}, fmt.Errorf("could not list the stacks in this folder: %w", err)
 	}
 	r := envRule{named: map[string]bool{}, targets: map[string]bool{}, compose: map[string]bool{}}
+	src := diskComposeSource(top)
 	for _, st := range stacks {
 		if st.EnvFile != "" {
-			r.named[filepath.Join(realDir, filepath.FromSlash(st.EnvFile))] = true
+			r.named[diskPath(realDir, st.EnvFile)] = true
 		}
 		if st.ComposeFile == "" {
 			continue
 		}
-		composePath := filepath.Join(realDir, filepath.FromSlash(st.ComposeFile))
+		composePath := diskPath(realDir, st.ComposeFile)
 		r.compose[composePath] = true
-		entries, err := composeEnvFiles(composePath)
+		// Only the stack's own compose file is exempt when composeUnreadable
+		// hides the rest: a file reached through include: or extends: stays
+		// hidden, as it was before the parser followed them.
+		named, _, err := composeSecretFiles(src, composePath)
 		if err != nil {
 			slog.Warn("Treating every changed file of the folder as an env file: the compose file's env_file entries are unknown",
 				"path", composePath, "error", err)
 			r.composeUnreadable = true
 			continue
 		}
-		for _, e := range entries {
-			r.named[filepath.Join(filepath.Dir(composePath), filepath.FromSlash(e))] = true
+		for _, p := range named {
+			r.named[p] = true
 		}
 	}
 
@@ -710,94 +710,47 @@ func (s *GitService) envRule(dirPath, realDir, top, user, token string) (envRule
 	for p := range r.named {
 		candidates = append(candidates, p)
 	}
+	targets, err := s.envLinkTargets(top, dirPath, user, token, candidates)
+	if err != nil {
+		return envRule{}, err
+	}
+	r.targets = targets
+	return r, nil
+}
+
+// envLinkTargets resolves, on today's disk, where env files really live: the
+// candidates (absolute), every env-named tracked path of the repository and
+// every env-named untracked path under untrackedDir, with symlinks resolved.
+func (s *GitService) envLinkTargets(top, untrackedDir, user, token string, candidates []string) (map[string]bool, error) {
 	// Tracked: the whole repository, so a link in a sibling stack folder
 	// (app/.env -> ../other/prod.secrets) flags its target here too.
 	tracked, _, err := s.gitRun(top, user, token, globPathspecEnv,
 		append([]string{"-c", "core.fsmonitor=false", "--no-optional-locks", "ls-files", "-z", "--full-name", "--"}, envNamePathspecs...)...)
 	if err != nil {
-		return envRule{}, fmt.Errorf("failed to list the tracked env files: %w", err)
+		return nil, fmt.Errorf("failed to list the tracked env files: %w", err)
 	}
 	// Untracked, ignored ones included: a .env is usually gitignored. Not
 	// --exclude-standard, which would drop exactly that file.
-	untracked, _, err := s.gitRun(dirPath, user, token, globPathspecEnv,
+	untracked, _, err := s.gitRun(untrackedDir, user, token, globPathspecEnv,
 		append([]string{"-c", "core.fsmonitor=false", "--no-optional-locks", "ls-files", "-z", "--full-name", "--others", "--"}, envNamePathspecs...)...)
 	if err != nil {
-		return envRule{}, fmt.Errorf("failed to list the untracked env files: %w", err)
+		return nil, fmt.Errorf("failed to list the untracked env files: %w", err)
 	}
 	for _, rel := range strings.Split(tracked+"\x00"+untracked, "\x00") {
 		if rel != "" && isEnvName(filepath.Base(rel)) {
 			candidates = append(candidates, filepath.Join(top, filepath.FromSlash(rel)))
 		}
 	}
+	targets := map[string]bool{}
 	for _, p := range candidates {
 		resolved, err := filepath.EvalSymlinks(p)
 		if err != nil {
 			// Missing or dangling: it points at nothing a change could be.
 			continue
 		}
-		r.targets[resolved] = true
+		targets[resolved] = true
 	}
-	return r, nil
-}
-
-// composeEnvFiles reads the env_file: entries of every service in a compose
-// file, relative to the file's folder: a string, a list of strings, or a list
-// of {path: ...} (compose's long form). An entry it cannot resolve to a fixed
-// path (interpolated, or another shape) is an error, so the caller fails
-// toward hiding. A missing compose file names no env file.
-func composeEnvFiles(composePath string) ([]string, error) {
-	//nolint:gosec // composePath is a registered stack's compose file under its folder
-	content, err := os.ReadFile(composePath)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var doc struct {
-		Services map[string]struct {
-			EnvFile yaml.Node `yaml:"env_file"`
-		} `yaml:"services"`
-	}
-	if err := yaml.Unmarshal(content, &doc); err != nil {
-		return nil, err
-	}
-	var out []string
-	add := func(n *yaml.Node) error {
-		if n.Kind != yaml.ScalarNode || n.Value == "" || strings.Contains(n.Value, "$") {
-			return fmt.Errorf("env_file entry at line %d is not a fixed path", n.Line)
-		}
-		out = append(out, n.Value)
-		return nil
-	}
-	for _, svc := range doc.Services {
-		n := svc.EnvFile
-		switch n.Kind {
-		case 0:
-		case yaml.ScalarNode:
-			if err := add(&n); err != nil {
-				return nil, err
-			}
-		case yaml.SequenceNode:
-			for _, item := range n.Content {
-				if item.Kind == yaml.MappingNode {
-					var long struct {
-						Path yaml.Node `yaml:"path"`
-					}
-					if err := item.Decode(&long); err != nil {
-						return nil, err
-					}
-					item = &long.Path
-				}
-				if err := add(item); err != nil {
-					return nil, err
-				}
-			}
-		default:
-			return nil, fmt.Errorf("env_file at line %d is neither a path nor a list", n.Line)
-		}
-	}
-	return out, nil
+	return targets, nil
 }
 
 // resolvesInto reports whether abs, with symlinks resolved, is in targets. A

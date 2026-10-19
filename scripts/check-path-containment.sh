@@ -66,6 +66,7 @@ internal/config/config.go|inspectStacksMount|parses /proc/self/mountinfo text to
 internal/services/scanner.go|rootContainsPath|chooses WHICH configured root a scanned path is filed under (StackID naming); gates no I/O, and must stay lexical to agree with the lexical StackID and isValidStacksDir
 internal/services/scanner.go|expectedStackID|filepath.Rel derives the stack ID path segment, not a containment verdict
 internal/services/scanner.go|scanDirectoryWithRoot|filepath.Rel derives the stack ID path segment, not a containment verdict
+internal/services/git_history_diff.go|repoRel|filepath.Rel derives the repository-relative path after pathutil.IsContained gave the verdict (agent-os-2omy)
 internal/handlers/git.go|isValidLogFile|validates a git pathspec passed after "--"; no filesystem I/O, and git itself refuses paths outside the repository
 internal/services/host_space_compose_refs.go|normalizedImageRefs|strips the docker.io/ and library/ prefixes of an image REFERENCE (registry/repo:tag) to match RepoTags; no filesystem path, no I/O
 '
@@ -258,6 +259,14 @@ func normalizedImageRefs(name string) []string {
 		return []string{rest}
 	}
 	return []string{name}
+}
+GO
+  cat > "$d/internal/services/git_history_diff.go" <<'GO'
+package services
+
+func repoRel(top, abs string) (string, bool) {
+	rel, err := filepath.Rel(top, abs)
+	return rel, err == nil
 }
 GO
   cat > "$d/internal/pathutil/pathutil.go" <<'GO'

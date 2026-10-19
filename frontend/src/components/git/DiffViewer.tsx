@@ -16,6 +16,10 @@ import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 
 type DiffView = 'unified' | 'split'
 
+// The commit dialog's words (CommitPushDialog.tsx), so both views say the
+// same thing about the same files. DiffViewer.test.tsx pins them equal.
+const ENV_DIFF_HIDDEN = 'Diff hidden: env files may contain secrets.'
+
 interface DiffViewerProps {
   stackId: string
   commitHash: string
@@ -60,13 +64,35 @@ export function DiffViewer({ stackId, commitHash }: DiffViewerProps) {
     )
   }
 
+  // A server older than the field sends none; the view must not crash on it.
+  const hidden = diffData.hiddenFiles ?? []
+
   return (
     <>
       {/* agent-os-lurn: past the guard, `error` means a REFRESH failed over a
           diff we still hold. Report it without taking the diff away. */}
       {error && <RefreshFailedNotice what="the diff" className="mb-2" onRetry={() => void refetch()} />}
-      <ParsedDiffView diff={diffData.diff} />
+      {/* agent-os-2omy: env files are never shown (D140). The server leaves
+          them out of the patch and names them here. Outside ParsedDiffView,
+          which the commit dialog shares. */}
+      {hidden.length > 0 && <HiddenFilesNotice files={hidden} />}
+      {/* With every file hidden there is no patch, and "No diff available"
+          under the notice would contradict it. */}
+      {(diffData.diff !== '' || hidden.length === 0) && <ParsedDiffView diff={diffData.diff} />}
     </>
+  )
+}
+
+function HiddenFilesNotice({ files }: { files: string[] }) {
+  return (
+    <div className="mb-2 rounded-md border px-3 py-2 text-sm text-muted-foreground" role="note">
+      <p>{ENV_DIFF_HIDDEN}</p>
+      <ul className="mt-1 font-mono text-xs">
+        {files.map((f) => (
+          <li key={f}>{f}</li>
+        ))}
+      </ul>
+    </div>
   )
 }
 

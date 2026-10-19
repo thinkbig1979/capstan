@@ -1192,14 +1192,27 @@ func (s *GitService) getDiffCLI(dirPath string, commitHash string) (*models.Diff
 	// exactly as it does for faults, so it answered 500 (agent-os-tyl6).
 	// `rev-parse --verify --quiet` exits 1, silently, only when the name
 	// resolves to no commit: unknown, or an object that is not a commit. A
-	// non-repository exits 128 (OBSERVED, git 2.47.3), so every other outcome
-	// falls through to the paths below unchanged. It also stops a hex name
+	// non-repository exits 128 (OBSERVED, git 2.47.3); any other failure is
+	// classified as the log's failure below was. It also stops a hex name
 	// that matches no commit from being read by `git log` as a file path.
-	if _, verr := s.gitCommandWithCreds(dirPath, user, token, "rev-parse", "--verify", "--quiet", commitHash+"^{commit}"); gitExitCode(verr) == 1 {
+	//
+	// Every later call names the full commit id this resolves to, so an
+	// annotated tag's id can't make `show` print the tag (agent-os-2omy).
+	oid, verr := s.gitCommandWithCreds(dirPath, user, token, "rev-parse", "--verify", "--quiet", commitHash+"^{commit}")
+	if gitExitCode(verr) == 1 {
 		return nil, models.NewAppError(404, models.ErrNotFound, "Commit not found")
 	}
+	if verr != nil {
+		if repoErr := s.gitFailure(dirPath, verr); repoErr != nil {
+			return nil, repoErr
+		}
+		return nil, fmt.Errorf("failed to get commit: %w", verr)
+	}
 
-	logOutput, err := s.gitCommandWithCreds(dirPath, user, token, "log", "-1", "--format=%H%n%h%n%an%n%ae%n%s%n%aI", commitHash)
+	// No signature check: with log.showSignature set, it runs gpg.program.
+	logOutput, _, err := s.gitRun(dirPath, user, token, noLazyFetchEnv, "-c", "log.showSignature=false",
+		"log", "-1", "--no-show-signature", "--format=%H%n%h%n%an%n%ae%n%s%n%aI", oid)
+	logOutput = strings.TrimSpace(logOutput)
 	if err != nil {
 		if repoErr := s.gitFailure(dirPath, err); repoErr != nil {
 			return nil, repoErr
@@ -1220,30 +1233,23 @@ func (s *GitService) getDiffCLI(dirPath string, commitHash string) (*models.Diff
 		Date:    strings.TrimSpace(lines[5]),
 	}
 
-	diffOutput, err := s.gitCommandWithCreds(dirPath, user, token, "show", "--format=", commitHash)
+	parentsOut, err := s.gitCommandWithCreds(dirPath, user, token, "rev-parse", oid+"^@")
 	if err != nil {
-		return nil, fmt.Errorf("failed to get diff: %w", err)
+		return nil, fmt.Errorf("failed to read the commit's parents: %w", err)
 	}
-
-	// `git show` above already resolved this commit, so diff-tree failing here
-	// is a fault, not "this commit touched nothing". Discarding it produces an
-	// empty Files list beside a NON-EMPTY Diff — the contradiction agent-os-x2st
-	// added PullResult.DiffError to express, and DiffResult has no such field.
-	// The list is on the wire as `files` (agent-os-2613), so it is answerable.
-	filesOutput, err := s.gitCommandWithCreds(dirPath, user, token, "diff-tree", "--no-commit-id", "--name-only", "-r", commitHash)
+	// The patch with every env file left out; see git_history_diff.go. Its
+	// file list is complete, root and merge commits included, and holds the
+	// hidden files too.
+	hd, err := s.historyDiff(dirPath, user, token, oid, strings.Fields(parentsOut))
 	if err != nil {
-		return nil, fmt.Errorf("failed to list changed files: %w", err)
-	}
-	// Non-nil so a commit that touched nothing sends [] (agent-os-e5pr).
-	files := []string{}
-	if filesOutput != "" {
-		files = strings.Split(filesOutput, "\n")
+		return nil, err
 	}
 
 	return &models.DiffResult{
-		Commit: commit,
-		Diff:   diffOutput,
-		Files:  files,
+		Commit:      commit,
+		Diff:        hd.diff,
+		Files:       hd.files,
+		HiddenFiles: hd.hidden,
 	}, nil
 }
 

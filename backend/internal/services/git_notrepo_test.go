@@ -60,7 +60,7 @@ func repoWithCommit(t *testing.T, dir string) string {
 // TestGitDiff_BadHashInsideRepoIsNotNotARepo below is the arm that does
 // discriminate, and it is where the go-git substitution actually fails.
 func TestGitEntryPoints_NotARepoIsA404(t *testing.T) {
-	svc := NewGitService(&config.Config{}, nil)
+	svc := NewGitService(&config.Config{}, newTestDB(t))
 
 	// A directory nested inside a real repo: the git CLI walks up to the parent
 	// .git, so logs work. go-git's PlainOpen does not walk up.

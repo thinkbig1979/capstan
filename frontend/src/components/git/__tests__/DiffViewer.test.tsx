@@ -118,14 +118,14 @@ describe('DiffViewer — load states', () => {
   })
 
   it('says there is no diff when the response carries no parseable files', async () => {
-    mockDiff.mockResolvedValue({ diff: '' })
+    mockDiff.mockResolvedValue({ diff: '', hiddenFiles: [] })
     renderWithProviders(<DiffViewer stackId="s1" commitHash="abc123" />)
 
     expect(await screen.findByText('No diff available')).toBeInTheDocument()
   })
 
   it('requests the diff for the stack and commit it was given', async () => {
-    mockDiff.mockResolvedValue({ diff: DIFF })
+    mockDiff.mockResolvedValue({ diff: DIFF, hiddenFiles: [] })
     renderWithProviders(<DiffViewer stackId="s1" commitHash="abc123" />)
 
     await waitFor(() => expect(mockDiff).toHaveBeenCalledWith('s1', 'abc123'))
@@ -134,7 +134,7 @@ describe('DiffViewer — load states', () => {
 
 describe('DiffViewer — rendering a diff', () => {
   it('names the file without the git a/ b/ prefix', async () => {
-    mockDiff.mockResolvedValue({ diff: DIFF })
+    mockDiff.mockResolvedValue({ diff: DIFF, hiddenFiles: [] })
     renderWithProviders(<DiffViewer stackId="s1" commitHash="abc123" />)
 
     // Asserted against the parser as of agent-os-t9up: before that fix this read
@@ -144,7 +144,7 @@ describe('DiffViewer — rendering a diff', () => {
   })
 
   it('shows the added and removed line counts', async () => {
-    mockDiff.mockResolvedValue({ diff: DIFF })
+    mockDiff.mockResolvedValue({ diff: DIFF, hiddenFiles: [] })
     renderWithProviders(<DiffViewer stackId="s1" commitHash="abc123" />)
 
     expect(await screen.findByText('+1')).toBeInTheDocument()
@@ -162,6 +162,7 @@ describe('DiffViewer — rendering a diff', () => {
         ' # Title',
         '+a new line',
       ].join('\n'),
+      hiddenFiles: [],
     })
     renderWithProviders(<DiffViewer stackId="s1" commitHash="abc123" />)
 
@@ -170,7 +171,7 @@ describe('DiffViewer — rendering a diff', () => {
   })
 
   it('renders the hunk header and both sides of the change', async () => {
-    mockDiff.mockResolvedValue({ diff: DIFF })
+    mockDiff.mockResolvedValue({ diff: DIFF, hiddenFiles: [] })
     renderWithProviders(<DiffViewer stackId="s1" commitHash="abc123" />)
 
     expect(await screen.findByText('@@ -1,3 +1,3 @@')).toBeInTheDocument()
@@ -179,7 +180,7 @@ describe('DiffViewer — rendering a diff', () => {
   })
 
   it('renders every file in a multi-file diff', async () => {
-    mockDiff.mockResolvedValue({ diff: TWO_FILE_DIFF })
+    mockDiff.mockResolvedValue({ diff: TWO_FILE_DIFF, hiddenFiles: [] })
     renderWithProviders(<DiffViewer stackId="s1" commitHash="abc123" />)
 
     expect(await screen.findByText('compose.yml')).toBeInTheDocument()
@@ -190,7 +191,7 @@ describe('DiffViewer — rendering a diff', () => {
 describe('DiffViewer — collapsing files', () => {
   it('hides a file\'s hunks when its header is clicked, and restores them', async () => {
     const user = userEvent.setup()
-    mockDiff.mockResolvedValue({ diff: DIFF })
+    mockDiff.mockResolvedValue({ diff: DIFF, hiddenFiles: [] })
     renderWithProviders(<DiffViewer stackId="s1" commitHash="abc123" />)
 
     await screen.findByText('@@ -1,3 +1,3 @@')
@@ -208,7 +209,7 @@ describe('DiffViewer — collapsing files', () => {
 
   it('collapses only the file that was clicked', async () => {
     const user = userEvent.setup()
-    mockDiff.mockResolvedValue({ diff: TWO_FILE_DIFF })
+    mockDiff.mockResolvedValue({ diff: TWO_FILE_DIFF, hiddenFiles: [] })
     renderWithProviders(<DiffViewer stackId="s1" commitHash="abc123" />)
 
     await screen.findByText('@@ -1,3 +1,3 @@')
@@ -226,7 +227,7 @@ describe('DiffViewer — collapsing files', () => {
 
 describe('DiffViewer — unified and split views', () => {
   it('defaults to unified, which puts each line in a single cell', async () => {
-    mockDiff.mockResolvedValue({ diff: DIFF })
+    mockDiff.mockResolvedValue({ diff: DIFF, hiddenFiles: [] })
     renderWithProviders(<DiffViewer stackId="s1" commitHash="abc123" />)
 
     await screen.findByText('compose.yml')
@@ -239,7 +240,7 @@ describe('DiffViewer — unified and split views', () => {
 
   it('switching to split puts old and new side by side', async () => {
     const user = userEvent.setup()
-    mockDiff.mockResolvedValue({ diff: DIFF })
+    mockDiff.mockResolvedValue({ diff: DIFF, hiddenFiles: [] })
     renderWithProviders(<DiffViewer stackId="s1" commitHash="abc123" />)
 
     await screen.findByText('compose.yml')
@@ -254,7 +255,7 @@ describe('DiffViewer — unified and split views', () => {
 
   it('persists the chosen view to localStorage', async () => {
     const user = userEvent.setup()
-    mockDiff.mockResolvedValue({ diff: DIFF })
+    mockDiff.mockResolvedValue({ diff: DIFF, hiddenFiles: [] })
     renderWithProviders(<DiffViewer stackId="s1" commitHash="abc123" />)
 
     await screen.findByText('compose.yml')
@@ -271,7 +272,7 @@ describe('DiffViewer — unified and split views', () => {
 
   it('restores a saved split preference on mount', async () => {
     localStorage.setItem('diff-view-preference', 'split')
-    mockDiff.mockResolvedValue({ diff: DIFF })
+    mockDiff.mockResolvedValue({ diff: DIFF, hiddenFiles: [] })
     renderWithProviders(<DiffViewer stackId="s1" commitHash="abc123" />)
 
     await screen.findByText('compose.yml')
@@ -280,7 +281,7 @@ describe('DiffViewer — unified and split views', () => {
 
   it('falls back to unified when the saved preference is not a known view', async () => {
     localStorage.setItem('diff-view-preference', 'something-else')
-    mockDiff.mockResolvedValue({ diff: DIFF })
+    mockDiff.mockResolvedValue({ diff: DIFF, hiddenFiles: [] })
     renderWithProviders(<DiffViewer stackId="s1" commitHash="abc123" />)
 
     await screen.findByText('compose.yml')
@@ -312,7 +313,7 @@ describe('DiffViewer — unified and split views', () => {
  */
 describe('DiffViewer — a failed REFETCH must not discard the diff (agent-os-lurn)', () => {
   it('keeps the rendered diff when a REFETCH fails', async () => {
-    mockDiff.mockResolvedValue({ diff: DIFF })
+    mockDiff.mockResolvedValue({ diff: DIFF, hiddenFiles: [] })
     const { queryClient } = renderWithProviders(<DiffViewer stackId="s1" commitHash="abc123" />)
 
     expect(await screen.findByText('compose.yml')).toBeInTheDocument()
@@ -335,10 +336,66 @@ describe('DiffViewer — a failed REFETCH must not discard the diff (agent-os-lu
 
     // agent-os-3k31: the notice offers Retry, and Retry re-runs the read that failed.
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeInTheDocument()
-    mockDiff.mockResolvedValue({ diff: DIFF })
+    mockDiff.mockResolvedValue({ diff: DIFF, hiddenFiles: [] })
     const callsBeforeRetry = mockDiff.mock.calls.length
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
     await waitFor(() => expect(mockDiff.mock.calls.length).toBeGreaterThan(callsBeforeRetry))
     await waitFor(() => expect(screen.queryByText(/Could not refresh the diff/)).not.toBeInTheDocument())
+  })
+})
+
+/**
+ * agent-os-2omy: the server leaves env files out of a commit's patch and names
+ * them in hiddenFiles (D140). The notice says why, in the commit dialog's
+ * words, and sits outside ParsedDiffView, which the dialog shares.
+ */
+describe('DiffViewer — hidden env files (agent-os-2omy)', () => {
+  // The dialog's string, read from its source: it is module-local there.
+  const [commitDialogSource] = Object.values(
+    import.meta.glob<string>('../CommitPushDialog.tsx', { query: '?raw', import: 'default', eager: true }),
+  )
+  const dialogWording = /const ENV_DIFF_HIDDEN = '([^']+)'/.exec(commitDialogSource ?? '')?.[1]
+
+  it('names the hidden files beside the files it still shows', async () => {
+    mockDiff.mockResolvedValue({ diff: DIFF, hiddenFiles: ['.env', 'stackB/secrets.conf'] })
+    renderWithProviders(<DiffViewer stackId="s1" commitHash="abc123" />)
+
+    const notice = await screen.findByRole('note')
+    expect(within(notice).getByText('.env')).toBeInTheDocument()
+    expect(within(notice).getByText('stackB/secrets.conf')).toBeInTheDocument()
+    expect(screen.getByText('compose.yml')).toBeInTheDocument()
+  })
+
+  it('shows only the notice when every file is hidden', async () => {
+    mockDiff.mockResolvedValue({ diff: '', hiddenFiles: ['.env'] })
+    renderWithProviders(<DiffViewer stackId="s1" commitHash="abc123" />)
+
+    const notice = await screen.findByRole('note')
+    expect(within(notice).getByText('.env')).toBeInTheDocument()
+    expect(screen.queryByText('No diff available')).not.toBeInTheDocument()
+  })
+
+  it('renders the diff when the server sends no hiddenFiles field', async () => {
+    mockDiff.mockResolvedValue({ diff: DIFF })
+    renderWithProviders(<DiffViewer stackId="s1" commitHash="abc123" />)
+
+    expect(await screen.findByText('compose.yml')).toBeInTheDocument()
+    expect(screen.queryByRole('note')).not.toBeInTheDocument()
+  })
+
+  it('shows no notice when nothing is hidden', async () => {
+    mockDiff.mockResolvedValue({ diff: DIFF, hiddenFiles: [] })
+    renderWithProviders(<DiffViewer stackId="s1" commitHash="abc123" />)
+
+    expect(await screen.findByText('compose.yml')).toBeInTheDocument()
+    expect(screen.queryByRole('note')).not.toBeInTheDocument()
+  })
+
+  it('says it in the commit dialog\'s words', async () => {
+    expect(dialogWording).toBeTruthy()
+    mockDiff.mockResolvedValue({ diff: '', hiddenFiles: ['.env'] })
+    renderWithProviders(<DiffViewer stackId="s1" commitHash="abc123" />)
+
+    expect(await screen.findByText(dialogWording!)).toBeInTheDocument()
   })
 })

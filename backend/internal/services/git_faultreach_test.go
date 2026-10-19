@@ -406,7 +406,7 @@ func TestGetDiffCLI_UnreadableDiffIsReported(t *testing.T) {
 	head := gitOutput(t, dir, "rev-parse", "HEAD")
 	faultingGitOnPath(t, "*\" show --format=\"*")
 
-	svc := NewGitService(&config.Config{}, nil)
+	svc := NewGitService(&config.Config{}, newTestDB(t))
 	_, err := svc.GetDiff(dir, head)
 	if err == nil {
 		t.Fatal("GetDiff succeeded while `show --format=` was faulted")
