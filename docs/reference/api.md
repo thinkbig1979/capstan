@@ -252,7 +252,10 @@ With a live token, all four behave exactly as they did before.
 
 - `GET /api/v1/git` — status; the web UI passes `?stackId=<id>`, but the
   route itself is a plain query-string GET
-- `POST /api/v1/git/pull` — pull changes. SSH remotes use the folder's
+- `POST /api/v1/git/pull` — pull changes. Takes `?stackId=<id>` only; a
+  request without it (including the old `?dir=`) answers **400
+  `VALIDATION_ERROR` "Pull needs a stackId"** and pulls nothing
+  (agent-os-hmoy). SSH remotes use the folder's
   SSH key when its git auth is SSH, else the global key in Settings > Git
   (`git_ssh_key`, then `GIT_SSH_KEY`). The built-in default
   `$HOME/.ssh/id_rsa`, when no file is there, means no key: ssh runs as it

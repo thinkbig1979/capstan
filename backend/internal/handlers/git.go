@@ -245,7 +245,16 @@ func (h *GitHandler) GetStatus(c *gin.Context) {
 }
 
 func (h *GitHandler) Pull(c *gin.Context) {
-	absPath, _, err := h.resolvePathFromStack(c)
+	// A pull rewrites the work tree, so like the other git writes it names a
+	// registered stack: the stack locks come from the repository the stack is
+	// in, and a raw ?dir= on a repository with no stack took none
+	// (agent-os-hmoy).
+	stackID := c.Query("stackId")
+	if stackID == "" {
+		handleError(c, models.NewAppError(http.StatusBadRequest, models.ErrValidation, "Pull needs a stackId"))
+		return
+	}
+	absPath, err := h.stackDir(stackID)
 	if err != nil {
 		handleError(c, err)
 		return
