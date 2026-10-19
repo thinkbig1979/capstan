@@ -103,9 +103,9 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 	// below via gitCommandWithCreds, instead of each of the nine calls
 	// re-resolving (and re-logging) independently through gitCommand
 	// (agent-os-9ha).
-	user, token := s.httpsCredentials(dirPath)
+	cred := s.gitCredentials(dirPath)
 
-	branch, err := s.gitCommandWithCreds(dirPath, user, token, "rev-parse", "--abbrev-ref", "HEAD")
+	branch, err := s.gitCommandWithCreds(dirPath, cred, "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
 		// This guard used to answer EVERY failure of that command with a flat
 		// 404 "Not a git repository", asserting a diagnosis it had not tested
@@ -166,7 +166,7 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 	// repository would be served as branch "HEAD", commit "HEAD". It gets the
 	// answer `git init` gets (agent-os-m2g8). The probe's error is returned:
 	// guessing "not bare" walks into `status`'s 500 below with a vaguer message.
-	isBare, err := s.gitCommandWithCreds(dirPath, user, token, "rev-parse", "--is-bare-repository")
+	isBare, err := s.gitCommandWithCreds(dirPath, cred, "rev-parse", "--is-bare-repository")
 	if err != nil {
 		return nil, fmt.Errorf("failed to detect a bare repository: %w", err)
 	}
@@ -175,15 +175,15 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 		return nil, models.NewAppError(404, models.ErrGitNoCommits, "Repository has no commits yet")
 	}
 
-	commitHash, err := s.gitCommandWithCreds(dirPath, user, token, "rev-parse", "HEAD")
+	commitHash, err := s.gitCommandWithCreds(dirPath, cred, "rev-parse", "HEAD")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get HEAD: %w", err)
 	}
 
-	subject, _ := s.gitCommandWithCreds(dirPath, user, token, "log", "-1", "--format=%s")  //nolint:errcheck // rev-parse HEAD already resolved above, so this cannot be a missing commit. An unreadable format field renders as an absent value in the UI, never as a wrong one.
-	author, _ := s.gitCommandWithCreds(dirPath, user, token, "log", "-1", "--format=%an")  //nolint:errcheck // rev-parse HEAD already resolved above, so this cannot be a missing commit. An unreadable format field renders as an absent value in the UI, never as a wrong one.
-	email, _ := s.gitCommandWithCreds(dirPath, user, token, "log", "-1", "--format=%ae")   //nolint:errcheck // rev-parse HEAD already resolved above, so this cannot be a missing commit. An unreadable format field renders as an absent value in the UI, never as a wrong one.
-	dateStr, _ := s.gitCommandWithCreds(dirPath, user, token, "log", "-1", "--format=%aI") //nolint:errcheck // rev-parse HEAD already resolved above, so this cannot be a missing commit. An unreadable format field renders as an absent value in the UI, never as a wrong one.
+	subject, _ := s.gitCommandWithCreds(dirPath, cred, "log", "-1", "--format=%s")  //nolint:errcheck // rev-parse HEAD already resolved above, so this cannot be a missing commit. An unreadable format field renders as an absent value in the UI, never as a wrong one.
+	author, _ := s.gitCommandWithCreds(dirPath, cred, "log", "-1", "--format=%an")  //nolint:errcheck // rev-parse HEAD already resolved above, so this cannot be a missing commit. An unreadable format field renders as an absent value in the UI, never as a wrong one.
+	email, _ := s.gitCommandWithCreds(dirPath, cred, "log", "-1", "--format=%ae")   //nolint:errcheck // rev-parse HEAD already resolved above, so this cannot be a missing commit. An unreadable format field renders as an absent value in the UI, never as a wrong one.
+	dateStr, _ := s.gitCommandWithCreds(dirPath, cred, "log", "-1", "--format=%aI") //nolint:errcheck // rev-parse HEAD already resolved above, so this cannot be a missing commit. An unreadable format field renders as an absent value in the UI, never as a wrong one.
 
 	shortHash := commitHash
 	if len(shortHash) > 7 {
@@ -198,7 +198,7 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 		Date:    dateStr,
 	}
 
-	remoteURL, _ := s.gitCommandWithCreds(dirPath, user, token, "remote", "get-url", "origin") //nolint:errcheck // `git remote get-url origin` exits non-zero precisely when there is no origin, which is how a local-only repository is detected here. The empty string IS the answer, so propagating would fail status for every repo without a remote.
+	remoteURL, _ := s.gitCommandWithCreds(dirPath, cred, "remote", "get-url", "origin") //nolint:errcheck // `git remote get-url origin` exits non-zero precisely when there is no origin, which is how a local-only repository is detected here. The empty string IS the answer, so propagating would fail status for every repo without a remote.
 	// redactToken has already run on this value, but it only removes the token
 	// Capstan itself resolved, so a credential the operator embedded
 	// independently survives it (agent-os-57xj). RemoteURL carries a json tag,
@@ -253,7 +253,7 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 	// git_stderrsplit_vwi7_test.go, whose fourth arm also pins the COUNT on a
 	// faulted repository with one real modification — the boolean alone cannot
 	// tell that case from the bug.
-	statusOut, err := s.gitCommandWithCreds(dirPath, user, token, "status", "--porcelain")
+	statusOut, err := s.gitCommandWithCreds(dirPath, cred, "status", "--porcelain")
 	if err != nil {
 		return nil, fmt.Errorf("failed to read status: %w", err)
 	}
@@ -282,10 +282,10 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 	// report the nonsense "origin/HEAD" for every detached checkout — a state
 	// where go-git reported "".
 	if branch != "HEAD" {
-		if output, err := s.gitCommandWithCreds(dirPath, user, token, //geterrors:ignore a non-zero exit from rev-parse --abbrev-ref @{upstream} IS "no upstream configured", which is the question; the else branch below handles it
+		if output, err := s.gitCommandWithCreds(dirPath, cred, //geterrors:ignore a non-zero exit from rev-parse --abbrev-ref @{upstream} IS "no upstream configured", which is the question; the else branch below handles it
 			"rev-parse", "--abbrev-ref", "@{upstream}"); err == nil {
 			trackingBranch = strings.TrimSpace(output)
-		} else if _, refErr := s.gitCommandWithCreds(dirPath, user, token, //geterrors:ignore a non-zero exit from rev-parse --verify refs/remotes/origin/<branch> IS "no such remote-tracking ref", which is the question
+		} else if _, refErr := s.gitCommandWithCreds(dirPath, cred, //geterrors:ignore a non-zero exit from rev-parse --verify refs/remotes/origin/<branch> IS "no such remote-tracking ref", which is the question
 			"rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+branch); refErr == nil {
 			// No upstream configured, but a remote-tracking ref of the
 			// conventional name exists — the state left by a bare `git fetch`
@@ -345,7 +345,7 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 		// TestGetStatus_AmbiguousRefnameStillCountsAheadBehind (which asserts
 		// ahead=1, not merely "an error") and
 		// TestGetStatus_UnreadableAheadBehindCountIsAnError.
-		output, err := s.gitCommandWithCreds(dirPath, user, token,
+		output, err := s.gitCommandWithCreds(dirPath, cred,
 			"rev-list", "--left-right", "--count", trackingBranch+"...HEAD")
 		if err != nil {
 			return nil, fmt.Errorf("failed to count ahead/behind against %s: %w", trackingBranch, err)
@@ -416,8 +416,8 @@ func (s *GitService) gitTimeout() time.Duration {
 }
 
 func (s *GitService) gitCommand(dirPath string, args ...string) (string, error) {
-	user, token := s.httpsCredentials(dirPath)
-	return s.gitCommandWithCreds(dirPath, user, token, args...)
+	cred := s.gitCredentials(dirPath)
+	return s.gitCommandWithCreds(dirPath, cred, args...)
 }
 
 // gitCommandWithCreds is gitCommand with credential resolution factored out,
@@ -459,10 +459,10 @@ func (s *GitService) gitCommand(dirPath string, args ...string) (string, error) 
 // belt-and-braces: MEASURED, `git rev-parse <token>` exits 128 with the token on
 // stdout AND on stderr, so a credential can leak on either stream of a FAILING
 // command.
-func (s *GitService) gitCommandWithCreds(dirPath, user, token string, args ...string) (string, error) {
+func (s *GitService) gitCommandWithCreds(dirPath string, cred gitCreds, args ...string) (string, error) {
 	ctx, cancel := withCommandDeadline(context.Background(), s.gitTimeout())
 	defer cancel()
-	cmd, _ := s.gitCmdWithCreds(ctx, dirPath, user, token, args...)
+	cmd, _ := s.gitCmdWithCreds(ctx, dirPath, cred, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -472,7 +472,7 @@ func (s *GitService) gitCommandWithCreds(dirPath, user, token string, args ...st
 	// classifies it as "git never answered", which is what it is.
 	if err := timeoutError(ctx, cmd.Run(), "command"); err != nil {
 		return "", fmt.Errorf("git %s: %w (%s)", args[0], err,
-			redactToken(gitDiagnostic(stdout.String(), stderr.String()), token))
+			redactToken(gitDiagnostic(stdout.String(), stderr.String()), cred.token))
 	}
 
 	// A zero-exit diagnostic is dropped from the DATA and recorded here instead.
@@ -485,10 +485,10 @@ func (s *GitService) gitCommandWithCreds(dirPath, user, token string, args ...st
 	// persisted in it.
 	if diag := strings.TrimSpace(stderr.String()); diag != "" {
 		slog.Debug("git wrote to stderr but exited 0; diagnostic kept out of the parsed value",
-			"path", dirPath, "subcommand", args[0], "stderr", redactToken(diag, token))
+			"path", dirPath, "subcommand", args[0], "stderr", redactToken(diag, cred.token))
 	}
 
-	return redactToken(strings.TrimSpace(stdout.String()), token), nil
+	return redactToken(strings.TrimSpace(stdout.String()), cred.token), nil
 }
 
 // gitDiagnostic reassembles both halves of a failed git child for an error
@@ -519,13 +519,13 @@ func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
 
 	// Resolved once for the whole pull and threaded through every call below
 	// (agent-os-9ha) — see getStatusCLI for why.
-	user, token := s.httpsCredentials(dirPath)
+	cred := s.gitCredentials(dirPath)
 
 	// A bare repository has no work tree, so `status` below fails with "this
 	// operation must be run in a work tree" and the pull used to answer 500 for
 	// a request the repository simply cannot satisfy (agent-os-00zg). Same probe
 	// as getStatusCLI, and its error is returned for the same reason.
-	isBare, err := s.gitCommandWithCreds(dirPath, user, token, "rev-parse", "--is-bare-repository")
+	isBare, err := s.gitCommandWithCreds(dirPath, cred, "rev-parse", "--is-bare-repository")
 	if err != nil {
 		return nil, fmt.Errorf("failed to detect a bare repository: %w", err)
 	}
@@ -533,7 +533,7 @@ func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
 		return nil, models.NewAppError(409, models.ErrGitBareRepo, "A bare repository has no work tree to pull into")
 	}
 
-	dirtyOutput, err := s.gitCommandWithCreds(dirPath, user, token, "status", "--porcelain")
+	dirtyOutput, err := s.gitCommandWithCreds(dirPath, cred, "status", "--porcelain")
 	if err != nil {
 		return nil, fmt.Errorf("failed to check status: %w", err)
 	}
@@ -541,12 +541,19 @@ func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
 		return nil, models.NewAppError(400, models.ErrGitDirty, "Working directory has uncommitted changes")
 	}
 
-	previousCommit, err := s.gitCommandWithCreds(dirPath, user, token, "rev-parse", "HEAD")
+	previousCommit, err := s.gitCommandWithCreds(dirPath, cred, "rev-parse", "HEAD")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get HEAD: %w", err)
 	}
 
-	if _, err = s.gitCommandWithCreds(dirPath, user, token, "pull", "--ff-only"); err != nil {
+	// Before the pull contacts anything: an unusable ssh key is refused here,
+	// naming the fix, rather than surfacing as GIT_REMOTE_UNREACHABLE
+	// (agent-os-z0gl).
+	if err = s.sshPullPrecheck(dirPath, cred); err != nil {
+		return nil, err
+	}
+
+	if _, err = s.gitCommandWithCreds(dirPath, cred, "pull", "--ff-only"); err != nil {
 		// Two defects left here together (agent-os-fv2j). Every failure used
 		// to become one 500 GIT_CONFLICT, and the up-to-date case was
 		// recognised by matching git's own prose. pullFailure replaces the
@@ -563,7 +570,7 @@ func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
 		// own. The string match was a leftover from the go-git implementation
 		// this replaced, where the no-op was signalled by a non-nil
 		// NoErrAlreadyUpToDate sentinel rather than by success.
-		return nil, s.pullFailure(dirPath, user, token, err)
+		return nil, s.pullFailure(dirPath, cred, err)
 	}
 
 	// Checked, not discarded, and for the same reason as the identical call
@@ -599,7 +606,7 @@ func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
 	// The wrapped cause below names the real fault, and a re-run of an
 	// --ff-only pull is a no-op, so erring toward "failed" is the safe
 	// direction.
-	currentCommit, err := s.gitCommandWithCreds(dirPath, user, token, "rev-parse", "HEAD")
+	currentCommit, err := s.gitCommandWithCreds(dirPath, cred, "rev-parse", "HEAD")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get HEAD after pull: %w", err)
 	}
@@ -621,7 +628,7 @@ func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
 		//                  is attempted, and fails loudly.
 		// gitRun, not gitCommandWithCreds: that TrimSpaces stdout, which would
 		// eat a leading space of the first name.
-		diffOutput, _, err := s.gitRun(dirPath, user, token, nil, "diff", "--name-only", "-z", "--no-renames", "--no-relative", previousCommit, currentCommit)
+		diffOutput, _, err := s.gitRun(dirPath, cred, nil, "diff", "--name-only", "-z", "--no-renames", "--no-relative", previousCommit, currentCommit)
 		switch {
 		case err != nil:
 			// This branch runs only because the ref MOVED, so "no files
@@ -744,8 +751,8 @@ func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
 // ls-remote contacts the remote, so this costs a round trip. It runs only after
 // a pull has already failed, so the happy path pays nothing, and
 // GIT_TERMINAL_PROMPT=0 in the child env keeps it from blocking on a prompt.
-func (s *GitService) pullFailure(dirPath, user, token string, err error) error {
-	if _, probeErr := s.gitCommandWithCreds(dirPath, user, token, "ls-remote", "--quiet"); probeErr != nil {
+func (s *GitService) pullFailure(dirPath string, cred gitCreds, err error) error {
+	if _, probeErr := s.gitCommandWithCreds(dirPath, cred, "ls-remote", "--quiet"); probeErr != nil {
 		// EXIT STATUS, not "non-nil" -- the same discipline as the is-ancestor
 		// branch below and as gitFailure, and for the same reason
 		// (agent-os-4kom). A non-nil probeErr also covers the probe NEVER
@@ -784,11 +791,11 @@ func (s *GitService) pullFailure(dirPath, user, token string, err error) error {
 		return models.NewAppErrorWithDetails(502, models.ErrGitRemoteUnreachable,
 			"Could not read from the git remote", err.Error())
 	}
-	if _, upstreamErr := s.gitCommandWithCreds(dirPath, user, token,
+	if _, upstreamErr := s.gitCommandWithCreds(dirPath, cred,
 		"rev-parse", "--verify", "--quiet", "@{upstream}"); upstreamErr != nil {
 		return fmt.Errorf("git pull failed and the branch tracks no upstream: %w", err)
 	}
-	if _, ancestorErr := s.gitCommandWithCreds(dirPath, user, token,
+	if _, ancestorErr := s.gitCommandWithCreds(dirPath, cred,
 		"merge-base", "--is-ancestor", "HEAD", "@{upstream}"); ancestorErr != nil {
 		// EXIT 1 SPECIFICALLY, never "any non-zero". git documents 1 as "HEAD
 		// is not an ancestor of the upstream" and reserves other non-zero
@@ -921,8 +928,8 @@ func (s *GitService) PullVerified(dirPath string, redeploy bool, docker *DockerS
 	// placed in that frame below. Without the top nothing can be placed, and
 	// "success, redeployed nothing" would be false, so every stack fails
 	// (agent-os-4d60).
-	user, token := s.httpsCredentials(dirPath)
-	top, topErr := s.repoTopLevel(dirPath, user, token)
+	cred := s.gitCredentials(dirPath)
+	top, topErr := s.repoTopLevel(dirPath, cred)
 
 	for _, stack := range stacks {
 		if topErr != nil {
@@ -1111,7 +1118,7 @@ func (s *GitService) gitFailure(dirPath string, err error) error {
 	if err == nil {
 		return nil
 	}
-	_, probeErr := s.gitCommandWithCreds(dirPath, "", "", "rev-parse", "--git-dir")
+	_, probeErr := s.gitCommandWithCreds(dirPath, gitCreds{}, "rev-parse", "--git-dir")
 	if probeErr == nil {
 		return nil
 	}
@@ -1173,19 +1180,19 @@ func (s *GitService) gitFailure(dirPath string, err error) error {
 // Credentials are not resolved: neither probe contacts a remote, and this runs
 // only after a command has already failed.
 func (s *GitService) hasUnbornHead(dirPath string) bool {
-	if _, err := s.gitCommandWithCreds(dirPath, "", "", "rev-parse", "--verify", "HEAD"); err == nil { //geterrors:ignore a non-zero exit from rev-parse --verify HEAD IS "HEAD does not resolve", which is exactly what hasUnbornHead asks
+	if _, err := s.gitCommandWithCreds(dirPath, gitCreds{}, "rev-parse", "--verify", "HEAD"); err == nil { //geterrors:ignore a non-zero exit from rev-parse --verify HEAD IS "HEAD does not resolve", which is exactly what hasUnbornHead asks
 		return false
 	}
-	_, err := s.gitCommandWithCreds(dirPath, "", "", "symbolic-ref", "--quiet", "HEAD") //geterrors:ignore a non-zero exit from symbolic-ref --quiet HEAD IS "HEAD is not a symbolic ref", and the predicate returns precisely that
+	_, err := s.gitCommandWithCreds(dirPath, gitCreds{}, "symbolic-ref", "--quiet", "HEAD") //geterrors:ignore a non-zero exit from symbolic-ref --quiet HEAD IS "HEAD is not a symbolic ref", and the predicate returns precisely that
 	return err == nil
 }
 
 func (s *GitService) getLogCLI(dirPath string, limit, offset int) (*models.LogResult, error) {
 	// Resolved once for the whole log request (agent-os-9ha) — see
 	// getStatusCLI for why.
-	user, token := s.httpsCredentials(dirPath)
+	cred := s.gitCredentials(dirPath)
 
-	totalStr, err := s.gitCommandWithCreds(dirPath, user, token, "rev-list", "--count", "HEAD")
+	totalStr, err := s.gitCommandWithCreds(dirPath, cred, "rev-list", "--count", "HEAD")
 	if err != nil {
 		if repoErr := s.gitFailure(dirPath, err); repoErr != nil {
 			return nil, repoErr
@@ -1204,7 +1211,7 @@ func (s *GitService) getLogCLI(dirPath string, limit, offset int) (*models.LogRe
 	skip := offset
 	fetchCount := limit
 	logFormat := "%H%n%h%n%an%n%ae%n%s%n%aI%n---COMMIT_SEP---"
-	output, err := s.gitCommandWithCreds(dirPath, user, token, "log", fmt.Sprintf("--skip=%d", skip), fmt.Sprintf("--max-count=%d", fetchCount), fmt.Sprintf("--format=%s", logFormat))
+	output, err := s.gitCommandWithCreds(dirPath, cred, "log", fmt.Sprintf("--skip=%d", skip), fmt.Sprintf("--max-count=%d", fetchCount), fmt.Sprintf("--format=%s", logFormat))
 	if err != nil {
 		return nil, fmt.Errorf("failed to get log: %w", err)
 	}
@@ -1246,7 +1253,7 @@ func (s *GitService) GetDiff(dirPath string, commitHash string) (*models.DiffRes
 func (s *GitService) getDiffCLI(dirPath string, commitHash string) (*models.DiffResult, error) {
 	// Resolved once for the whole diff request (agent-os-9ha) — see
 	// getStatusCLI for why.
-	user, token := s.httpsCredentials(dirPath)
+	cred := s.gitCredentials(dirPath)
 
 	// An unknown commit is a client mistake, but `git log` exits 128 for it
 	// exactly as it does for faults, so it answered 500 (agent-os-tyl6).
@@ -1258,7 +1265,7 @@ func (s *GitService) getDiffCLI(dirPath string, commitHash string) (*models.Diff
 	//
 	// Every later call names the full commit id this resolves to, so an
 	// annotated tag's id can't make `show` print the tag (agent-os-2omy).
-	oid, verr := s.gitCommandWithCreds(dirPath, user, token, "rev-parse", "--verify", "--quiet", commitHash+"^{commit}")
+	oid, verr := s.gitCommandWithCreds(dirPath, cred, "rev-parse", "--verify", "--quiet", commitHash+"^{commit}")
 	if gitExitCode(verr) == 1 {
 		return nil, models.NewAppError(404, models.ErrNotFound, "Commit not found")
 	}
@@ -1270,7 +1277,7 @@ func (s *GitService) getDiffCLI(dirPath string, commitHash string) (*models.Diff
 	}
 
 	// No signature check: with log.showSignature set, it runs gpg.program.
-	logOutput, _, err := s.gitRun(dirPath, user, token, noLazyFetchEnv, "-c", "log.showSignature=false",
+	logOutput, _, err := s.gitRun(dirPath, cred, noLazyFetchEnv, "-c", "log.showSignature=false",
 		"log", "-1", "--no-show-signature", "--format=%H%n%h%n%an%n%ae%n%s%n%aI", oid)
 	logOutput = strings.TrimSpace(logOutput)
 	if err != nil {
@@ -1293,14 +1300,14 @@ func (s *GitService) getDiffCLI(dirPath string, commitHash string) (*models.Diff
 		Date:    strings.TrimSpace(lines[5]),
 	}
 
-	parentsOut, err := s.gitCommandWithCreds(dirPath, user, token, "rev-parse", oid+"^@")
+	parentsOut, err := s.gitCommandWithCreds(dirPath, cred, "rev-parse", oid+"^@")
 	if err != nil {
 		return nil, fmt.Errorf("failed to read the commit's parents: %w", err)
 	}
 	// The patch with every env file left out; see git_history_diff.go. Its
 	// file list is complete, root and merge commits included, and holds the
 	// hidden files too.
-	hd, err := s.historyDiff(dirPath, user, token, oid, strings.Fields(parentsOut))
+	hd, err := s.historyDiff(dirPath, cred, oid, strings.Fields(parentsOut))
 	if err != nil {
 		return nil, err
 	}

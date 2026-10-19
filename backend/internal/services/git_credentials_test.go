@@ -288,7 +288,7 @@ func TestHTTPSCredentials_SSHAuthType_NoHTTPSCredentialApplies(t *testing.T) {
 		t.Fatalf("store git_https_token: %v", err)
 	}
 
-	user, token := svc.httpsCredentials(dirPath)
+	user, token := httpsOf(svc.gitCredentials(dirPath))
 	if user != "" || token != "" {
 		t.Errorf("got user=%q token=%q, want no HTTPS credential for an ssh-authType directory", user, token)
 	}
@@ -328,7 +328,7 @@ func TestHTTPSCredentials_DirectoryHTTPSEmptyToken_LogsWarning(t *testing.T) {
 	svc := gitServiceWithDirectoryCredential(t, dirPath, "https", testGitUser, "")
 	buf := captureSlog(t)
 
-	user, token := svc.httpsCredentials(dirPath)
+	user, token := httpsOf(svc.gitCredentials(dirPath))
 	if token != "" {
 		t.Fatalf("expected an empty token, got %q", token)
 	}
@@ -354,7 +354,7 @@ func TestHTTPSCredentials_DirectoryHTTPSWithToken_NoWarning(t *testing.T) {
 	svc := gitServiceWithDirectoryCredential(t, dirPath, "https", testGitUser, testGitToken)
 	buf := captureSlog(t)
 
-	svc.httpsCredentials(dirPath)
+	svc.gitCredentials(dirPath)
 
 	if buf.Len() != 0 {
 		t.Errorf("expected no warning for a fully-configured directory credential, got: %s", buf.String())
@@ -368,8 +368,8 @@ func TestGitCmd_DirectoryToken_TravelsInEnvNotArgv(t *testing.T) {
 	dirPath := "/stacks/https-repo"
 	svc := gitServiceWithDirectoryCredential(t, dirPath, "https", testGitUser, testGitToken)
 
-	user, credToken := svc.httpsCredentials(dirPath)
-	cmd, token := svc.gitCmdWithCreds(context.Background(), dirPath, user, credToken, "pull", "--ff-only")
+	user, credToken := httpsOf(svc.gitCredentials(dirPath))
+	cmd, token := svc.gitCmdWithCreds(context.Background(), dirPath, gitCreds{user: user, token: credToken}, "pull", "--ff-only")
 
 	if token != testGitToken {
 		t.Errorf("gitCmdWithCreds returned token %q, want the directory-scoped one", token)
@@ -462,8 +462,8 @@ func TestGitCmd_TokenTravelsInEnvNotArgv(t *testing.T) {
 	svc := gitServiceWithStoredToken(t)
 
 	dir := t.TempDir()
-	user, credToken := svc.httpsCredentials(dir)
-	cmd, token := svc.gitCmdWithCreds(context.Background(), dir, user, credToken, "pull", "--ff-only")
+	user, credToken := httpsOf(svc.gitCredentials(dir))
+	cmd, token := svc.gitCmdWithCreds(context.Background(), dir, gitCreds{user: user, token: credToken}, "pull", "--ff-only")
 
 	if token != testGitToken {
 		t.Errorf("gitCmdWithCreds returned token %q, want the stored one", token)
@@ -498,8 +498,8 @@ func TestGitCmd_NoCredentialWhenNoneConfigured(t *testing.T) {
 	svc := NewGitService(&config.Config{}, newTestDBWithEncryptor(t))
 
 	dir := t.TempDir()
-	user, credToken := svc.httpsCredentials(dir)
-	cmd, token := svc.gitCmdWithCreds(context.Background(), dir, user, credToken, "status", "--porcelain")
+	user, credToken := httpsOf(svc.gitCredentials(dir))
+	cmd, token := svc.gitCmdWithCreds(context.Background(), dir, gitCreds{user: user, token: credToken}, "status", "--porcelain")
 
 	if token != "" {
 		t.Errorf("expected no token, got %q", token)
@@ -526,8 +526,8 @@ func TestGitCmdWithCreds_StripsCapstanSecrets(t *testing.T) {
 
 	svc := gitServiceWithStoredToken(t)
 	dir := t.TempDir()
-	user, token := svc.httpsCredentials(dir)
-	cmd, _ := svc.gitCmdWithCreds(context.Background(), dir, user, token, "status", "--porcelain")
+	user, token := httpsOf(svc.gitCredentials(dir))
+	cmd, _ := svc.gitCmdWithCreds(context.Background(), dir, gitCreds{user: user, token: token}, "status", "--porcelain")
 
 	var sawSecret, sawPrompt, sawUser, sawToken bool
 	for _, kv := range cmd.Env {
@@ -708,14 +708,14 @@ func TestHTTPSCredentials_SettingsBeatEnvironment(t *testing.T) {
 
 	// No directory row exists for this path, so resolution falls straight
 	// through to global settings/environment.
-	user, token := svc.httpsCredentials("/no/such/directory")
+	user, token := httpsOf(svc.gitCredentials("/no/such/directory"))
 	if user != testGitUser || token != testGitToken {
 		t.Errorf("got %q/%q, want the stored settings values", user, token)
 	}
 
 	// With nothing stored, the environment is the fallback rather than nothing.
 	bare := NewGitService(&config.Config{GitHTTPSUser: "env-user", GitHTTPSToken: "env-token"}, newTestDBWithEncryptor(t))
-	user, token = bare.httpsCredentials("/no/such/directory")
+	user, token = httpsOf(bare.gitCredentials("/no/such/directory"))
 	if user != "env-user" || token != "env-token" {
 		t.Errorf("got %q/%q, want the environment values", user, token)
 	}

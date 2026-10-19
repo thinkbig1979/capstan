@@ -492,29 +492,37 @@ func runGitPath(t *testing.T) string {
 	return filepath.Join(p, "git")
 }
 
-// TestPushSSHRefused: an ssh-auth directory is refused before any git child,
-// and an inherit-auth directory whose push URL is ssh-shaped is refused
-// before any push.
+// TestPushSSHRefused: the push URL decides, not the auth type
+// (agent-os-z0gl). An ssh-auth directory pushes to a non-ssh remote; an ssh
+// URL with an unusable key, or with no key applying (the inherit cases
+// below: the fixture has no global key), is refused before any push.
 func TestPushSSHRefused(t *testing.T) {
-	t.Run("ssh auth type runs no git child", func(t *testing.T) {
+	t.Run("Z0gl ssh auth type: a missing key refuses an ssh push, a local push runs", func(t *testing.T) {
 		f := newCommitFix(t, false)
-		require.NoError(t, f.db.UpdateDirectoryCredentials(f.dir, "SSH", "/keys/id", "", ""))
+		f.svc.config.DataDir = f.dataDir
+		require.NoError(t, f.db.UpdateDirectoryCredentials(f.dir, "SSH", filepath.Join(t.TempDir(), "missing-key"), "", ""))
+		runGit(t, f.top, "remote", "set-url", "origin", "ssh://git@example.invalid/o/r.git")
+		writeFile(t, filepath.Join(f.top, "compose.yaml"), "services: {a: {}}\n")
+		before := f.head(t)
 		record := recordingGitOnPath(t)
 
 		ar, w := f.svc.PushVerified(f.dir)
-		requireRefusal(t, ar, http.StatusConflict, models.ErrGitSSHUnsupported)
+		requireRefusal(t, ar, http.StatusConflict, models.ErrGitSSHKeyUnusable)
 		assert.Nil(t, w)
+		assert.Contains(t, ar.Err.Error(), "does not exist inside the container")
 		ar, _ = f.svc.CommitVerified(f.dir, CommitRequest{Message: "m", Files: []string{"compose.yaml"}, Push: true})
-		requireRefusal(t, ar, http.StatusConflict, models.ErrGitSSHUnsupported)
-		_, err := os.Stat(record)
-		assert.True(t, os.IsNotExist(err), "a git child ran for an ssh-auth directory")
-
-		// Control: the same wrapper records an https directory's push.
-		require.NoError(t, f.db.UpdateDirectoryCredentials(f.dir, "inherit", "", "", ""))
-		_, _ = f.svc.PushVerified(f.dir)
+		requireRefusal(t, ar, http.StatusConflict, models.ErrGitSSHKeyUnusable)
+		assert.Equal(t, before, f.head(t), "the commit ran before a predictable push refusal")
 		calls, err := os.ReadFile(record) //nolint:gosec // test-owned record file under t.TempDir()
 		require.NoError(t, err, "the recording wrapper is not on PATH")
-		assert.Contains(t, string(calls), "push --porcelain")
+		assert.NotContains(t, string(calls), "push --porcelain", "a push ran with an unusable key")
+
+		// Control: the same directory, same missing key, pushing to a local
+		// remote: no ssh is involved, so nothing refuses and the push runs.
+		runGit(t, f.top, "remote", "set-url", "origin", f.bare)
+		ar, _ = f.svc.CommitVerified(f.dir, CommitRequest{Message: "m", Files: []string{"compose.yaml"}, Push: true})
+		require.Equal(t, truth.OutcomeSuccess, ar.Outcome, "reason %q err %v", ar.Reason, ar.Err)
+		assert.Equal(t, f.head(t), f.remoteMain(t))
 	})
 
 	for _, tc := range []struct {
@@ -830,13 +838,15 @@ func TestPushURLRefusal(t *testing.T) {
 		"SSH://git@h/r.git":     models.ErrGitSSHUnsupported,
 		"https://h/path::x.git": "",
 	} {
-		got := pushURLRefusal("origin", u)
+		got := pushURLRefusal("origin", u, gitCreds{})
 		code := ""
 		if got != nil {
-			code = got.Code
-		}
-		if got != nil && u != "" {
-			assert.NotContains(t, got.Message, u, "the refusal must not echo the URL")
+			var ae *models.AppError
+			require.ErrorAs(t, got, &ae, "url %q", u)
+			code = ae.Code
+			if u != "" {
+				assert.NotContains(t, ae.Message, u, "the refusal must not echo the URL")
+			}
 		}
 		assert.Equal(t, want, code, "url %q", u)
 	}

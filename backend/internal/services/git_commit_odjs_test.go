@@ -276,7 +276,7 @@ func TestOdjsCommitDialogPlainFileStaysVisibleWithHeadRule(t *testing.T) {
 	f := odjsFix(t, odjsRelEntry)
 	writeFile(t, filepath.Join(f.dir, "sub/plain.txt"), "plain change\n")
 
-	rule, err := f.svc.envRule(f.dir, f.top, "", "")
+	rule, err := f.svc.envRule(f.dir, f.top, gitCreds{})
 	require.NoError(t, err)
 	require.NotNil(t, rule.head, "the HEAD rule is built")
 	assert.False(t, rule.composeUnreadable, "the HEAD rule hides nothing extra here")

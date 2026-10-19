@@ -91,10 +91,10 @@ func TestGetStatus_ProbeFailureIsNotReportedAsClean(t *testing.T) {
 	// and a cleared LANGUAGE (see gitCmdWithCreds in git_credentials.go). Asserting
 	// the precondition on the ambient git would prove the fault spares a DIFFERENT
 	// git process than the one the assertion below exercises.
-	if _, err := svc.gitCommandWithCreds(broken, "", "", "rev-parse", "--abbrev-ref", "HEAD"); err != nil {
+	if _, err := svc.gitCommandWithCreds(broken, gitCreds{}, "rev-parse", "--abbrev-ref", "HEAD"); err != nil {
 		t.Fatalf("precondition: rev-parse --abbrev-ref HEAD must still succeed under the fault, got %v", err)
 	}
-	if _, err := svc.gitCommandWithCreds(broken, "", "", "rev-parse", "HEAD"); err != nil {
+	if _, err := svc.gitCommandWithCreds(broken, gitCreds{}, "rev-parse", "HEAD"); err != nil {
 		t.Fatalf("precondition: rev-parse HEAD must still succeed under the fault, got %v", err)
 	}
 
@@ -160,10 +160,10 @@ func TestGetStatus_AheadBehindProbeFailureIsNotReportedAsUpToDate(t *testing.T) 
 	// Preconditions, through the same call path as the code under test: the
 	// fault must leave status and both rev-parse calls intact, or this arm is
 	// measuring some other failure.
-	if _, err := svc.gitCommandWithCreds(broken, "", "", "status", "--porcelain"); err != nil {
+	if _, err := svc.gitCommandWithCreds(broken, gitCreds{}, "status", "--porcelain"); err != nil {
 		t.Fatalf("precondition: status --porcelain must still succeed under the fault, got %v", err)
 	}
-	if _, err := svc.gitCommandWithCreds(broken, "", "", "rev-parse", "--verify", "--quiet", "refs/remotes/origin/main"); err != nil {
+	if _, err := svc.gitCommandWithCreds(broken, gitCreds{}, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/main"); err != nil {
 		t.Fatalf("precondition: the tracking ref must still resolve, or trackingBranch stays empty and the rev-list block is never entered: %v", err)
 	}
 

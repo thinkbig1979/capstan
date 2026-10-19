@@ -120,7 +120,7 @@ func TestGitExitCode_DiscriminatesRanFromNeverRan(t *testing.T) {
 	s := &GitService{}
 
 	t.Run("git ran and exited non-zero", func(t *testing.T) {
-		_, err := s.gitCommandWithCreds(t.TempDir(), "", "", "rev-parse", "--git-dir")
+		_, err := s.gitCommandWithCreds(t.TempDir(), gitCreds{}, "rev-parse", "--git-dir")
 		if err == nil {
 			t.Fatal("expected rev-parse to fail outside a repository")
 		}
@@ -132,7 +132,7 @@ func TestGitExitCode_DiscriminatesRanFromNeverRan(t *testing.T) {
 	t.Run("git never ran", func(t *testing.T) {
 		missing := filepath.Join(t.TempDir(), "not-mounted")
 
-		_, err := s.gitCommandWithCreds(missing, "", "", "rev-parse", "--git-dir")
+		_, err := s.gitCommandWithCreds(missing, gitCreds{}, "rev-parse", "--git-dir")
 		if err == nil {
 			t.Fatal("expected rev-parse to fail in a directory that does not exist")
 		}
@@ -259,7 +259,7 @@ func TestPullFailure_ProbeThatCouldNotRunIsNotARemoteFault(t *testing.T) {
 	t.Run("missing directory is not a remote fault", func(t *testing.T) {
 		missing := filepath.Join(t.TempDir(), "not-mounted")
 
-		got := svc.pullFailure(missing, "", "", errProbeTrigger)
+		got := svc.pullFailure(missing, gitCreds{}, errProbeTrigger)
 		if got == nil {
 			t.Fatal("want an error when the remote probe cannot run, got nil")
 		}
@@ -291,7 +291,7 @@ func TestPullFailure_ProbeThatCouldNotRunIsNotARemoteFault(t *testing.T) {
 	t.Run("missing git binary is not a remote fault", func(t *testing.T) {
 		t.Setenv("PATH", "")
 
-		got := svc.pullFailure(t.TempDir(), "", "", errProbeTrigger)
+		got := svc.pullFailure(t.TempDir(), gitCreds{}, errProbeTrigger)
 		if got == nil {
 			t.Fatal("want an error when git cannot be executed, got nil")
 		}
@@ -318,7 +318,7 @@ func TestPullFailure_ProbeThatCouldNotRunIsNotARemoteFault(t *testing.T) {
 		work, _, root := pullFixture(t)
 		mustGit(t, work, "remote", "set-url", "origin", filepath.Join(root, "gone.git"))
 
-		got := svc.pullFailure(work, "", "", errProbeTrigger)
+		got := svc.pullFailure(work, gitCreds{}, errProbeTrigger)
 		if got == nil {
 			t.Fatal("want an error for a remote that cannot be read, got nil")
 		}

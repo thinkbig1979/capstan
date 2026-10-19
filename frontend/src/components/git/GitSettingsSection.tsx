@@ -311,7 +311,7 @@ export function GitSettingsSection({
             <Label htmlFor={`git-push-${directoryPath}`} className="text-sm">Allow commit and push</Label>
             <HelpHint label="Allow commit and push" topic="git.push">
               <p>Off by default. When on, you can commit the files you choose in this folder and push the branch to its upstream.</p>
-              <p>Pushing over SSH is not supported yet; use an HTTPS remote.</p>
+              <p>Pushing over SSH needs an SSH key: this folder&apos;s own, or the global one in Settings &gt; Git.</p>
             </HelpHint>
           </div>
 

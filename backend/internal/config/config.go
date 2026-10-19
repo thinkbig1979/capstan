@@ -118,13 +118,20 @@ type Config struct {
 	BackupHostname         string
 }
 
+// DefaultGitSSHKey is GitSSHKey when GIT_SSH_KEY is unset. Git treats a
+// missing key at exactly this path as "no global key configured" (D164),
+// so it compares against this value rather than restating it.
+func DefaultGitSSHKey() string {
+	return filepath.Join(os.Getenv("HOME"), ".ssh", "id_rsa")
+}
+
 func Load() (*Config, error) {
 	cfg := &Config{
 		Port:                        "5001",
 		APIRateLimitPerMin:          DefaultAPIRateLimitPerMin,
 		LogLevel:                    logging.DefaultLevel,
 		LogFormat:                   logging.FormatText,
-		GitSSHKey:                   filepath.Join(os.Getenv("HOME"), ".ssh", "id_rsa"),
+		GitSSHKey:                   DefaultGitSSHKey(),
 		GitHTTPSUser:                "git",
 		AuthDisabled:                os.Getenv("AUTH_DISABLED") == "true",
 		TrustedNetworks:             os.Getenv("TRUSTED_NETWORKS"),

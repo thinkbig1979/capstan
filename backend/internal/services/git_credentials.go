@@ -3,12 +3,19 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io/fs"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"unicode"
 
+	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
+	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
 // Environment variable names the credential helper below reads. They are set
@@ -35,10 +42,82 @@ const (
 const gitCredentialHelper = `!f() { test "$1" = get && printf 'username=%s\npassword=%s\n' ` +
 	`"$` + credentialEnvUser + `" "$` + credentialEnvToken + `"; }; f`
 
+// Environment variable names GIT_SSH_COMMAND reads, set only on the git child.
+const (
+	sshEnvKey        = "CAPSTAN_GIT_SSH_KEY"
+	sshEnvKnownHosts = "CAPSTAN_GIT_SSH_KNOWN_HOSTS"
+)
+
+// gitSSHCommand is GIT_SSH_COMMAND for a directory with an SSH key
+// (agent-os-z0gl). git runs it through sh, so it holds only variable NAMES;
+// the paths are in the child environment and never re-parsed by the shell.
+// OBSERVED, OpenSSH 10.0p2, git 2.47.3:
+//
+//   - -o IdentityFile, never -i: a missing -i key only warns, then ssh offers
+//     the default ~/.ssh/id_* identities even with IdentitiesOnly=yes. A
+//     missing IdentityFile offers nothing.
+//   - -F /dev/null ignores a mounted ~/.ssh/config (ProxyCommand, other
+//     IdentityFiles); IdentityAgent=none ignores an inherited SSH_AUTH_SOCK;
+//     BatchMode=yes fails a passphrase-protected key instead of prompting.
+//   - Host keys are trusted on first use and pinned in Capstan's data dir
+//     (D157): accept-new records a new host and refuses a changed key.
+//     GlobalKnownHostsFile=/dev/null keeps that file the only source.
+//   - The inner double quotes keep a path with spaces one value: ssh's -o
+//     parser splits on whitespace. sshPathProblem refuses the characters
+//     that would end or escape them.
+//   - GIT_SSH_COMMAND overrides a repository's core.sshCommand, and
+//     ssh.variant=ssh (argv and GIT_SSH_VARIANT) overrides its ssh.variant,
+//     which changes the arguments git passes.
+const gitSSHCommand = `ssh -F /dev/null -o IdentitiesOnly=yes -o IdentityAgent=none -o BatchMode=yes` +
+	` -o StrictHostKeyChecking=accept-new -o GlobalKnownHostsFile=/dev/null` +
+	` -o "IdentityFile=\"$` + sshEnvKey + `\""` +
+	` -o "UserKnownHostsFile=\"$` + sshEnvKnownHosts + `\""`
+
+// gitSSHRefused is GIT_SSH_COMMAND when a key applies but cannot be used:
+// any ssh child fails instead of trying the container's default identities.
+const gitSSHRefused = "false"
+
 // defaultGitHTTPSUser is used when neither the stored setting nor the
 // GIT_HTTPS_USER environment variable names one. Forges that authenticate by
 // token ignore the username, but it must not be empty or git re-prompts.
 const defaultGitHTTPSUser = "oauth2"
+
+// gitCreds is everything a git child authenticates with, resolved once per
+// operation by gitCredentials and threaded to every child (agent-os-9ha). It
+// is a value, not a lookup key: on the write paths the child runs in the
+// repository top, while the credential belongs to the requesting folder.
+type gitCreds struct {
+	user, token string
+
+	// sshKey is the private key ssh uses for this directory's remote: its
+	// own key for auth type "ssh", else the global key (D159, D164). ""
+	// means no key applies and ssh runs as it always did.
+	sshKey string
+	// sshKeySource names where sshKey came from, for refusal messages.
+	sshKeySource string
+	// knownHosts is <DataDir>/known_hosts, absolute (D157).
+	knownHosts string
+	// sshErr is set when a key applies but cannot be used safely. Every ssh
+	// child then fails (GIT_SSH_COMMAND=false) rather than falling back to
+	// the container's default identities, and the network pre-checks
+	// return it.
+	sshErr error
+}
+
+// gitCredentials resolves dirPath's credentials from one read of its
+// directory row: the HTTPS credential (httpsCredentials) and the SSH key
+// (sshCredentials).
+func (s *GitService) gitCredentials(dirPath string) gitCreds {
+	var dir *models.Directory
+	dirErr := errdefs.ErrNotFound
+	if s.db != nil {
+		dir, dirErr = s.db.GetDirectoryCredentials(dirPath)
+	}
+	var c gitCreds
+	c.user, c.token = s.httpsCredentials(dirPath, dir, dirErr)
+	s.sshCredentials(&c, dir, dirErr)
+	return c
+}
 
 // httpsCredentials resolves the git HTTPS credential for dirPath, in order:
 //  1. directory authType "https" — that directory's own stored credential,
@@ -46,10 +125,9 @@ const defaultGitHTTPSUser = "oauth2"
 //     silently use a different credential than the one configured for this
 //     directory, which is the exact failure mode being fixed (agent-os-qll):
 //     a feature that reports "configured" while doing something else.
-//  2. directory authType "ssh" — no HTTPS credential applies. SSH key auth
-//     is a separate, currently unimplemented path (nothing in gitCmdWithCreds consumes
-//     GitSSHKeyPath); this only makes sure "ssh" never falls through to the
-//     https credential below.
+//  2. directory authType "ssh" — no HTTPS credential applies. The SSH key
+//     is resolved by sshCredentials; this only makes sure "ssh" never falls
+//     through to the https credential below.
 //  3. directory authType "" or "inherit" (or no directory row at all) — the
 //     value stored (encrypted) in global settings, then GIT_HTTPS_TOKEN.
 //
@@ -64,53 +142,53 @@ const defaultGitHTTPSUser = "oauth2"
 //
 // It returns an empty token when none is configured, in which case git runs
 // exactly as before.
-func (s *GitService) httpsCredentials(dirPath string) (user, token string) {
-	if s.db != nil {
-		cred, err := s.db.GetDirectoryCredentials(dirPath)
-		switch {
-		case errors.Is(err, errdefs.ErrNotFound):
-			// No row for dirPath: this directory was never configured with a
-			// credential of its own, so inheriting the global one below is the
-			// intended behaviour.
-		case err != nil:
-			// The row exists but is unreadable — a decrypt failure from a rotated
-			// STORAGE_KEY, or the database itself failing. Falling through here
-			// would not mean "no credential", it would mean authenticating this
-			// directory's remote with a DIFFERENT credential, silently: the exact
-			// failure mode this function exists to prevent. It also discards
-			// cred.GitAuthType, so an "ssh" directory would receive an HTTPS token
-			// in violation of case 2 above.
-			//
-			// No error is propagated: httpsCredentials feeds gitCmdWithCreds, which every
-			// git invocation goes through, including purely local ones like
-			// `git log` and `git diff` that never contact a remote. gitCmdWithCreds attaches
-			// a credential helper only for a non-empty token, so those keep working
-			// and remote operations fail with git's own auth error instead.
-			//
-			// As with the warning below, the log line carries only the directory
-			// path — never a token value, and never any other directory's state.
-			slog.Error("cannot read the stored git credential for this directory; not falling back to a different (global) credential", "path", dirPath, "error", err)
-			return "", ""
-		default:
-			switch strings.ToLower(cred.GitAuthType) {
-			case "https":
-				user, token = cred.GitHTTPSUser, cred.GitHTTPSToken
-				if user == "" {
-					user = defaultGitHTTPSUser
-				}
-				if token == "" {
-					// Otherwise this state is indistinguishable from "everything is
-					// fine" until the pull fails with a generic auth error: the UI
-					// reports the directory as configured for its own HTTPS
-					// credential, but no token was ever saved. The log line carries
-					// only the directory path, never a token value or any other
-					// directory's state, so nothing here reaches action-log details.
-					slog.Warn("directory is configured for https git auth but has no stored credential; not falling back to a different (global) credential", "path", dirPath)
-				}
-				return user, token
-			case "ssh":
-				return "", ""
+//
+// cred and err are gitCredentials' read of dirPath's row (err is
+// errdefs.ErrNotFound when there is no database).
+func (s *GitService) httpsCredentials(dirPath string, cred *models.Directory, err error) (user, token string) {
+	switch {
+	case errors.Is(err, errdefs.ErrNotFound):
+		// No row for dirPath: this directory was never configured with a
+		// credential of its own, so inheriting the global one below is the
+		// intended behaviour.
+	case err != nil:
+		// The row exists but is unreadable — a decrypt failure from a rotated
+		// STORAGE_KEY, or the database itself failing. Falling through here
+		// would not mean "no credential", it would mean authenticating this
+		// directory's remote with a DIFFERENT credential, silently: the exact
+		// failure mode this function exists to prevent. It also discards
+		// cred.GitAuthType, so an "ssh" directory would receive an HTTPS token
+		// in violation of case 2 above.
+		//
+		// No error is propagated: httpsCredentials feeds gitCmdWithCreds, which every
+		// git invocation goes through, including purely local ones like
+		// `git log` and `git diff` that never contact a remote. gitCmdWithCreds attaches
+		// a credential helper only for a non-empty token, so those keep working
+		// and remote operations fail with git's own auth error instead.
+		//
+		// As with the warning below, the log line carries only the directory
+		// path — never a token value, and never any other directory's state.
+		slog.Error("cannot read the stored git credential for this directory; not falling back to a different (global) credential", "path", dirPath, "error", err)
+		return "", ""
+	default:
+		switch strings.ToLower(cred.GitAuthType) {
+		case "https":
+			user, token = cred.GitHTTPSUser, cred.GitHTTPSToken
+			if user == "" {
+				user = defaultGitHTTPSUser
 			}
+			if token == "" {
+				// Otherwise this state is indistinguishable from "everything is
+				// fine" until the pull fails with a generic auth error: the UI
+				// reports the directory as configured for its own HTTPS
+				// credential, but no token was ever saved. The log line carries
+				// only the directory path, never a token value or any other
+				// directory's state, so nothing here reaches action-log details.
+				slog.Warn("directory is configured for https git auth but has no stored credential; not falling back to a different (global) credential", "path", dirPath)
+			}
+			return user, token
+		case "ssh":
+			return "", ""
 		}
 	}
 
@@ -258,7 +336,7 @@ var gitHardeningArgs = []string{
 }
 
 // gitCmdWithCreds builds the git child process for dirPath with the HTTPS
-// credential attached when one is configured. It also returns the token it
+// credential and the SSH key attached when configured. It also returns the token it
 // used, so the caller can redact it from output without resolving (and
 // decrypting) it twice.
 //
@@ -268,8 +346,8 @@ var gitHardeningArgs = []string{
 // omission from such a list is exactly the failure mode being fixed here. git
 // only runs the helper when a remote actually challenges it.
 //
-// It takes an already-resolved (user, token) pair instead of calling
-// httpsCredentials itself. A single logical git operation (status, pull, log,
+// It takes already-resolved credentials instead of calling gitCredentials
+// itself. A single logical git operation (status, pull, log,
 // diff) issues several of these; resolving once at the top of that operation
 // and passing the result to every call here — instead of letting each one
 // re-resolve — is what turns N DB reads/decrypt attempts and N duplicate log
@@ -281,7 +359,7 @@ var gitHardeningArgs = []string{
 // the git deadline, agent-os-a1ye.3): a git fetch or pull stalled on the
 // network used to hang its request, and with it any operation lock held
 // around it, until the server restarted.
-func (s *GitService) gitCmdWithCreds(ctx context.Context, dirPath, user, token string, args ...string) (*exec.Cmd, string) {
+func (s *GitService) gitCmdWithCreds(ctx context.Context, dirPath string, c gitCreds, args ...string) (*exec.Cmd, string) {
 	gitArgs := append([]string{"-c", "safe.directory=" + dirPath}, gitHardeningArgs...)
 	// stripCapstanSecrets removes Capstan's own secrets (JWT_SECRET,
 	// STORAGE_KEY, GIT_HTTPS_TOKEN, RESTIC_PASSWORD) before the process
@@ -326,7 +404,21 @@ func (s *GitService) gitCmdWithCreds(ctx context.Context, dirPath, user, token s
 	env := append(stripCapstanSecrets(os.Environ()), "GIT_TERMINAL_PROMPT=0",
 		"LC_ALL=C", "LANGUAGE=")
 
-	if token != "" {
+	switch {
+	case c.sshErr != nil:
+		gitArgs = append(gitArgs, "-c", "ssh.variant=ssh")
+		env = append(env, "GIT_SSH_VARIANT=ssh", "GIT_SSH_COMMAND="+gitSSHRefused)
+	case c.sshKey != "":
+		// Every child, not only pull and push: a read in a partial clone can
+		// lazy-fetch over ssh too. A child that never reaches ssh ignores it.
+		gitArgs = append(gitArgs, "-c", "ssh.variant=ssh")
+		env = append(env, "GIT_SSH_VARIANT=ssh", "GIT_SSH_COMMAND="+gitSSHCommand,
+			sshEnvKey+"="+sshEscape(c.sshKey),
+			sshEnvKnownHosts+"="+sshEscape(c.knownHosts),
+		)
+	}
+
+	if token := c.token; token != "" {
 		// The empty assignment first clears any helper inherited from system or
 		// global config, so ours is the only one consulted.
 		gitArgs = append(gitArgs,
@@ -334,7 +426,7 @@ func (s *GitService) gitCmdWithCreds(ctx context.Context, dirPath, user, token s
 			"-c", "credential.helper="+gitCredentialHelper,
 		)
 		env = append(env,
-			credentialEnvUser+"="+user,
+			credentialEnvUser+"="+c.user,
 			credentialEnvToken+"="+token,
 		)
 	}
@@ -343,7 +435,7 @@ func (s *GitService) gitCmdWithCreds(ctx context.Context, dirPath, user, token s
 	cmd := boundCommand(ctx, "git", append(gitArgs, args...)...)
 	cmd.Dir = dirPath
 	cmd.Env = env
-	return cmd, token
+	return cmd, c.token
 }
 
 // redactToken replaces every occurrence of token in s with a placeholder.
@@ -357,4 +449,192 @@ func redactToken(s, token string) string {
 		return s
 	}
 	return strings.ReplaceAll(s, token, "***")
+}
+
+// sshCredentials sets c's SSH key from the directory row gitCredentials
+// read (agent-os-z0gl):
+//   - auth type "ssh": the directory's own key. No key path is an error, not
+//     a fall-through: the directory says SSH, so another key would be a
+//     different credential than the one configured.
+//   - auth type "https": none.
+//   - inherit, "" or no row: the global key (D159), git_ssh_key then
+//     cfg.GitSSHKey. When that is the built-in default path and nothing is
+//     there, no key applies and ssh runs as before (D164). The settings
+//     page saves the default back as a row, so this compares the path, not
+//     where it came from.
+//
+// An unreadable row or setting fails closed into sshErr, as httpsCredentials
+// does for the token (agent-os-2au).
+func (s *GitService) sshCredentials(c *gitCreds, dir *models.Directory, dirErr error) {
+	switch {
+	case errors.Is(dirErr, errdefs.ErrNotFound):
+	case dirErr != nil:
+		c.sshErr = fmt.Errorf("cannot read this directory's git credentials, so not connecting over SSH: %w", dirErr)
+		return
+	default:
+		switch strings.ToLower(dir.GitAuthType) {
+		case "https":
+			return
+		case "ssh":
+			if dir.GitSSHKeyPath == "" {
+				c.sshErr = models.NewAppError(http.StatusConflict, models.ErrGitSSHKeyUnusable,
+					"This directory uses SSH git auth but has no SSH key path; set one in its git credentials")
+				return
+			}
+			s.useSSHKey(c, dir.GitSSHKeyPath, "This directory's SSH key")
+			return
+		}
+	}
+
+	key := ""
+	if s.config != nil {
+		key = s.config.GitSSHKey
+	}
+	if s.db != nil {
+		v, err := s.db.GetSetting("git_ssh_key")
+		switch {
+		case errors.Is(err, errdefs.ErrNotFound):
+		case err != nil:
+			c.sshErr = fmt.Errorf("cannot read the global git SSH key setting, so not connecting over SSH: %w", err)
+			return
+		case v != "":
+			key = v
+		}
+	}
+	if key == "" {
+		return
+	}
+	if key == config.DefaultGitSSHKey() {
+		if _, err := os.Stat(key); errors.Is(err, fs.ErrNotExist) {
+			return
+		}
+	}
+	s.useSSHKey(c, key, "The global SSH key (Settings > Git)")
+}
+
+// useSSHKey sets key as c's SSH key, or sshErr when ssh would misread its
+// path or there is nowhere to keep host keys.
+func (s *GitService) useSSHKey(c *gitCreds, key, source string) {
+	c.sshKey, c.sshKeySource = key, source
+	if problem := sshPathProblem(key); problem != "" {
+		c.sshErr = models.NewAppError(http.StatusConflict, models.ErrGitSSHKeyUnusable,
+			fmt.Sprintf("%s path %q %s", source, key, problem))
+		return
+	}
+	dataDir := ""
+	if s.config != nil {
+		dataDir = s.config.DataDir
+	}
+	if dataDir == "" {
+		// Fail closed: "" + "/known_hosts" would pin host keys at /known_hosts.
+		c.sshErr = errors.New("no data directory is configured to keep SSH host keys in, so not connecting over SSH")
+		return
+	}
+	// ssh runs in the repository, so a relative DATA_DIR must not reach it.
+	abs, err := filepath.Abs(dataDir)
+	if err != nil {
+		c.sshErr = fmt.Errorf("cannot resolve the data directory for SSH host keys: %w", err)
+		return
+	}
+	c.knownHosts = filepath.Join(abs, "known_hosts")
+	if problem := sshPathProblem(c.knownHosts); problem != "" {
+		c.sshErr = fmt.Errorf("the SSH known_hosts path %q %s", c.knownHosts, problem)
+	}
+}
+
+// sshPathProblem says why ssh would not read p as the literal path, or "".
+// OBSERVED, OpenSSH 10.0p2, in IdentityFile: `~` and `${HOME}` expand to the
+// home directory, `%h` to the host, `\"` to a quote; a bare `$x` and `'`
+// stay literal. `%` is escaped by sshEscape; the rest has no escape.
+func sshPathProblem(p string) string {
+	switch {
+	case !filepath.IsAbs(p):
+		return "is not an absolute path"
+	case strings.ContainsAny(p, "\"\\"):
+		return "contains a quote or backslash, which ssh would misread"
+	case strings.Contains(p, "${"):
+		return "contains ${, which ssh expands as an environment variable"
+	case strings.IndexFunc(p, unicode.IsControl) >= 0:
+		return "contains a control character"
+	}
+	return ""
+}
+
+// sshEscape escapes ssh's %-tokens in a path sshPathProblem accepted.
+func sshEscape(p string) string {
+	return strings.ReplaceAll(p, "%", "%%")
+}
+
+// sshReady checks, just before a network git child that will use ssh, that
+// c's key can be used. OpenSSH refuses a key other users can read
+// ("UNPROTECTED PRIVATE KEY FILE"), and a key mounted from the host is often
+// 0644 or owned by root; each answer names the fix. nil when no key applies:
+// the caller decides what that means.
+func (c gitCreds) sshReady() error {
+	if c.sshErr != nil {
+		return c.sshErr
+	}
+	if c.sshKey == "" {
+		return nil
+	}
+	unusable := func(format string, a ...any) error {
+		return models.NewAppError(http.StatusConflict, models.ErrGitSSHKeyUnusable,
+			fmt.Sprintf("%s %q ", c.sshKeySource, c.sshKey)+fmt.Sprintf(format, a...))
+	}
+	fi, err := os.Stat(c.sshKey)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return unusable("does not exist inside the container; mount the key file and set its path")
+	case errors.Is(err, fs.ErrPermission):
+		return unusable("cannot be reached by the user Capstan runs as; check the permissions of its directory")
+	case err != nil:
+		return fmt.Errorf("cannot check the SSH key %q: %w", c.sshKey, err)
+	}
+	if !fi.Mode().IsRegular() {
+		return unusable("is not a regular file")
+	}
+	if perm := fi.Mode().Perm(); perm&0o077 != 0 {
+		return unusable("is readable by other users (mode %04o), which ssh refuses; run chmod 600 on it", perm)
+	}
+	f, err := os.Open(c.sshKey)
+	if err != nil {
+		return unusable("cannot be read by the user Capstan runs as; chown it to that user (PUID) and keep mode 600")
+	}
+	_ = f.Close() //nolint:errcheck // opened read-only to test access; nothing was written
+	return nil
+}
+
+// isSSHRemoteURL reports whether git would reach u over ssh: ssh://,
+// git+ssh://, ssh+git://, or scp-like [user@]host:path (git's own rule: with
+// no scheme, a ':' before the first '/'). A <transport>:: helper is not.
+func isSSHRemoteURL(u string) bool {
+	if transportHelperRe.MatchString(u) {
+		return false
+	}
+	if m := urlSchemeRe.FindStringSubmatch(u); m != nil {
+		switch strings.ToLower(m[1]) {
+		case "ssh", "git+ssh", "ssh+git":
+			return true
+		}
+		return false
+	}
+	colon := strings.IndexByte(u, ':')
+	slash := strings.IndexByte(u, '/')
+	return colon >= 0 && (slash < 0 || colon < slash)
+}
+
+// sshPullPrecheck refuses a pull that would go over ssh with a key that
+// cannot be used, before the pull runs. `ls-remote --get-url` reads the URL
+// the pull would contact (default remote, insteadOf applied) without
+// contacting it. A pull over https is never refused for a bad ssh key; when
+// the URL cannot be read, the key is checked anyway.
+func (s *GitService) sshPullPrecheck(dirPath string, c gitCreds) error {
+	if c.sshKey == "" && c.sshErr == nil {
+		return nil
+	}
+	u, err := s.gitCommandWithCreds(dirPath, c, "ls-remote", "--get-url") //geterrors:ignore a failed read (no remote configured exits 128) means the URL is unknown, so the key is checked anyway: fail closed, and the pull reports its own failure
+	if err == nil && !isSSHRemoteURL(u) {
+		return nil
+	}
+	return c.sshReady()
 }

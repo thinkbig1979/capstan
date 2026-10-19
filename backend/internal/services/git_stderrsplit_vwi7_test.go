@@ -367,10 +367,10 @@ func TestGetStatus_AmbiguousRefnameStillCountsAheadBehind(t *testing.T) {
 	// gets us into the block at all, and rev-list must still EXIT 0. A non-zero
 	// exit here would mean this arm is reproducing agent-os-ufj7's fault rather
 	// than this one.
-	if _, err := svc.gitCommandWithCreds(amb, "", "", "rev-parse", "--verify", "--quiet", "refs/remotes/origin/main"); err != nil {
+	if _, err := svc.gitCommandWithCreds(amb, gitCreds{}, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/main"); err != nil {
 		t.Fatalf("precondition: the tracking ref must still resolve or trackingBranch stays empty and the rev-list never runs: %v", err)
 	}
-	if _, err := svc.gitCommandWithCreds(amb, "", "", "rev-list", "--left-right", "--count", "origin/main...HEAD"); err != nil {
+	if _, err := svc.gitCommandWithCreds(amb, gitCreds{}, "rev-list", "--left-right", "--count", "origin/main...HEAD"); err != nil {
 		t.Fatalf("precondition: rev-list must still EXIT 0 under the ambiguity — this class is the zero-exit arm: %v", err)
 	}
 
@@ -420,7 +420,7 @@ func TestGitCommandWithCreds_RedactsTokenOnStdoutOnly(t *testing.T) {
 	svc := NewGitService(&config.Config{}, nil)
 	dir := vwi7Repo(t, false)
 
-	out, err := svc.gitCommandWithCreds(dir, testGitUser, testGitToken,
+	out, err := svc.gitCommandWithCreds(dir, gitCreds{user: testGitUser, token: testGitToken},
 		"log", "-1", "--format=tformat:"+testGitToken)
 	if err != nil {
 		t.Fatalf("precondition: this command must EXIT 0 with the token on stdout, got %v", err)
@@ -454,7 +454,7 @@ func TestGitCommandWithCreds_RedactsTokenOnStderrOnly(t *testing.T) {
 	svc := NewGitService(&config.Config{}, nil)
 	dir := vwi7Repo(t, false)
 
-	out, err := svc.gitCommandWithCreds(dir, testGitUser, testGitToken, "cat-file", "-p", testGitToken)
+	out, err := svc.gitCommandWithCreds(dir, gitCreds{user: testGitUser, token: testGitToken}, "cat-file", "-p", testGitToken)
 	if err == nil {
 		t.Fatalf("precondition: cat-file -p on a bogus object name must fail; got out=%q", out)
 	}

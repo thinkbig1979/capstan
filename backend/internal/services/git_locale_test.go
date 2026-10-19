@@ -276,7 +276,7 @@ func TestGitCmdWithCreds_PinsLocale(t *testing.T) {
 	t.Setenv("LANG", "en_US.utf8")
 
 	svc := NewGitService(&config.Config{}, nil)
-	cmd, _ := svc.gitCmdWithCreds(context.Background(), t.TempDir(), "", "", "status")
+	cmd, _ := svc.gitCmdWithCreds(context.Background(), t.TempDir(), gitCreds{user: "", token: ""}, "status")
 
 	var gotLCAll string
 	lcAllSet := false

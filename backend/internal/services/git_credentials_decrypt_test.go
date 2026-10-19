@@ -89,7 +89,7 @@ func TestHTTPSCredentials_DirectoryDecryptFailure_DoesNotUseGlobalCredential(t *
 	const dirPath = "/stacks/rotated-key"
 	svc := gitServiceWithUndecryptableDirectoryCredential(t, dirPath, "https")
 
-	user, token := svc.httpsCredentials(dirPath)
+	user, token := httpsOf(svc.gitCredentials(dirPath))
 
 	if token == decryptTestGlobalToken {
 		t.Error("silent substitution: a directory configured for its own https credential resolved to the GLOBAL token")
@@ -110,7 +110,7 @@ func TestHTTPSCredentials_DirectoryDecryptFailure_LogsError(t *testing.T) {
 	svc := gitServiceWithUndecryptableDirectoryCredential(t, dirPath, "https")
 	buf := captureSlog(t)
 
-	svc.httpsCredentials(dirPath)
+	svc.gitCredentials(dirPath)
 
 	out := buf.String()
 	if !strings.Contains(out, dirPath) {
@@ -135,7 +135,7 @@ func TestHTTPSCredentials_DirectoryDecryptFailure_SSHGetsNoHTTPSToken(t *testing
 	const dirPath = "/stacks/rotated-key-ssh"
 	svc := gitServiceWithUndecryptableDirectoryCredential(t, dirPath, "ssh")
 
-	user, token := svc.httpsCredentials(dirPath)
+	user, token := httpsOf(svc.gitCredentials(dirPath))
 
 	if user != "" || token != "" {
 		t.Errorf("an ssh-authType directory received an HTTPS credential (user=%q, token set=%v)", user, token != "")
@@ -218,7 +218,7 @@ func TestHTTPSCredentials_DecryptFailure_PositiveControl_MatchingKeyWins(t *test
 		t.Fatalf("store git_https_token: %v", err)
 	}
 
-	user, token := NewGitService(&config.Config{}, db).httpsCredentials(dirPath)
+	user, token := httpsOf(NewGitService(&config.Config{}, db).gitCredentials(dirPath))
 
 	if token != decryptTestDirToken {
 		t.Error("the directory's own credential must win when it decrypts")
@@ -240,7 +240,7 @@ func TestHTTPSCredentials_NoDirectoryRow_StillFallsBackToGlobal(t *testing.T) {
 		t.Fatalf("store git_https_token: %v", err)
 	}
 
-	user, token := NewGitService(&config.Config{}, db).httpsCredentials("/stacks/never-registered")
+	user, token := httpsOf(NewGitService(&config.Config{}, db).gitCredentials("/stacks/never-registered"))
 
 	if token != decryptTestGlobalToken {
 		t.Error("a directory with no stored row must still inherit the global token")
@@ -300,7 +300,7 @@ func TestHTTPSCredentials_GlobalDecryptFailure_LogsError(t *testing.T) {
 	svc := gitServiceWithUndecryptableGlobalCredential(t, nil)
 	buf := captureSlog(t)
 
-	svc.httpsCredentials("/stacks/no-directory-row")
+	svc.gitCredentials("/stacks/no-directory-row")
 
 	out := buf.String()
 	if !strings.Contains(out, "level=ERROR") {
@@ -323,7 +323,7 @@ func TestHTTPSCredentials_NoGlobalCredential_DoesNotLogError(t *testing.T) {
 	svc := NewGitService(&config.Config{}, db)
 	buf := captureSlog(t)
 
-	svc.httpsCredentials("/stacks/no-directory-row-either")
+	svc.gitCredentials("/stacks/no-directory-row-either")
 
 	if buf.Len() != 0 {
 		t.Errorf("no global credential is configured; expected no log at all, got: %s", buf.String())
@@ -347,7 +347,7 @@ func TestHTTPSCredentials_GlobalDecryptFailure_FailsClosed(t *testing.T) {
 	cfg := &config.Config{GitHTTPSUser: "env-user", GitHTTPSToken: "env-token"}
 	svc := gitServiceWithUndecryptableGlobalCredential(t, cfg)
 
-	user, token := svc.httpsCredentials("/stacks/no-directory-row-config-fallback")
+	user, token := httpsOf(svc.gitCredentials("/stacks/no-directory-row-config-fallback"))
 
 	if token != "" {
 		t.Errorf("token = %q, want \"\" — must not fall through to GIT_HTTPS_TOKEN", token)
