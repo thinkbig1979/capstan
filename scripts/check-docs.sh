@@ -27,7 +27,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation networkidle-probes locator-count-guard ws-registration close-reason getter-errors ws-read-deadline path-containment trusted-networks compose-parity ticker-stop project-name-lookup stack-write-callers rclone-delete-argv goroutine-sends settings-writes full-row-selects arm-refusal pipefail-grep-q awk-portability analysis-caches dockerhub-pulls"
+CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation networkidle-probes locator-count-guard ws-registration close-reason getter-errors ws-read-deadline path-containment trusted-networks compose-parity ticker-stop project-name-lookup stack-write-callers rclone-delete-argv goroutine-sends settings-writes push-switch-writers full-row-selects arm-refusal pipefail-grep-q awk-portability analysis-caches dockerhub-pulls"
 
 REQUIRED_DOCS="docs/getting-started.md
 docs/how-to/deploy-production.md
@@ -1054,6 +1054,39 @@ check_settings_writes() {
   return 1
 }
 
+# check_push_switch_writers delegates to scripts/check-push-switch-writers.sh:
+# only SetDirectoryPushEnabled writes directories.git_push_enabled, so a
+# rescan or a credential save cannot arm a later push, whether by writing the
+# column or by calling the setter (agent-os-k81p.6).
+# Self-test first, same reasoning as ws-registration.
+check_push_switch_writers() {
+  local script="$SCRIPT_DIR/check-push-switch-writers.sh"
+  if [ ! -f "$script" ]; then
+    echo "FAIL: push-switch-writers - $script not found"
+    return 1
+  fi
+
+  local self status
+  self=$(bash "$script" --self-test 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: push-switch-writers - the check's own self-test failed, so its verdict on the tree cannot be trusted:"
+    echo "$self"
+    return 1
+  fi
+
+  local out
+  out=$(bash "$script" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ]; then
+    echo "PASS: push-switch-writers - ${self#push-switch-writers }; ${out#check-push-switch-writers: }"
+    return 0
+  fi
+  echo "FAIL: push-switch-writers - something other than SetDirectoryPushEnabled writes git_push_enabled, or something other than UpdatePushEnabled calls it:"
+  echo "$out"
+  return 1
+}
+
 # check_full_row_selects delegates to scripts/check-full-row-selects.sh: in
 # package database a full-row column list or Scan target list for a table with
 # a column constant appears only in that constant and its scan function, so a
@@ -1540,6 +1573,7 @@ Valid check names:
   rclone-delete-argv no rclone delete-capable argv (sync, move, purge, ...) outside RcloneManager.Sync and RestoreRepo
   goroutine-sends no bare channel send inside a goroutine body (a select case, or an allowlisted reason)
   settings-writes no handler func with more than one raw SetSetting, or one inside a loop (SetSettings instead)
+  push-switch-writers only SetDirectoryPushEnabled writes directories.git_push_enabled, and only UpdatePushEnabled calls it (writer AND caller)
   full-row-selects no database reader hand-copies a full-row column or Scan list (<x>Columns / scan<X> instead)
   arm-refusal     no scheduler arm function refuses with only a log line (a record...() call, or a reasoned marker)
   pipefail-grep-q no pipe into grep -q in a script that sets pipefail (a here-string instead)
@@ -1576,6 +1610,7 @@ run_check() {
     rclone-delete-argv) check_rclone_delete_argv ;;
     goroutine-sends) check_goroutine_sends ;;
     settings-writes) check_settings_writes ;;
+    push-switch-writers) check_push_switch_writers ;;
     full-row-selects) check_full_row_selects ;;
     arm-refusal) check_arm_refusal ;;
     pipefail-grep-q) check_pipefail_grep_q ;;

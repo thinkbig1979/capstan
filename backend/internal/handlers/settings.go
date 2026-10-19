@@ -946,8 +946,9 @@ func (h *SettingsHandler) GetGitSettings(c *gin.Context) {
 	// first; keeping the author behind git_ssh_key and git_https_user leaves
 	// those two arms pinned by their existing test. An unreadable author must
 	// not read as "not configured": the commit action refuses on a missing
-	// author and would report the wrong reason. Known gap: no test pins these
-	// two arms individually (agent-os-k81p.1 report).
+	// author and would report the wrong reason. Every read in this function is
+	// pinned individually by get_git_settings_keyfault_test.go, which faults one
+	// key at a time (agent-os-k81p.5).
 	authorName, err := settingOrFault(h.db, models.SettingGitAuthorName)
 	if err != nil {
 		slog.Error("Failed to read the git author name setting", "error", err)
