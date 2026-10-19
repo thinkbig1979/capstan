@@ -382,27 +382,78 @@ func TestPullVerified_SiblingsCreatedFolderViaSymlinkIsListed(t *testing.T) {
 	}
 }
 
-// A sibling inside the repository (it is locked) whose folder cannot be
-// placed before or after the pull, here a symlinked path to a folder that
-// never exists, is a check failure, never "unchanged".
-func TestPullVerified_SiblingsUnplaceableSiblingIsPartial(t *testing.T) {
-	got := runSiblings(t, siblingsPull{
-		files:   siblingFiles,
-		changes: map[string]string{"stackB/compose.yaml": composeNew4d60},
-		stacks: []stack4d60{
-			{id: "A", dir: "stackA", compose: "compose.yaml"},
-			{id: "C", dir: "stackC", compose: "compose.yaml"},
-		},
-		pullDir: "stackA",
-		mount:   symlinkMount,
+// A sibling whose folder the pull replaces with a file: its folder can no
+// longer be resolved after the pull, but its compose file, placed before the
+// pull, is among the deleted files, so it is listed rather than a failure.
+func TestPullVerified_SiblingsFolderReplacedByFileIsListed(t *testing.T) {
+	work, seed, root := pullFixture(t)
+	commitUpstream4d60(t, seed, root, map[string]string{
+		"stackA/compose.yaml":   composeOld4d60,
+		"x/stackC/compose.yaml": composeOld4d60,
 	})
-	if got.ar.Outcome != truth.OutcomePartial {
-		t.Fatalf("an unplaceable sibling did not make the outcome partial: outcome=%s reason=%q changed=%v",
-			got.ar.Outcome, got.ar.Reason, got.changedIDs())
+	mustGit(t, work, "pull", "-q", "--ff-only")
+	if err := os.RemoveAll(filepath.Join(seed, "x")); err != nil {
+		t.Fatal(err)
 	}
-	fails, ok := got.ar.Details["siblingCheckFailures"].([]RedeployFailure)
-	if !ok || len(fails) != 1 || fails[0].StackID != "C" {
-		t.Fatalf("siblingCheckFailures = %#v, want stack C", got.ar.Details["siblingCheckFailures"])
+	commitUpstream4d60(t, seed, root, map[string]string{"x": "now a file\n"})
+
+	db := newTestDB(t)
+	for id, dir := range map[string]string{"A": "stackA", "C": "x/stackC"} {
+		abs := filepath.Join(work, filepath.FromSlash(dir))
+		if err := db.UpsertDirectory(models.Directory{Path: abs, Name: id}); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.UpsertStack(models.Stack{ID: id, Directory: abs, ComposeFile: "compose.yaml", ProjectName: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	svc := NewGitService(&config.Config{}, db)
+	svc.SetOperationLock(NewOperationLock())
+
+	ar, _ := svc.PullVerified(filepath.Join(work, "stackA"), false, nil)
+
+	if fi, err := os.Stat(filepath.Join(work, "x")); err != nil || fi.IsDir() {
+		t.Fatalf("fixture: x is not a file after the pull (%v)", err)
+	}
+	sib, _ := ar.Details["siblingStacksChanged"].([]SiblingStack)
+	if ar.Outcome != truth.OutcomeSuccess || len(sib) != 1 || sib[0].StackID != "C" {
+		t.Fatalf("outcome=%s reason=%q siblingStacksChanged=%v failures=%v, want success listing C",
+			ar.Outcome, ar.Reason, ar.Details["siblingStacksChanged"], ar.Details["siblingCheckFailures"])
+	}
+}
+
+// siblingPlacement.changed fails closed when it cannot tell: a stack placed
+// neither before nor after the pull, and one whose later placement errors
+// with no match under the earlier one. Unit-level, because with the lock wired
+// the same errors refuse the whole pull in lockRepoStacks first.
+func TestPullVerified_SiblingsUncheckablePlacementFails(t *testing.T) {
+	top := t.TempDir()
+	if err := os.WriteFile(filepath.Join(top, "file"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	p := &siblingPlacement{stacks: []placedSibling{
+		// Placed neither time: the earlier placement failed, the later one
+		// finds it outside the repository.
+		{Stack: models.Stack{ID: "N", Directory: filepath.Join(outside, "n"), ComposeFile: "compose.yaml"}, err: errors.New("earlier placement failed")},
+		// Placed before; after the pull a file sits where a folder was, so
+		// it cannot be resolved, and its files did not change.
+		{Stack: models.Stack{ID: "E", Directory: filepath.Join(top, "file", "e"), ComposeFile: "compose.yaml"}, rel: "file/e"},
+		// Placed before and matched: listed whatever the later placement says.
+		{Stack: models.Stack{ID: "M", Directory: filepath.Join(top, "file", "m"), ComposeFile: "compose.yaml", ProjectName: "m"}, rel: "file/m"},
+	}}
+
+	changed, failures := p.changed(top, []string{"file/m/compose.yaml"})
+
+	if len(changed) != 1 || changed[0].StackID != "M" {
+		t.Fatalf("changed = %v, want [M]", changed)
+	}
+	got := map[string]string{}
+	for _, f := range failures {
+		got[f.StackID] = f.Reason
+	}
+	if len(got) != 2 || !strings.Contains(got["N"], "earlier placement failed") || !strings.Contains(got["E"], "after the pull") {
+		t.Fatalf("failures = %#v, want N (placed neither time) and E (later placement errored)", failures)
 	}
 }
 

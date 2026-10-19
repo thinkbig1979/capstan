@@ -1117,9 +1117,9 @@ func placeSiblings(top, dirPath string, stacks []models.Stack) *siblingPlacement
 // Every stack is placed again after the pull and matched under both folders:
 // the pull may have deleted its folder (only the earlier placement names it),
 // created it, or retargeted a symlinked one (only the later placement names
-// the files it now reads). A stack placed neither time, or whose later
-// placement fails, or whose files cannot be placed, is a failure, never
-// "unchanged".
+// the files it now reads). A match under either is a change. Without one, a
+// stack whose later placement failed, or that was placed neither time, or
+// whose files cannot be placed, is a failure, never "unchanged".
 func (p *siblingPlacement) changed(top string, changedFiles []string) ([]SiblingStack, []RedeployFailure) {
 	out := []SiblingStack{}
 	var failures []RedeployFailure
@@ -1128,21 +1128,9 @@ func (p *siblingPlacement) changed(top string, changedFiles []string) ([]Sibling
 		if st.err == nil {
 			rels = append(rels, st.rel)
 		}
-		after, ok, err := repoRel(top, st.Directory)
-		switch {
-		case err != nil:
-			reason := fmt.Sprintf("after the pull: %v", err)
-			if st.err != nil {
-				reason = fmt.Sprintf("%v; %s", st.err, reason)
-			}
-			failures = append(failures, RedeployFailure{StackID: st.ID, Reason: reason})
-			continue
-		case ok && after != st.rel:
+		after, ok, afterErr := repoRel(top, st.Directory)
+		if afterErr == nil && ok && after != st.rel {
 			rels = append(rels, after)
-		}
-		if len(rels) == 0 {
-			failures = append(failures, RedeployFailure{StackID: st.ID, Reason: st.err.Error()})
-			continue
 		}
 		hit := false
 		var fileErr error
@@ -1159,6 +1147,14 @@ func (p *siblingPlacement) changed(top string, changedFiles []string) ([]Sibling
 			failures = append(failures, RedeployFailure{StackID: st.ID, Reason: fileErr.Error()})
 		case hit:
 			out = append(out, SiblingStack{StackID: st.ID, Name: st.ProjectName})
+		case afterErr != nil:
+			reason := fmt.Sprintf("after the pull: %v", afterErr)
+			if st.err != nil {
+				reason = fmt.Sprintf("%v; %s", st.err, reason)
+			}
+			failures = append(failures, RedeployFailure{StackID: st.ID, Reason: reason})
+		case len(rels) == 0:
+			failures = append(failures, RedeployFailure{StackID: st.ID, Reason: st.err.Error()})
 		}
 	}
 	return out, failures
