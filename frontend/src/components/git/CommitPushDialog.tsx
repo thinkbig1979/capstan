@@ -29,10 +29,12 @@ const ENV_DIFF_HIDDEN = 'Diff hidden: env files may contain secrets.'
  * Plain sentences for the refusals of POST /git/commit and /git/push
  * (agent-os-k81p.2). A code not listed shows the server's own message, which
  * for those codes names the specific cause (which upstream, which URL).
+ * GIT_SSH_KEY_UNUSABLE is deliberately not listed: its message names the key
+ * path and the fix (chmod 600, chown, mount), which no fixed sentence can.
  */
 const CODE_SENTENCES: Record<string, string> = {
   GIT_REMOTE_AHEAD: 'The remote has newer commits. Pull first.',
-  GIT_SSH_UNSUPPORTED: 'Pushing over SSH is not supported yet.',
+  GIT_SSH_UNSUPPORTED: 'No SSH key applies to this folder. Set its git auth to SSH with a key path, set the global SSH key in Settings > Git, or use an https remote.',
   OPERATION_IN_PROGRESS: 'Another operation is running on a stack in this repository. Try again in a moment.',
   GIT_PUSH_DISABLED: 'Commit and push are turned off for this folder.',
   GIT_IDENTITY_MISSING: 'Set the commit author name and email in Settings > Git first.',

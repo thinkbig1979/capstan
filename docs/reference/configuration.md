@@ -113,7 +113,7 @@ value wins until cleared there.
 
 | Name | Default | Required | What it does |
 | --- | --- | --- | --- |
-| `GIT_SSH_KEY` | `$HOME/.ssh/id_rsa` | No | Path to the SSH private key used for git operations over SSH. `$HOME` here is the OS-provided environment variable inside the container, not a Capstan setting in its own right — it only supplies this default. |
+| `GIT_SSH_KEY` | `$HOME/.ssh/id_rsa` | No | Path to the SSH private key used for git operations over SSH. `$HOME` here is the OS-provided environment variable inside the container, not a Capstan setting in its own right — it only supplies this default. If the path is this built-in default and no file is there, it is treated as not set. |
 | `GIT_HTTPS_TOKEN` | none | No | Token used for git operations over HTTPS. |
 | `GIT_HTTPS_USER` | `git` | No | Username paired with `GIT_HTTPS_TOKEN` for HTTPS git operations. |
 

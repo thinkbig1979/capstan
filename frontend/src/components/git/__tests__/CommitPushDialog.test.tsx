@@ -211,11 +211,20 @@ describe('CommitPushDialog: outcomes', () => {
 
   it('a classified refusal (details.code) reads as its sentence', async () => {
     mockCommit.mockRejectedValue({
-      outcome: 'failed', reason: 'Remote origin pushes over SSH; Capstan cannot push over SSH yet',
+      outcome: 'failed', reason: 'Remote origin pushes over SSH, but no SSH key applies to this directory',
       details: { code: 'GIT_SSH_UNSUPPORTED' }, status: 409,
     })
     await commitAndPush()
-    expect(await screen.findByRole('alert')).toHaveTextContent('Pushing over SSH is not supported yet.')
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'No SSH key applies to this folder. Set its git auth to SSH with a key path, set the global SSH key in Settings > Git, or use an https remote.',
+    )
+  })
+
+  it('an unusable SSH key shows the server message, which names the path and the fix (agent-os-z0gl)', async () => {
+    const reason = 'This directory\'s SSH key "/app/keys/id" is readable by other users (mode 0644), which ssh refuses; run chmod 600 on it'
+    mockCommit.mockRejectedValue({ outcome: 'failed', reason, details: { code: 'GIT_SSH_KEY_UNUSABLE' }, status: 409 })
+    await commitAndPush()
+    expect(await screen.findByRole('alert')).toHaveTextContent(reason)
   })
 
   it('a handleError refusal (top-level code) reads as its sentence', async () => {

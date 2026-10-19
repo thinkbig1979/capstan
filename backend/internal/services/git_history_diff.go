@@ -84,12 +84,12 @@ type historyDiff struct {
 // historyDiff runs from dirPath; every pathspec carries top magic, so the
 // folder the request named can't narrow or widen anything. parents are oid's
 // parents (none for a root commit).
-func (s *GitService) historyDiff(dirPath, user, token, oid string, parents []string) (*historyDiff, error) {
-	top, bare, err := s.historyTop(dirPath, user, token)
+func (s *GitService) historyDiff(dirPath string, cred gitCreds, oid string, parents []string) (*historyDiff, error) {
+	top, bare, err := s.historyTop(dirPath, cred)
 	if err != nil {
 		return nil, err
 	}
-	out, _, err := s.gitRun(dirPath, user, token, noLazyFetchEnv, append(append([]string{}, historyNameArgs...), oid)...)
+	out, _, err := s.gitRun(dirPath, cred, noLazyFetchEnv, append(append([]string{}, historyNameArgs...), oid)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list changed files: %w", err)
 	}
@@ -97,7 +97,7 @@ func (s *GitService) historyDiff(dirPath, user, token, oid string, parents []str
 	if err != nil {
 		return nil, err
 	}
-	rule, err := s.historyEnvRule(dirPath, top, bare, user, token, append([]string{oid}, parents...), "history diff")
+	rule, err := s.historyEnvRule(dirPath, top, bare, cred, append([]string{oid}, parents...), "history diff")
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +132,7 @@ func (s *GitService) historyDiff(dirPath, user, token, oid string, parents []str
 		return res, nil
 	}
 	args := append(append(append([]string{}, historyShowArgs...), oid, "--"), pathspecs...)
-	diff, _, err := s.gitRun(dirPath, user, token, showEnv, args...)
+	diff, _, err := s.gitRun(dirPath, cred, showEnv, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get diff: %w", err)
 	}
@@ -143,14 +143,14 @@ func (s *GitService) historyDiff(dirPath, user, token, oid string, parents []str
 // historyTop is the repository's top level, symlinks resolved. A bare
 // repository has no work tree, so its top is the folder itself and bare is
 // true: nothing on disk describes its commits.
-func (s *GitService) historyTop(dirPath, user, token string) (top string, bare bool, err error) {
-	isBare, err := s.gitCommandWithCreds(dirPath, user, token, "rev-parse", "--is-bare-repository")
+func (s *GitService) historyTop(dirPath string, cred gitCreds) (top string, bare bool, err error) {
+	isBare, err := s.gitCommandWithCreds(dirPath, cred, "rev-parse", "--is-bare-repository")
 	if err != nil {
 		return "", false, fmt.Errorf("failed to tell whether the repository is bare: %w", err)
 	}
 	top = dirPath
 	if isBare != "true" {
-		if top, err = s.gitCommandWithCreds(dirPath, user, token, "rev-parse", "--show-toplevel"); err != nil {
+		if top, err = s.gitCommandWithCreds(dirPath, cred, "rev-parse", "--show-toplevel"); err != nil {
 			return "", false, fmt.Errorf("failed to find the repository top level: %w", err)
 		}
 	}
@@ -242,16 +242,17 @@ type historyTree struct {
 // historyRuleReader holds what one rule build reads, so a blob shared by the
 // commit and its parents is read once.
 type historyRuleReader struct {
-	s                    *GitService
-	dirPath, user, token string
-	top                  string
-	blobs                map[string]string
+	s       *GitService
+	dirPath string
+	cred    gitCreds
+	top     string
+	blobs   map[string]string
 }
 
 // catBlob is the only cat-file the history view runs: `blob`, so no textconv
 // or filter, and never a lazy fetch.
-func (s *GitService) catBlob(dirPath, user, token, oid string) (string, error) {
-	out, _, err := s.gitRun(dirPath, user, token, noLazyFetchEnv, "-c", "core.fsmonitor=false", "cat-file", "blob", oid)
+func (s *GitService) catBlob(dirPath string, cred gitCreds, oid string) (string, error) {
+	out, _, err := s.gitRun(dirPath, cred, noLazyFetchEnv, "-c", "core.fsmonitor=false", "cat-file", "blob", oid)
 	return out, err
 }
 
@@ -259,7 +260,7 @@ func (h *historyRuleReader) blob(oid string) (string, error) {
 	if b, ok := h.blobs[oid]; ok {
 		return b, nil
 	}
-	b, err := h.s.catBlob(h.dirPath, h.user, h.token, oid)
+	b, err := h.s.catBlob(h.dirPath, h.cred, oid)
 	if err != nil {
 		return "", err
 	}
@@ -372,7 +373,7 @@ func (h *historyRuleReader) place(dir, entry string) (string, bool, error) {
 // (the commit and its parents). A git or database failure is an error: the
 // caller refuses rather than show a diff it could not check. A nil database
 // is one too. view names the caller in log lines.
-func (s *GitService) historyEnvRule(dirPath, top string, bare bool, user, token string, trees []string, view string) (historyEnvRule, error) {
+func (s *GitService) historyEnvRule(dirPath, top string, bare bool, cred gitCreds, trees []string, view string) (historyEnvRule, error) {
 	r := historyEnvRule{named: map[string]bool{}, targets: map[string]bool{}, compose: map[string]bool{}}
 	if s.db == nil {
 		return r, fmt.Errorf("cannot decide which files are env files: no database")
@@ -381,7 +382,7 @@ func (s *GitService) historyEnvRule(dirPath, top string, bare bool, user, token 
 	if err != nil {
 		return r, err
 	}
-	h := &historyRuleReader{s: s, dirPath: dirPath, user: user, token: token, top: top, blobs: map[string]string{}}
+	h := &historyRuleReader{s: s, dirPath: dirPath, cred: cred, top: top, blobs: map[string]string{}}
 	unknown := func(msg string, args ...any) {
 		slog.Warn("Hiding every file but the compose files in the "+view+": "+msg, args...)
 		r.composeUnreadable = true
@@ -389,7 +390,7 @@ func (s *GitService) historyEnvRule(dirPath, top string, bare bool, user, token 
 
 	tl := make([]historyTree, 0, len(trees))
 	for _, t := range trees {
-		l, err := s.lsTree(dirPath, user, token, t)
+		l, err := s.lsTree(dirPath, cred, t)
 		if err != nil {
 			return r, err
 		}
@@ -512,7 +513,7 @@ func (s *GitService) historyEnvRule(dirPath, top string, bare bool, user, token 
 		for p := range r.named {
 			candidates = append(candidates, filepath.Join(top, filepath.FromSlash(p)))
 		}
-		today, err := s.envLinkTargets(top, top, user, token, candidates)
+		today, err := s.envLinkTargets(top, top, cred, candidates)
 		if err != nil {
 			return r, err
 		}
@@ -571,8 +572,8 @@ const maxLinkHops = 40
 // lsTree lists every entry of tree-ish t by repository-relative path,
 // recursively, with blob sizes. --full-tree: run from a stack folder below
 // the top, ls-tree would list only that folder, relative to it (agent-os-odjs).
-func (s *GitService) lsTree(dirPath, user, token, t string) (map[string]treeEntry, error) {
-	out, _, err := s.gitRun(dirPath, user, token, noLazyFetchEnv, "-c", "core.fsmonitor=false", "ls-tree", "--full-tree", "-r", "-l", "-z", t)
+func (s *GitService) lsTree(dirPath string, cred gitCreds, t string) (map[string]treeEntry, error) {
+	out, _, err := s.gitRun(dirPath, cred, noLazyFetchEnv, "-c", "core.fsmonitor=false", "ls-tree", "--full-tree", "-r", "-l", "-z", t)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list the files of %s: %w", t, err)
 	}

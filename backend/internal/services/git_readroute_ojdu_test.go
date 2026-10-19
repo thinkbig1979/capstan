@@ -249,7 +249,7 @@ func TestOjduGitCmdWithCredsArgvPrefix(t *testing.T) {
 		"--no-optional-locks",
 	}
 	for _, tok := range []string{"", "a-token"} {
-		cmd, _ := svc.gitCmdWithCreds(context.Background(), dir, "u", tok, "status", "--porcelain")
+		cmd, _ := svc.gitCmdWithCreds(context.Background(), dir, gitCreds{user: "u", token: tok}, "status", "--porcelain")
 		args := cmd.Args[1:]
 		require.GreaterOrEqual(t, len(args), len(want)+2, "token %q: argv %q", tok, args)
 		require.Equal(t, want, args[:len(want)], "token %q: argv %q", tok, args)

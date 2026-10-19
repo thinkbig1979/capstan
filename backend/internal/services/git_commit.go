@@ -87,22 +87,22 @@ func (s *GitService) GetChanges(dirPath string) (*models.GitChangesResult, error
 		return nil, models.NewAppError(http.StatusConflict, models.ErrGitBareRepo, "A bare repository has no work tree to commit from")
 	}
 
-	user, token := s.httpsCredentials(dirPath)
-	top, err := s.repoTopLevel(dirPath, user, token)
+	cred := s.gitCredentials(dirPath)
+	top, err := s.repoTopLevel(dirPath, cred)
 	if err != nil {
 		return nil, err
 	}
-	changes, err := s.listChanges(dirPath, top, user, token)
+	changes, err := s.listChanges(dirPath, top, cred)
 	if err != nil {
 		return nil, err
 	}
-	branch, detached, err := s.headBranch(top, user, token)
+	branch, detached, err := s.headBranch(top, cred)
 	if err != nil {
 		return nil, err
 	}
 	// Exit 128 is both "no upstream" and a fault, so this is a hint for the
 	// form only; commit and push ask again under the lock and refuse.
-	_, upErr := s.gitCommandWithCreds(top, user, token, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}") //geterrors:ignore a failing @{upstream} IS the "no upstream" answer, and git exits 128 for it and for a fault alike; commit and push re-check under the lock
+	_, upErr := s.gitCommandWithCreds(top, cred, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}") //geterrors:ignore a failing @{upstream} IS the "no upstream" answer, and git exits 128 for it and for a fault alike; commit and push re-check under the lock
 
 	return &models.GitChangesResult{
 		Branch:             branch,
@@ -130,12 +130,12 @@ func (s *GitService) GetChangeDiff(dirPath, path string) (*models.GitChangeDiff,
 	if status.IsBare {
 		return nil, models.NewAppError(http.StatusConflict, models.ErrGitBareRepo, "A bare repository has no work tree to diff")
 	}
-	user, token := s.httpsCredentials(dirPath)
-	top, err := s.repoTopLevel(dirPath, user, token)
+	cred := s.gitCredentials(dirPath)
+	top, err := s.repoTopLevel(dirPath, cred)
 	if err != nil {
 		return nil, err
 	}
-	changes, err := s.listChanges(dirPath, top, user, token)
+	changes, err := s.listChanges(dirPath, top, cred)
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +158,7 @@ func (s *GitService) GetChangeDiff(dirPath, path string) (*models.GitChangeDiff,
 	if change.OrigPath != "" {
 		pathspecs = append(pathspecs, change.OrigPath)
 	}
-	diff, _, err := s.gitRun(top, user, token, []string{"GIT_LITERAL_PATHSPECS=1"}, append(changeDiffArgs, pathspecs...)...)
+	diff, _, err := s.gitRun(top, cred, []string{"GIT_LITERAL_PATHSPECS=1"}, append(changeDiffArgs, pathspecs...)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read the diff: %w", err)
 	}
@@ -187,10 +187,9 @@ var changeDiffArgs = []string{
 // CommitVerified commits exactly the requested files and, when req.Push, pushes
 // the branch under the same lock.
 //
-// Order: request shape, then the database-only reads (the switch, then for a
-// push the ssh auth type) before any git child, so an ssh directory reaches
-// none; then the lock; then every other read and every precondition, the
-// push's included, before the commit. So a refusal leaves nothing half done.
+// Order: request shape, then the database-only read of the switch before any
+// git child; then the lock; then every other read and every precondition, the
+// push's included (its URL and, over SSH, its key), before the commit. So a refusal leaves nothing half done.
 // A push that fails after the commit keeps the commit and answers partial.
 func (s *GitService) CommitVerified(dirPath string, req CommitRequest) (truth.ActionResult, *GitWriteResult) {
 	message := strings.TrimSpace(req.Message)
@@ -208,12 +207,12 @@ func (s *GitService) CommitVerified(dirPath string, req CommitRequest) (truth.Ac
 	if s.opLock == nil {
 		return truth.Failed("operation lock is not configured; refusing a git write", nil), nil
 	}
-	if ar, ok := s.writePrecheck(dirPath, req.Push); !ok {
+	if ar, ok := s.writePrecheck(dirPath); !ok {
 		return ar, nil
 	}
 
-	user, token := s.httpsCredentials(dirPath)
-	top, err := s.repoTopLevel(dirPath, user, token)
+	cred := s.gitCredentials(dirPath)
+	top, err := s.repoTopLevel(dirPath, cred)
 	if err != nil {
 		return truth.Failed("could not find the repository", err), nil
 	}
@@ -231,14 +230,14 @@ func (s *GitService) CommitVerified(dirPath string, req CommitRequest) (truth.Ac
 		return refused(models.NewAppError(http.StatusBadRequest, models.ErrGitIdentityMissing,
 			"Set the commit author name and email in Settings > Git first"))
 	}
-	branch, err := s.requireBranch(top, user, token)
+	branch, err := s.requireBranch(top, cred)
 	if err != nil {
 		return truth.Failed("could not read the current branch", err), nil
 	}
-	if err := s.refuseOperationInProgress(top, user, token); err != nil {
+	if err := s.refuseOperationInProgress(top, cred); err != nil {
 		return truth.Failed("could not check for a merge in progress", err), nil
 	}
-	changes, err := s.listChanges(dirPath, top, user, token)
+	changes, err := s.listChanges(dirPath, top, cred)
 	if err != nil {
 		return truth.Failed("could not list the changed files", err), nil
 	}
@@ -248,12 +247,12 @@ func (s *GitService) CommitVerified(dirPath string, req CommitRequest) (truth.Ac
 	}
 	var target pushTarget
 	if req.Push {
-		if target, err = s.pushPreconditions(top, branch, user, token); err != nil {
+		if target, err = s.pushPreconditions(top, branch, cred); err != nil {
 			return truth.Failed("could not check the push target", err), nil
 		}
 	}
 
-	hash, err := s.commitPaths(top, user, token, name, email, message, paths)
+	hash, err := s.commitPaths(top, cred, name, email, message, paths)
 	if err != nil {
 		return truth.Failed("git commit failed", err), nil
 	}
@@ -266,7 +265,7 @@ func (s *GitService) CommitVerified(dirPath string, req CommitRequest) (truth.Ac
 	}
 
 	w.PushRan, w.Remote, w.Branch = true, target.remote, target.mergeRef
-	rng, _, err := s.push(top, user, token, target)
+	rng, _, err := s.push(top, cred, target)
 	if err != nil {
 		code, reason := "INTERNAL_ERROR", "git push failed"
 		var appErr *models.AppError
@@ -298,12 +297,12 @@ func (s *GitService) PushVerified(dirPath string) (truth.ActionResult, *GitWrite
 	if s.opLock == nil {
 		return truth.Failed("operation lock is not configured; refusing a git write", nil), nil
 	}
-	if ar, ok := s.writePrecheck(dirPath, true); !ok {
+	if ar, ok := s.writePrecheck(dirPath); !ok {
 		return ar, nil
 	}
 
-	user, token := s.httpsCredentials(dirPath)
-	top, err := s.repoTopLevel(dirPath, user, token)
+	cred := s.gitCredentials(dirPath)
+	top, err := s.repoTopLevel(dirPath, cred)
 	if err != nil {
 		return truth.Failed("could not find the repository", err), nil
 	}
@@ -313,17 +312,17 @@ func (s *GitService) PushVerified(dirPath string) (truth.ActionResult, *GitWrite
 	}
 	defer release()
 
-	branch, err := s.requireBranch(top, user, token)
+	branch, err := s.requireBranch(top, cred)
 	if err != nil {
 		return truth.Failed("could not read the current branch", err), nil
 	}
-	target, err := s.pushPreconditions(top, branch, user, token)
+	target, err := s.pushPreconditions(top, branch, cred)
 	if err != nil {
 		return truth.Failed("could not check the push target", err), nil
 	}
 
 	w := &GitWriteResult{PushRan: true, Remote: target.remote, Branch: target.mergeRef}
-	rng, upToDate, err := s.push(top, user, token, target)
+	rng, upToDate, err := s.push(top, cred, target)
 	switch {
 	case err != nil:
 		return truth.Failed("git push failed", err), w
@@ -349,10 +348,10 @@ func refused(err *models.AppError) (truth.ActionResult, *GitWriteResult) {
 	return truth.Failed(err.Message, err), nil
 }
 
-// writePrecheck runs the database-only gates of a git write, before any git
-// child: the push switch, then (for a push) the auth type. The switch comes
-// first, so an ssh directory with the switch off answers 403.
-func (s *GitService) writePrecheck(dirPath string, push bool) (truth.ActionResult, bool) {
+// writePrecheck runs the database-only gate of a git write, before any git
+// child: the push switch. An ssh push is checked later, against the push
+// URL, by pushURLRefusal (agent-os-z0gl).
+func (s *GitService) writePrecheck(dirPath string) (truth.ActionResult, bool) {
 	enabled, err := s.pushSwitch(dirPath)
 	if err != nil {
 		return truth.Failed("could not read the push switch", err), false
@@ -360,18 +359,6 @@ func (s *GitService) writePrecheck(dirPath string, push bool) (truth.ActionResul
 	if !enabled {
 		return truth.Failed("push is not enabled for this directory", models.NewAppError(http.StatusForbidden,
 			models.ErrGitPushDisabled, "Commit and push are not enabled for this directory")), false
-	}
-	if !push {
-		return truth.ActionResult{}, true
-	}
-	cred, err := s.db.GetDirectoryCredentials(dirPath)
-	switch {
-	case errors.Is(err, errdefs.ErrNotFound):
-	case err != nil:
-		return truth.Failed("could not read this directory's git credentials", err), false
-	case strings.EqualFold(cred.GitAuthType, "ssh"):
-		return truth.Failed("ssh push is not supported", models.NewAppError(http.StatusConflict,
-			models.ErrGitSSHUnsupported, "This directory uses SSH git auth; Capstan cannot push over SSH yet")), false
 	}
 	return truth.ActionResult{}, true
 }
@@ -418,15 +405,15 @@ func settingOrUnset(key, v string, err error) (string, error) {
 }
 
 // repoTopLevel is the work tree root of the repository holding dirPath.
-func (s *GitService) repoTopLevel(dirPath, user, token string) (string, error) {
-	out, err := s.gitCommandWithCreds(dirPath, user, token, "rev-parse", "--show-toplevel")
+func (s *GitService) repoTopLevel(dirPath string, cred gitCreds) (string, error) {
+	out, err := s.gitCommandWithCreds(dirPath, cred, "rev-parse", "--show-toplevel")
 	if err == nil {
 		return filepath.Clean(out), nil
 	}
 	if repoErr := s.gitFailure(dirPath, err); repoErr != nil {
 		return "", repoErr
 	}
-	isBare, bareErr := s.gitCommandWithCreds(dirPath, user, token, "rev-parse", "--is-bare-repository")
+	isBare, bareErr := s.gitCommandWithCreds(dirPath, cred, "rev-parse", "--is-bare-repository")
 	if bareErr != nil {
 		return "", fmt.Errorf("failed to find the repository top level (%w) or tell whether it is bare: %w", err, bareErr)
 	}
@@ -465,8 +452,8 @@ func (s *GitService) lockRepo(top, kind string) (func(), error) {
 // headBranch is the branch HEAD names, or detached=true when it names none.
 // The full ref is read and refs/heads/ stripped: --short answers "heads/main"
 // when a tag is also named "main", which names no branch config.
-func (s *GitService) headBranch(top, user, token string) (branch string, detached bool, err error) {
-	out, err := s.gitCommandWithCreds(top, user, token, "symbolic-ref", "-q", "HEAD")
+func (s *GitService) headBranch(top string, cred gitCreds) (branch string, detached bool, err error) {
+	out, err := s.gitCommandWithCreds(top, cred, "symbolic-ref", "-q", "HEAD")
 	if err != nil {
 		// Exit 1 is git's documented "HEAD is not a symbolic ref".
 		if gitExitCode(err) == 1 {
@@ -483,8 +470,8 @@ func (s *GitService) headBranch(top, user, token string) (branch string, detache
 
 // requireBranch is headBranch with a detached HEAD refused: a commit there is
 // reachable from HEAD alone, and a push has no branch to send.
-func (s *GitService) requireBranch(top, user, token string) (string, error) {
-	branch, detached, err := s.headBranch(top, user, token)
+func (s *GitService) requireBranch(top string, cred gitCreds) (string, error) {
+	branch, detached, err := s.headBranch(top, cred)
 	if err != nil {
 		return "", err
 	}
@@ -498,9 +485,9 @@ func (s *GitService) requireBranch(top, user, token string) (string, error) {
 // refuseOperationInProgress refuses during a merge, cherry-pick or revert, by
 // exit code (0 present, 1 absent). A rebase leaves HEAD detached, which
 // requireBranch has already refused.
-func (s *GitService) refuseOperationInProgress(top, user, token string) error {
+func (s *GitService) refuseOperationInProgress(top string, cred gitCreds) error {
 	for _, ref := range []string{"MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"} {
-		_, err := s.gitCommandWithCreds(top, user, token, "rev-parse", "-q", "--verify", ref)
+		_, err := s.gitCommandWithCreds(top, cred, "rev-parse", "-q", "--verify", ref)
 		switch {
 		case err == nil:
 			return models.NewAppError(http.StatusConflict, models.ErrGitOperationInProgress,
@@ -518,8 +505,8 @@ func (s *GitService) refuseOperationInProgress(top, user, token string) error {
 // whitespace. --no-optional-locks keeps status off .git/index.lock, which a
 // concurrent commit needs; fsmonitor is off because repository config must
 // not run code here either.
-func (s *GitService) listChanges(dirPath, top, user, token string) ([]models.GitChange, error) {
-	out, _, err := s.gitRun(dirPath, user, token, nil,
+func (s *GitService) listChanges(dirPath, top string, cred gitCreds) ([]models.GitChange, error) {
+	out, _, err := s.gitRun(dirPath, cred, nil,
 		"-c", "core.fsmonitor=false", "--no-optional-locks", "status", "--porcelain=v2", "-z", "--untracked-files=no", "--", ".")
 	if err != nil {
 		return nil, fmt.Errorf("failed to read status: %w", err)
@@ -529,7 +516,7 @@ func (s *GitService) listChanges(dirPath, top, user, token string) ([]models.Git
 		return nil, err
 	}
 
-	rule, err := s.envRule(dirPath, top, user, token)
+	rule, err := s.envRule(dirPath, top, cred)
 	if err != nil {
 		return nil, err
 	}
@@ -682,7 +669,7 @@ var globPathspecEnv = []string{
 // envRule is built from every stack inside top, each stack's files read from
 // its own folder: a file in the requested folder can be named by a stack
 // registered above it, below it or beside it (agent-os-0zjs).
-func (s *GitService) envRule(dirPath, top, user, token string) (envRule, error) {
+func (s *GitService) envRule(dirPath, top string, cred gitCreds) (envRule, error) {
 	stacks, unplaced, err := s.repoStacks(top)
 	if err != nil {
 		return envRule{}, err
@@ -725,7 +712,7 @@ func (s *GitService) envRule(dirPath, top, user, token string) (envRule, error) 
 	for p := range r.named {
 		candidates = append(candidates, p)
 	}
-	targets, err := s.envLinkTargets(top, dirPath, user, token, candidates)
+	targets, err := s.envLinkTargets(top, dirPath, cred, candidates)
 	if err != nil {
 		return envRule{}, err
 	}
@@ -734,7 +721,7 @@ func (s *GitService) envRule(dirPath, top, user, token string) (envRule, error) 
 	// The union with HEAD. A fault reading HEAD (a missing or corrupt object)
 	// hides every change but the compose files rather than failing the
 	// dialog. An unborn branch (exit 1) has no HEAD to name anything.
-	_, err = s.gitCommandWithCreds(top, user, token, "rev-parse", "-q", "--verify", "HEAD^{commit}")
+	_, err = s.gitCommandWithCreds(top, cred, "rev-parse", "-q", "--verify", "HEAD^{commit}")
 	switch {
 	case gitExitCode(err) == 1:
 		return r, nil
@@ -744,7 +731,7 @@ func (s *GitService) envRule(dirPath, top, user, token string) (envRule, error) 
 		r.composeUnreadable = true
 		return r, nil
 	}
-	head, err := s.historyEnvRule(dirPath, top, false, user, token, []string{"HEAD"}, "commit dialog")
+	head, err := s.historyEnvRule(dirPath, top, false, cred, []string{"HEAD"}, "commit dialog")
 	if err != nil {
 		slog.Warn("Treating every changed file of the folder as an env file: the env files named at HEAD are unknown",
 			"path", top, "error", err)
@@ -758,17 +745,17 @@ func (s *GitService) envRule(dirPath, top, user, token string) (envRule, error) 
 // envLinkTargets resolves, on today's disk, where env files really live: the
 // candidates (absolute), every env-named tracked path of the repository and
 // every env-named untracked path under untrackedDir, with symlinks resolved.
-func (s *GitService) envLinkTargets(top, untrackedDir, user, token string, candidates []string) (map[string]bool, error) {
+func (s *GitService) envLinkTargets(top, untrackedDir string, cred gitCreds, candidates []string) (map[string]bool, error) {
 	// Tracked: the whole repository, so a link in a sibling stack folder
 	// (app/.env -> ../other/prod.secrets) flags its target here too.
-	tracked, _, err := s.gitRun(top, user, token, globPathspecEnv,
+	tracked, _, err := s.gitRun(top, cred, globPathspecEnv,
 		append([]string{"-c", "core.fsmonitor=false", "--no-optional-locks", "ls-files", "-z", "--full-name", "--"}, envNamePathspecs...)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list the tracked env files: %w", err)
 	}
 	// Untracked, ignored ones included: a .env is usually gitignored. Not
 	// --exclude-standard, which would drop exactly that file.
-	untracked, _, err := s.gitRun(untrackedDir, user, token, globPathspecEnv,
+	untracked, _, err := s.gitRun(untrackedDir, cred, globPathspecEnv,
 		append([]string{"-c", "core.fsmonitor=false", "--no-optional-locks", "ls-files", "-z", "--full-name", "--others", "--"}, envNamePathspecs...)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list the untracked env files: %w", err)
@@ -858,7 +845,7 @@ func selectCommitPaths(dirPath, top string, changes []models.GitChange, req Comm
 // is that file and not pathspec magic. The author comes from the settings
 // through the environment, which beats both config and inherited
 // GIT_AUTHOR_*/GIT_COMMITTER_* values.
-func (s *GitService) commitPaths(top, user, token, name, email, message string, paths []string) (string, error) {
+func (s *GitService) commitPaths(top string, cred gitCreds, name, email, message string, paths []string) (string, error) {
 	args := []string{
 		"-c", "core.hooksPath=/dev/null",
 		"-c", "core.fsmonitor=false",
@@ -871,7 +858,7 @@ func (s *GitService) commitPaths(top, user, token, name, email, message string, 
 		"GIT_AUTHOR_NAME=" + name, "GIT_AUTHOR_EMAIL=" + email,
 		"GIT_COMMITTER_NAME=" + name, "GIT_COMMITTER_EMAIL=" + email,
 	}
-	_, stderr, err := s.gitRun(top, user, token, env, append(args, paths...)...)
+	_, stderr, err := s.gitRun(top, cred, env, append(args, paths...)...)
 	if err != nil {
 		// LC_ALL=C is pinned on the child, so this text is git's English.
 		if gitExitCode(err) == 128 && strings.Contains(stderr, "index.lock': File exists") {
@@ -880,7 +867,7 @@ func (s *GitService) commitPaths(top, user, token, name, email, message string, 
 		}
 		return "", err
 	}
-	hash, err := s.gitCommandWithCreds(top, user, token, "rev-parse", "HEAD")
+	hash, err := s.gitCommandWithCreds(top, cred, "rev-parse", "HEAD")
 	if err != nil {
 		// The commit landed; only the read of its hash failed.
 		slog.Error("Committed but could not read the new HEAD", "path", top, "error", err)
@@ -893,10 +880,10 @@ func (s *GitService) commitPaths(top, user, token, name, email, message string, 
 // read-only git children: no upstream, an upstream in this same repository
 // (remote "."), or a push URL outside the allow-list. It returns the remote
 // and the ref to push HEAD to.
-func (s *GitService) pushPreconditions(top, branch, user, token string) (pushTarget, error) {
+func (s *GitService) pushPreconditions(top, branch string, cred gitCreds) (pushTarget, error) {
 	noUpstream := models.NewAppError(http.StatusConflict, models.ErrGitNoUpstream,
 		"Branch "+branch+" tracks no upstream branch; Capstan does not set one")
-	if _, err := s.gitCommandWithCreds(top, user, token, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"); err != nil {
+	if _, err := s.gitCommandWithCreds(top, cred, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"); err != nil {
 		if gitExitCode(err) < 0 {
 			return pushTarget{}, fmt.Errorf("failed to read the upstream: %w", err)
 		}
@@ -905,11 +892,11 @@ func (s *GitService) pushPreconditions(top, branch, user, token string) (pushTar
 	// Every value, not `config --get`: that answers the LAST value while
 	// @{upstream} resolves the FIRST, so a second branch.<b>.merge would push
 	// HEAD to a branch the upstream does not name.
-	remotes, err := s.gitConfigValues(top, user, token, "branch."+branch+".remote")
+	remotes, err := s.gitConfigValues(top, cred, "branch."+branch+".remote")
 	if err != nil {
 		return pushTarget{}, err
 	}
-	merges, err := s.gitConfigValues(top, user, token, "branch."+branch+".merge")
+	merges, err := s.gitConfigValues(top, cred, "branch."+branch+".merge")
 	if err != nil {
 		return pushTarget{}, err
 	}
@@ -939,7 +926,7 @@ func (s *GitService) pushPreconditions(top, branch, user, token string) (pushTar
 
 	// --push --all applies pushurl and pushInsteadOf, which can differ from
 	// the fetch URL. The URLs are never echoed: one can carry a token.
-	urls, err := s.gitCommandWithCreds(top, user, token, "remote", "get-url", "--push", "--all", remote)
+	urls, err := s.gitCommandWithCreds(top, cred, "remote", "get-url", "--push", "--all", remote)
 	if err != nil {
 		if gitExitCode(err) < 0 {
 			return pushTarget{}, fmt.Errorf("failed to read the push URL: %w", err)
@@ -954,15 +941,15 @@ func (s *GitService) pushPreconditions(top, branch, user, token string) (pushTar
 		return pushTarget{}, models.NewAppError(http.StatusConflict, models.ErrGitPushURLUnsupported,
 			"Remote "+remote+" has more than one push URL; Capstan pushes to exactly one URL")
 	}
-	if refusal := pushURLRefusal(remote, strings.TrimSpace(pushURLs[0])); refusal != nil {
+	if refusal := pushURLRefusal(remote, strings.TrimSpace(pushURLs[0]), cred); refusal != nil {
 		return pushTarget{}, refusal
 	}
 	return pushTarget{remote: remote, mergeRef: mergeRef}, nil
 }
 
 // gitConfigValues reads every value of a config key; unset (exit 1) is none.
-func (s *GitService) gitConfigValues(top, user, token, key string) ([]string, error) {
-	v, err := s.gitCommandWithCreds(top, user, token, "config", "--get-all", key)
+func (s *GitService) gitConfigValues(top string, cred gitCreds, key string) ([]string, error) {
+	v, err := s.gitCommandWithCreds(top, cred, "config", "--get-all", key)
 	if err != nil {
 		if gitExitCode(err) == 1 {
 			return nil, nil
@@ -977,35 +964,32 @@ var (
 	transportHelperRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9+.-]*::`)
 )
 
-// pushURLRefusal allow-lists the push URL: https://, http://, file:// or a
-// local path. Anything git would run over SSH (ssh://, git+ssh://,
-// ssh+git://, scp-like [user@]host:path) is GIT_SSH_UNSUPPORTED: nothing
-// supplies a key, so it would use whatever default key the container has.
-// git://, other schemes and <transport>:: helpers are refused too.
-func pushURLRefusal(remote, u string) *models.AppError {
-	sshRefusal := models.NewAppError(http.StatusConflict, models.ErrGitSSHUnsupported,
-		"Remote "+remote+" pushes over SSH; Capstan cannot push over SSH yet")
+// pushURLRefusal allow-lists the push URL: https://, http://, file://, a
+// local path, or one git runs over SSH (isSSHRemoteURL) when cred carries a
+// usable key. An SSH URL with no key applying is GIT_SSH_UNSUPPORTED: it
+// would use whatever default key the container has. A key that applies but
+// fails sshReady is GIT_SSH_KEY_UNUSABLE (agent-os-z0gl). git://, other
+// schemes and <transport>:: helpers are refused.
+func pushURLRefusal(remote, u string, cred gitCreds) error {
 	unsupported := models.NewAppError(http.StatusConflict, models.ErrGitPushURLUnsupported,
-		"Remote "+remote+" uses a transport Capstan does not push over; use https, http, file or a local path")
+		"Remote "+remote+" uses a transport Capstan does not push over; use https, http, file, ssh or a local path")
 	if u == "" || transportHelperRe.MatchString(u) {
 		return unsupported
+	}
+	if isSSHRemoteURL(u) {
+		if cred.sshKey == "" && cred.sshErr == nil {
+			return models.NewAppError(http.StatusConflict, models.ErrGitSSHUnsupported,
+				"Remote "+remote+" pushes over SSH, but no SSH key applies to this directory; set its git auth to SSH with a key path, set the global SSH key in Settings > Git, or use an https remote")
+		}
+		return cred.sshReady()
 	}
 	if m := urlSchemeRe.FindStringSubmatch(u); m != nil {
 		switch strings.ToLower(m[1]) {
 		case "https", "http", "file":
 			return nil
-		case "ssh", "git+ssh", "ssh+git":
-			return sshRefusal
 		default:
 			return unsupported
 		}
-	}
-	// git's own rule: with no scheme, a ':' before the first '/' makes it an
-	// scp-like SSH address; otherwise it is a local path.
-	colon := strings.IndexByte(u, ':')
-	slash := strings.IndexByte(u, '/')
-	if colon >= 0 && (slash < 0 || colon < slash) {
-		return sshRefusal
 	}
 	return nil
 }
@@ -1013,7 +997,7 @@ func pushURLRefusal(remote, u string) *models.AppError {
 // push runs the push and classifies its answer from the --porcelain ref line,
 // never from git's hint prose. It returns the pushed range on success, or
 // upToDate when the remote already had it.
-func (s *GitService) push(top, user, token string, t pushTarget) (rng string, upToDate bool, err error) {
+func (s *GitService) push(top string, cred gitCreds, t pushTarget) (rng string, upToDate bool, err error) {
 	args := []string{
 		"-c", "core.hooksPath=/dev/null",
 		"-c", "core.fsmonitor=false",
@@ -1026,7 +1010,7 @@ func (s *GitService) push(top, user, token string, t pushTarget) (rng string, up
 		// repository's (OBSERVED, git 2.47.3, TestPushIgnoresRepoReceivePack).
 		"push", "--porcelain", "--receive-pack=git-receive-pack", t.remote, "HEAD:" + t.mergeRef,
 	}
-	stdout, _, runErr := s.gitRun(top, user, token, nil, args...)
+	stdout, _, runErr := s.gitRun(top, cred, nil, args...)
 	flag, summary, found := porcelainRefLine(stdout)
 	if runErr != nil {
 		// The classified answers below carry a fixed message, and auth and
@@ -1086,18 +1070,18 @@ func porcelainRefLine(stdout string) (flag, summary string, found bool) {
 // porcelain line is on stdout whether it succeeded or not). Same child, same
 // deadline, same redaction of both streams. Cmd.Env keeps the last value of a
 // duplicate key, so env overrides what gitCmdWithCreds forwarded.
-func (s *GitService) gitRun(dirPath, user, token string, env []string, args ...string) (stdout, stderr string, err error) {
+func (s *GitService) gitRun(dirPath string, cred gitCreds, env []string, args ...string) (stdout, stderr string, err error) {
 	ctx, cancel := withCommandDeadline(context.Background(), s.gitTimeout())
 	defer cancel()
-	cmd, _ := s.gitCmdWithCreds(ctx, dirPath, user, token, args...)
+	cmd, _ := s.gitCmdWithCreds(ctx, dirPath, cred, args...)
 	cmd.Env = append(cmd.Env, env...)
 	var out, errOut bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errOut
 
 	runErr := timeoutError(ctx, cmd.Run(), "command")
-	stdout = redactToken(out.String(), token)
-	stderr = redactToken(errOut.String(), token)
+	stdout = redactToken(out.String(), cred.token)
+	stderr = redactToken(errOut.String(), cred.token)
 	if runErr != nil {
 		return stdout, stderr, fmt.Errorf("git %s: %w (%s)", gitSubcommand(args), runErr, gitDiagnostic(stdout, stderr))
 	}

@@ -121,10 +121,15 @@ const (
 	// ErrGitEnvConfirmRequired: the file list names an env file and the
 	// request did not set confirmEnv. 400, nothing written.
 	ErrGitEnvConfirmRequired = "GIT_ENV_CONFIRM_REQUIRED"
-	// ErrGitSSHUnsupported: the push would go over SSH, which nothing in
-	// Capstan supplies a key for (agent-os-z0gl). 409, refused before any git
-	// child runs when the directory's auth type is ssh.
+	// ErrGitSSHUnsupported: the push would go over SSH but no SSH key applies
+	// to the directory: its auth is https, or it inherits and no global key
+	// is configured (agent-os-z0gl, D164). 409, refused before the push runs.
 	ErrGitSSHUnsupported = "GIT_SSH_UNSUPPORTED"
+	// ErrGitSSHKeyUnusable: the pull or push would go over SSH and the key
+	// that applies cannot be used: missing, unreadable, readable by other
+	// users, or a path ssh would misread (agent-os-z0gl). 409, refused before
+	// the network git child; the message names the path and the fix.
+	ErrGitSSHKeyUnusable = "GIT_SSH_KEY_UNUSABLE"
 	// ErrGitDetachedHead: HEAD names no branch, so a commit would be
 	// reachable from HEAD alone and a push has no branch to send. 409.
 	ErrGitDetachedHead = "GIT_DETACHED_HEAD"

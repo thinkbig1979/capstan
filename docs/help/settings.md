@@ -119,7 +119,8 @@ and read history. A credential saved on an individual stack overrides these.
 
 ### SSH private key path
 
-The location of the private key used for git over SSH.
+The location of the private key used for git over SSH, by every folder whose git
+auth is not set to its own SSH key or HTTPS.
 
 **Common tasks**
 
@@ -130,7 +131,16 @@ The location of the private key used for git over SSH.
 
 - **It is a path inside the container, not on the host.** `/home/you/.ssh/id_rsa`
   works only if that exact path exists in the container.
-- **The key must be readable by the user the container runs as.**
+- **The key must be readable by the user the container runs as, and by no one
+  else.** Use `chmod 600` and the container's PUID as owner. A key other users can
+  read is refused, and the pull or push says so.
+- **The default path counts as unset when nothing is there.** With no file at
+  `$HOME/.ssh/id_rsa`, git over SSH runs as it did before Capstan applied keys, and
+  push over SSH is refused. Any other path that is missing is refused.
+- **Capstan trusts a server's host key the first time it connects** and keeps it in
+  `known_hosts` in its data directory. If the server's host key later changes, git
+  over SSH to it is refused. If Capstan cannot write that file, git over SSH is
+  refused too, since a changed host key would otherwise go unnoticed.
 
 ### Personal access token
 
@@ -165,9 +175,10 @@ until you turn it on.
 **Gotchas**
 
 - **It is per folder.** Each stack folder has its own switch.
-- **HTTPS remotes with a token are the supported route.** HTTP, `file://` and
-  local-path remotes also work. SSH is not supported yet, and `git://` and other
-  transports are refused.
+- **HTTPS remotes with a token, and SSH remotes with a key, are the supported
+  routes.** SSH uses the folder's SSH key, or the global one in Settings > Git when
+  the folder inherits. HTTP, `file://` and local-path remotes also work. `git://` and
+  other transports are refused.
 - **Capstan never force-pushes or sets an upstream.** If the remote has newer commits,
   pull first.
 

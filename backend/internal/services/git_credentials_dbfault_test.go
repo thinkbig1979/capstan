@@ -125,7 +125,7 @@ func TestHTTPSCredentials_UnreadableSettings_TokenReadRefusesBeforeUserRead(t *t
 
 	hide()
 	buf := captureSlog(t)
-	user, token := svc.httpsCredentials("/stacks/never-registered")
+	user, token := httpsOf(svc.gitCredentials("/stacks/never-registered"))
 	out := buf.String()
 
 	require.Equal(t, "", user,
@@ -153,7 +153,7 @@ func TestHTTPSCredentials_StoredUser_HealthyDB_Wins(t *testing.T) {
 	svc := NewGitService(&config.Config{GitHTTPSUser: xzoeConfigUser, GitHTTPSToken: xzoeConfigToken}, db)
 
 	buf := captureSlog(t)
-	user, token := svc.httpsCredentials("/stacks/never-registered")
+	user, token := httpsOf(svc.gitCredentials("/stacks/never-registered"))
 
 	require.Equal(t, xzoeStoredUser, user, "a readable stored username must win over the config value")
 	require.Equal(t, xzoeStoredToken, token)
@@ -175,7 +175,7 @@ func TestHTTPSCredentials_NoStoredUserRow_HealthyDB_FallsBackToConfig(t *testing
 	svc := NewGitService(&config.Config{GitHTTPSUser: xzoeConfigUser, GitHTTPSToken: xzoeConfigToken}, db)
 
 	buf := captureSlog(t)
-	user, token := svc.httpsCredentials("/stacks/never-registered")
+	user, token := httpsOf(svc.gitCredentials("/stacks/never-registered"))
 
 	require.Equal(t, xzoeConfigUser, user, "no stored username row must still fall back to GIT_HTTPS_USER")
 	require.Equal(t, xzoeStoredToken, token)
@@ -191,7 +191,7 @@ func TestHTTPSCredentials_NoStoredUserRowAndNoConfig_UsesDefaultUser(t *testing.
 	require.NoError(t, db.SetSetting("git_https_token", xzoeStoredToken))
 	svc := NewGitService(&config.Config{}, db)
 
-	user, _ := svc.httpsCredentials("/stacks/never-registered")
+	user, _ := httpsOf(svc.gitCredentials("/stacks/never-registered"))
 
 	require.Equal(t, defaultGitHTTPSUser, user)
 }

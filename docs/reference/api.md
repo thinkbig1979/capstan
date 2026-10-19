@@ -242,7 +242,16 @@ With a live token, all four behave exactly as they did before.
 
 - `GET /api/v1/git` — status; the web UI passes `?stackId=<id>`, but the
   route itself is a plain query-string GET
-- `POST /api/v1/git/pull` — pull changes
+- `POST /api/v1/git/pull` — pull changes. SSH remotes use the folder's
+  SSH key when its git auth is SSH, else the global key in Settings > Git
+  (`git_ssh_key`, then `GIT_SSH_KEY`). The built-in default
+  `$HOME/.ssh/id_rsa`, when no file is there, means no key: ssh runs as it
+  did before. Host keys are trusted on first use and kept in
+  `<DATA_DIR>/known_hosts`; a changed host key is refused. Answers 409
+  `GIT_SSH_KEY_UNUSABLE` before pulling when the pull URL is SSH and that key
+  is missing, unreadable, readable by other users, or a path ssh would misread
+  (not absolute, or holding `"`, `\`, `${` or a control character); the
+  message names the path and the fix
 - `GET /api/v1/git/log` — commit log. Optional `?file=` limits it to commits
   touching that path. The path must be relative, stay inside the repository
   after `..` is resolved, not start with `:` (git pathspec magic), contain no
@@ -331,13 +340,17 @@ are 4xx or 502, never 401. Commit and push results are action results
   no submodules, no new upstream, hooks off. 200 `success` with
   `details.range`, or `no_change` when the remote already has it. Answers:
   - 403 `GIT_PUSH_DISABLED`, checked first
-  - 409 `GIT_SSH_UNSUPPORTED`: the directory's git auth is SSH (refused before
-    any git runs), or the push URL is SSH-shaped (`ssh://`, `git+ssh://`,
-    `user@host:path`, `host:path`); Capstan does not push over SSH yet
+  - 409 `GIT_SSH_UNSUPPORTED`: the push URL is SSH-shaped (`ssh://`,
+    `git+ssh://`, `ssh+git://`, `user@host:path`, `host:path`) and no SSH key
+    applies: the folder's git auth is HTTPS, or it inherits and no global key
+    is configured (see `POST /git/pull` for which key applies)
+  - 409 `GIT_SSH_KEY_UNUSABLE`: the push URL is SSH-shaped and the key that
+    applies is missing, unreadable, readable by other users, or a path ssh
+    would misread; the message names the path and the fix
   - 409 `GIT_PUSH_URL_UNSUPPORTED`: `git://`, another scheme, or a
     `<transport>::` helper; more than one push URL (Capstan pushes to exactly
     one); or a remote whose name is a URL. Allowed: `https://`, `http://`,
-    `file://`, a local path
+    `file://`, a local path, and SSH with a usable key
   - 409 `GIT_DETACHED_HEAD`; 409 `GIT_NO_UPSTREAM` (no upstream, one in the
     same repository (remote `.`), or more than one `branch.<b>.remote` or
     `branch.<b>.merge` value)
