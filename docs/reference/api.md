@@ -273,7 +273,11 @@ With a live token, all four behave exactly as they did before.
   stack of the repository answers 409 meanwhile. A folder outside any
   repository answers **404 `GIT_NOT_REPO`**, a folder that no longer exists
   **404 `STACK_DIR_MISSING`**, and a bare repository **409 `GIT_BARE_REPO`**,
-  all before pulling anything. With `?redeploy=true` it redeploys only the
+  all before pulling anything. A registered stack, anywhere, whose folder
+  cannot be resolved refuses the pull, commit and push alike (500, locking
+  cannot tell whether it is inside the repository); the reason names it and
+  its folder, and `details.blockingStackId` and `details.blockingDirectory`
+  carry them (agent-os-l4h6). With `?redeploy=true` it redeploys only the
   requested folder's stacks whose compose or env file changed. Every result
   after a successful diff carries `details.siblingStacksChanged`,
   `[{stack, name}]`: the repository's other stacks whose compose or env file

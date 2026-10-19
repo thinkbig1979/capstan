@@ -906,7 +906,7 @@ func (s *GitService) PullVerified(dirPath string, redeploy bool, docker *DockerS
 			if errors.As(err, &appErr) {
 				return truth.Failed("another operation is in progress", err), nil
 			}
-			return truth.Failed("could not lock the repository's stacks before pulling", err), nil
+			return repoLockFailure("could not lock the repository's stacks before pulling", "pull", err), nil
 		}
 		defer release()
 		// The redeploy set comes from the list that was locked, never from a

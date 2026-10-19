@@ -218,7 +218,7 @@ func (s *GitService) CommitVerified(dirPath string, req CommitRequest) (truth.Ac
 	}
 	release, err := s.lockRepo(top, OpKindGitCommit)
 	if err != nil {
-		return truth.Failed("could not lock the repository's stacks", err), nil
+		return repoLockFailure("could not lock the repository's stacks", "commit", err), nil
 	}
 	defer release()
 
@@ -308,7 +308,7 @@ func (s *GitService) PushVerified(dirPath string) (truth.ActionResult, *GitWrite
 	}
 	release, err := s.lockRepo(top, OpKindGitPush)
 	if err != nil {
-		return truth.Failed("could not lock the repository's stacks", err), nil
+		return repoLockFailure("could not lock the repository's stacks", "push", err), nil
 	}
 	defer release()
 
@@ -423,6 +423,39 @@ func (s *GitService) repoTopLevel(dirPath string, cred gitCreds) (string, error)
 	return "", fmt.Errorf("failed to find the repository top level: %w", err)
 }
 
+// RepoStackPathError is a registered stack whose folder could not be resolved,
+// so whether it lies inside the repository cannot be told and the git
+// operation is refused (agent-os-l4h6). It carries the stack so the refusal
+// can name it: the cause alone would reach only the server log.
+type RepoStackPathError struct {
+	Stack models.Stack
+	Err   error
+}
+
+func (e *RepoStackPathError) Error() string {
+	return fmt.Sprintf("could not tell whether stack %s (%s) is inside the repository: %v", e.Stack.ProjectName, e.Stack.Directory, e.Err)
+}
+
+func (e *RepoStackPathError) Unwrap() error { return e.Err }
+
+// repoLockFailure answers a lockRepoStacks failure. A RepoStackPathError names
+// the blocking stack and its folder, with the same detail keys as the delete
+// refusal (handlers renderStackPathError); anything else keeps fallback.
+// action is what the lock was for: "pull", "commit" or "push".
+func repoLockFailure(fallback, action string, err error) truth.ActionResult {
+	var pathErr *RepoStackPathError
+	if !errors.As(err, &pathErr) {
+		return truth.Failed(fallback, err)
+	}
+	return truth.Failed(
+		fmt.Sprintf("could not resolve the folder of stack %s (%s), so the repository's stacks cannot be locked for this %s; fix that folder or rescan, then retry",
+			pathErr.Stack.ProjectName, pathErr.Stack.Directory, action),
+		err,
+		truth.KV("blockingStackId", pathErr.Stack.ID),
+		truth.KV("blockingDirectory", pathErr.Stack.Directory),
+	)
+}
+
 // lockRepo takes the lock of every stack whose folder is inside top: a
 // commit or push in one folder changes what every stack of the repository
 // sees. An unanswerable containment check refuses rather than skipping the
@@ -444,7 +477,7 @@ func (s *GitService) lockRepoStacks(top, kind string) ([]models.Stack, func(), e
 	for _, st := range stacks {
 		ok, err := pathutil.IsContained(top, st.Directory)
 		if err != nil {
-			return nil, nil, fmt.Errorf("could not tell whether stack %s is inside the repository: %w", st.ProjectName, err)
+			return nil, nil, &RepoStackPathError{Stack: st, Err: err}
 		}
 		if ok {
 			inRepo = append(inRepo, st)
