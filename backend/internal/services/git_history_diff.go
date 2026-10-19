@@ -228,12 +228,6 @@ type treeEntry struct {
 	size int64 // -1 for an entry that is not a blob, or a size not listed
 }
 
-// composeNames are the file names compose looks for by default. A file with
-// one of these names anywhere in a commit's tree is read as a compose file,
-// as is every registered stack's ComposeFile name (D144): a stack removed
-// since, or a compose file renamed since, still named its env files then.
-var composeNames = []string{"compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml"}
-
 // historyTree is one tree the rule reads (the commit, a parent, or a stage of
 // the index).
 type historyTree struct {
@@ -393,8 +387,11 @@ func (h *historyRuleReader) place(dir, entry string) (string, bool, error) {
 // historyEnvRule builds the rule from every stack inside top and from trees
 // (the commit and its parents). With index it also reads the index as trees,
 // and today's disk copy of every compose-named file the index tracks,
-// registered or not (agent-os-7l76): the commit dialog commits the index. A
-// git or database failure is an error: the caller refuses rather than show a
+// registered or not (agent-os-7l76). The commit dialog commits the work-tree
+// copies of the files it is given (commit --only), not the index; reading
+// the index too is a safe over-approximation: a compose change staged now is
+// what the next commit is likely to take, and it can only hide more. A git
+// or database failure is an error: the caller refuses rather than show a
 // diff it could not check. A nil database is one too. view names the caller
 // in log lines.
 func (s *GitService) historyEnvRule(dirPath, top string, bare bool, cred gitCreds, trees []string, index bool, view string) (historyEnvRule, error) {
@@ -428,9 +425,14 @@ func (s *GitService) historyEnvRule(dirPath, top string, bare bool, cred gitCred
 		tl = append(tl, il...)
 	}
 
+	// A file is read as a compose file wherever it sits when its name is one
+	// the scanner registers a stack from (composeFilePatterns), or is any
+	// registered stack's ComposeFile name (D144): a stack removed since, or a
+	// compose file renamed since, still named its env files then.
 	names := map[string]bool{}
-	for _, n := range composeNames {
-		names[n] = true
+	isCompose := func(p string) bool {
+		base := path.Base(p)
+		return isComposeFileName(base) || names[base]
 	}
 	// A stack that can't be placed may hold this repository's env files;
 	// hiding all but compose files keeps this diff closed without failing
@@ -494,20 +496,22 @@ func (s *GitService) historyEnvRule(dirPath, top string, bare bool, cred gitCred
 	}
 	// A tracked compose-named file edited on disk names what the next
 	// commit's compose file may name, whether or not a stack is registered
-	// for it. il[0] is the index's stage 0.
+	// for it. Every stage's paths: a conflicted file has no stage 0, and its
+	// disk copy is how the conflict is being resolved.
 	if index && !bare {
 		registered := map[string]bool{}
 		for _, p := range composeRels {
 			registered[p] = true
 		}
-		var rels []string
-		for p, e := range il[0].listing {
-			if names[path.Base(p)] && e.mode != "160000" && !registered[p] {
-				rels = append(rels, p)
+		paths := map[string]bool{}
+		for _, t := range il {
+			for p, e := range t.listing {
+				if isCompose(p) && e.mode != "160000" && !registered[p] {
+					paths[p] = true
+				}
 			}
 		}
-		sort.Strings(rels)
-		for _, p := range rels {
+		for _, p := range sortedKeys(paths) {
 			if err := diskNamed(p); err != nil {
 				return r, err
 			}
@@ -519,7 +523,7 @@ func (s *GitService) historyEnvRule(dirPath, top string, bare bool, cred gitCred
 	for _, t := range tl {
 		roots := append([]string(nil), composeRels...)
 		for p := range t.listing {
-			if names[path.Base(p)] {
+			if isCompose(p) {
 				roots = append(roots, p)
 			}
 		}

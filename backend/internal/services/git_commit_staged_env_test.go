@@ -193,3 +193,53 @@ func TestStagedEnvOversizedIndexComposeHides(t *testing.T) {
 
 	requireOdjsHidden(t, f, f.dir, "app/a.txt")
 }
+
+// A folder no stack is registered for can hold any compose file name the
+// scanner registers a stack from, not only the four defaults: compose.prod.yaml
+// names its files whether it is staged or edited on disk only.
+func TestStagedEnvVariantComposeName(t *testing.T) {
+	for _, name := range []string{"compose.prod.yaml", "docker-compose.dev.yml"} {
+		t.Run(name+"/staged_only", func(t *testing.T) {
+			f := newCommitFix(t, true)
+			writeFile(t, filepath.Join(f.dir, "extra", name), "services:\n  x:\n    image: x\n    env_file: key.conf\n")
+			writeFile(t, filepath.Join(f.dir, "extra/key.conf"), odjsSecret+"=1\n")
+			runGit(t, f.top, "add", "-A")
+			writeFile(t, filepath.Join(f.dir, "extra", name), "services: {}\n")
+			requireOdjsHidden(t, f, f.dir, "app/extra/key.conf")
+		})
+		t.Run(name+"/disk_only", func(t *testing.T) {
+			f := newCommitFix(t, true)
+			writeFile(t, filepath.Join(f.dir, "extra", name), "services: {}\n")
+			writeFile(t, filepath.Join(f.dir, "extra/key.conf"), odjsSecret+"=1\n")
+			runGit(t, f.top, "add", "-A")
+			runGit(t, f.top, "commit", "-q", "-m", "unregistered stack, names nothing")
+			writeFile(t, filepath.Join(f.dir, "extra", name), "services:\n  x:\n    image: x\n    env_file: key.conf\n")
+			writeFile(t, filepath.Join(f.dir, "extra/key.conf"), odjsSecret+"=2\n")
+			requireOdjsHidden(t, f, f.dir, "app/extra/key.conf")
+		})
+	}
+}
+
+// A compose file of an unregistered folder conflicted with no stage 0 (as
+// `git stash pop` leaves it, with no merge in progress): no stage names the
+// secret, the disk copy being resolved does.
+func TestStagedEnvConflictResolvedOnDiskNamesSecret(t *testing.T) {
+	f := newCommitFix(t, true)
+	writeFile(t, filepath.Join(f.dir, "sub/key.conf"), odjsSecret+"=1\n")
+	runGit(t, f.top, "add", "-A")
+	runGit(t, f.top, "commit", "-q", "-m", "secret")
+	base := stagedEnvHashObject(t, f.top, "services: {}\n")
+	ours := stagedEnvHashObject(t, f.top, "services:\n  o:\n    image: x\n")
+	cmd := exec.Command("git", "update-index", "--index-info")
+	cmd.Dir = f.top
+	cmd.Stdin = strings.NewReader("100644 " + base + " 1\tthird/compose.yaml\n" +
+		"100644 " + ours + " 2\tthird/compose.yaml\n" +
+		"100644 " + ours + " 3\tthird/compose.yaml\n")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(out))
+	require.NotContains(t, runGit(t, f.top, "ls-files", "-s"), " 0\tthird/compose.yaml", "no stage 0")
+	writeFile(t, filepath.Join(f.top, "third/compose.yaml"), "services:\n  o:\n    image: x\n    env_file: ../app/sub/key.conf\n")
+	writeFile(t, filepath.Join(f.dir, "sub/key.conf"), odjsSecret+"=2\n")
+
+	requireOdjsHidden(t, f, f.dir, "app/sub/key.conf")
+}

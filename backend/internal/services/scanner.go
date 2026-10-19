@@ -1598,19 +1598,12 @@ func (s *ScannerService) scanDirectoryWithRoot(path string, rootDir string) erro
 		return err
 	}
 
-	patterns := []string{
-		"compose*.yaml",
-		"compose*.yml",
-		"docker-compose*.yaml",
-		"docker-compose*.yml",
-	}
-
 	// seenNames tracks, per extracted stack name, the filename that already
 	// claimed it — so a later file mapping to the same name can be skipped
 	// with a warning that names both files (see the guard below).
 	seenNames := make(map[string]string)
 
-	for _, pattern := range patterns {
+	for _, pattern := range composeFilePatterns {
 		matches, err := filepath.Glob(filepath.Join(path, pattern))
 		if err != nil {
 			continue
@@ -1702,6 +1695,34 @@ func (s *ScannerService) scanDirectoryWithRoot(path string, rootDir string) erro
 	}
 
 	return nil
+}
+
+// composeFilePatterns are the compose file names the scanner registers a
+// stack from, in Docker Compose's own precedence, and the names the env rule
+// reads as compose files wherever they sit (agent-os-7l76): a folder no stack
+// is registered for yet can hold any of them.
+var composeFilePatterns = []string{
+	"compose*.yaml",
+	"compose*.yml",
+	"docker-compose*.yaml",
+	"docker-compose*.yml",
+}
+
+// isComposeFileName reports whether base matches composeFilePatterns. It is
+// wider than what the scanner registers (which also skips dotfiles and
+// .override files): the env rule errs toward reading a file as compose.
+func isComposeFileName(base string) bool {
+	for _, p := range composeFilePatterns {
+		ok, err := filepath.Match(p, base)
+		if err != nil {
+			// Only a malformed pattern errors: read the file as compose.
+			return true
+		}
+		if ok {
+			return true
+		}
+	}
+	return false
 }
 
 func extractStackName(filename string) string {
