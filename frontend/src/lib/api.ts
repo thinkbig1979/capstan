@@ -371,6 +371,11 @@ export const autoUpdateApi = {
  *
  *   ActionResult with outcome 'success'|'no_change'|'partial'|'failed'
  *   details: { previousCommit, currentCommit, failedRedeploys: [{stack, reason}] }
+ *
+ * siblingStacksChanged names the repository's other stacks whose compose or env
+ * file the pull changed; the pull does not redeploy them (agent-os-88xz). A
+ * sibling that could not be checked is in siblingCheckFailures (or, when none
+ * could, siblingListError) and makes the outcome partial.
  */
 export type GitPullResult = ActionResult<{
   // no_change carries the unchanged HEAD; the partial arms carry the failure cause.
@@ -382,6 +387,9 @@ export type GitPullResult = ActionResult<{
   failedRedeploys?: Array<{ stack: string; reason: string }>
   changedFiles?: string[]
   redeployedStacks?: string[]
+  siblingStacksChanged?: Array<{ stack: string; name: string }>
+  siblingCheckFailures?: Array<{ stack: string; reason: string }>
+  siblingListError?: string
 }>
 
 /**

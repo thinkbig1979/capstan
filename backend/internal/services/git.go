@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
-	"net/http"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -16,6 +15,7 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
+	"github.com/thinkbig1979/capstan/backend/internal/pathutil"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
 
@@ -23,6 +23,14 @@ import (
 type RedeployFailure struct {
 	StackID string `json:"stack"`
 	Reason  string `json:"reason"`
+}
+
+// SiblingStack is a stack of the pulled repository, outside the pulled
+// folder, whose compose or env file the pull changed. The pull does not
+// redeploy it (agent-os-88xz).
+type SiblingStack struct {
+	StackID string `json:"stack"`
+	Name    string `json:"name"`
 }
 
 // PullResult is the raw outcome of a git pull (no redeploy logic).
@@ -838,30 +846,68 @@ func gitExitCode(err error) int {
 //
 // docker may be nil; in that case redeploy is skipped even when requested.
 //
-// When a lock is wired, it first takes the operation lock of every stack in
-// dirPath and holds them across the pull and any restarts and their
-// verification, so neither the pulled files nor the redeploy interleave with a
-// backup or lifecycle op on those stacks. That holds with or without redeploy:
-// the pull alone rewrites files under the stack directories (agent-os-ai1z). A
-// held stack fails the whole call before anything is pulled, as 409
-// OPERATION_IN_PROGRESS.
+// When a lock is wired, it first takes the operation lock of every stack whose
+// folder lies inside the repository top, not only dirPath's: the pull rewrites
+// the whole work tree (agent-os-88xz). It holds them across the pull and any
+// restarts and their verification, so neither the pulled files nor the
+// redeploy interleave with a backup or lifecycle op on those stacks. That
+// holds with or without redeploy: the pull alone rewrites files under the
+// stack directories (agent-os-ai1z). A held stack fails the whole call before
+// anything is pulled, as 409 OPERATION_IN_PROGRESS.
+//
+// Only dirPath's stacks are redeployed. Every result after a successful diff
+// carries details.siblingStacksChanged, the repository's other stacks whose
+// compose or env file changed, so the operator can redeploy them; one that
+// cannot be checked makes the outcome partial (details.siblingCheckFailures,
+// or details.siblingListError when none could be).
 func (s *GitService) PullVerified(dirPath string, redeploy bool, docker *DockerService) (truth.ActionResult, *models.PullResult) {
 	var lockedStacks []models.Stack
 	locked := false
+	// Siblings placed before the pull, while every folder it may delete still
+	// exists; nil without a lock, where they are placed after it.
+	var preplaced *siblingPlacement
+	// The repository top places the changed files after the pull. With a lock
+	// it is needed before the pull too: a pull rewrites the whole work tree,
+	// so every stack inside the top is locked, not only dirPath's
+	// (agent-os-88xz).
+	cred := s.gitCredentials(dirPath)
+	var top string
+	var topErr error
+	topKnown := false
 	if s.opLock != nil {
-		stacks, err := s.db.ListStacksByDirectory(dirPath)
-		if err != nil {
-			// Nothing has been pulled yet, so this is a plain failure, not
-			// the partial the post-pull listing below reports.
-			return truth.Failed("could not list the stacks to lock before pulling", err), nil
+		// Nothing has been pulled yet, so every failure here is a plain
+		// failure, not the partial the post-pull steps report.
+		top, topErr = s.repoTopLevel(dirPath, cred)
+		if topErr != nil {
+			// repoTopLevel's bare-repository refusal speaks of committing;
+			// keep the one pullCLI gives (agent-os-00zg).
+			var appErr *models.AppError
+			if errors.As(topErr, &appErr) && appErr.Code == models.ErrGitBareRepo {
+				topErr = models.NewAppError(409, models.ErrGitBareRepo, "A bare repository has no work tree to pull into")
+			}
+			return truth.Failed("could not find the repository to lock its stacks before pulling", topErr), nil
 		}
-		release, err := s.lockStacks(stacks, OpKindGitPull)
+		topKnown = true
+		repoStacks, release, err := s.lockRepoStacks(top, OpKindGitPull)
 		if err != nil {
-			return truth.Failed("another operation is in progress",
-				models.NewAppError(http.StatusConflict, models.ErrOperationInProgress, err.Error())), nil
+			var appErr *models.AppError
+			if errors.As(err, &appErr) {
+				return truth.Failed("another operation is in progress", err), nil
+			}
+			return truth.Failed("could not lock the repository's stacks before pulling", err), nil
 		}
 		defer release()
-		lockedStacks, locked = stacks, true
+		// The redeploy set comes from the list that was locked, never from a
+		// second read, which could name a stack registered since: it would
+		// be restarted without its lock. "Registered in dirPath" is the exact
+		// match ListStacksByDirectory makes.
+		for _, st := range repoStacks {
+			if st.Directory == dirPath {
+				lockedStacks = append(lockedStacks, st)
+			}
+		}
+		locked = true
+		preplaced = placeSiblings(top, dirPath, repoStacks)
 	}
 
 	pullResult, err := s.pullCLI(dirPath)
@@ -893,28 +939,76 @@ func (s *GitService) PullVerified(dirPath string, redeploy bool, docker *DockerS
 		), pullResult
 	}
 
+	if len(pullResult.ChangedFiles) > 0 && !topKnown {
+		top, topErr = s.repoTopLevel(dirPath, cred)
+	}
+
+	// The other stacks of the repository whose files the pull changed. They
+	// are locked above but not redeployed (D160), so the result names them
+	// for the operator to redeploy. One that cannot be checked is never
+	// reported as unchanged: the outcome becomes partial.
+	siblings := []SiblingStack{}
+	var siblingFailures []RedeployFailure
+	var siblingListErr error
+	if len(pullResult.ChangedFiles) > 0 {
+		placement := preplaced
+		switch {
+		case placement != nil:
+		case topErr != nil:
+			siblingListErr = fmt.Errorf("could not find the repository top to match the changed files: %w", topErr)
+		default:
+			all, err := s.db.ListStacks()
+			if err != nil {
+				siblingListErr = fmt.Errorf("could not list the stacks to find the changed ones: %w", err)
+			} else {
+				placement = placeSiblings(top, dirPath, all)
+			}
+		}
+		if placement != nil {
+			siblings, siblingFailures = placement.changed(top, pullResult.ChangedFiles)
+		}
+	}
+	withSiblings := func(ar truth.ActionResult) (truth.ActionResult, *models.PullResult) {
+		if ar.Details == nil {
+			ar.Details = map[string]any{}
+		}
+		unchecked := siblingListErr != nil || len(siblingFailures) > 0
+		if unchecked && ar.Outcome == truth.OutcomeSuccess {
+			ar.Outcome = truth.OutcomePartial
+			ar.Reason = "pulled new commits but could not tell whether other stacks in the repository changed"
+		}
+		ar.Details["siblingStacksChanged"] = siblings
+		if len(siblingFailures) > 0 {
+			ar.Details["siblingCheckFailures"] = siblingFailures
+		}
+		if siblingListErr != nil {
+			ar.Details["siblingListError"] = siblingListErr.Error()
+		}
+		return ar, pullResult
+	}
+
 	// HEAD advanced; skip redeploy if not requested or docker unavailable.
 	if !redeploy || docker == nil || len(pullResult.ChangedFiles) == 0 {
-		return truth.Success("pulled new commits",
+		return withSiblings(truth.Success("pulled new commits",
 			truth.KV("previousCommit", pullResult.PreviousCommit),
 			truth.KV("currentCommit", pullResult.CurrentCommit),
 			truth.KV("changedFiles", pullResult.ChangedFiles),
-		), pullResult
+		))
 	}
 
 	// Determine which stacks are affected by the changed files. When they were
-	// locked above, redeploy exactly the set that is locked.
+	// locked above, redeploy exactly the set taken from the locked list.
 	stacks := lockedStacks
 	if !locked {
 		var listErr error
 		stacks, listErr = s.db.ListStacksByDirectory(dirPath)
 		if listErr != nil {
 			// Can list stacks — treat as partial: pull succeeded but redeploy untried.
-			return truth.Partial("pulled new commits but could not list stacks for redeploy",
+			return withSiblings(truth.Partial("pulled new commits but could not list stacks for redeploy",
 				truth.KV("previousCommit", pullResult.PreviousCommit),
 				truth.KV("currentCommit", pullResult.CurrentCommit),
 				truth.KV("listError", listErr.Error()),
-			), pullResult
+			))
 		}
 	}
 
@@ -928,9 +1022,6 @@ func (s *GitService) PullVerified(dirPath string, redeploy bool, docker *DockerS
 	// placed in that frame below. Without the top nothing can be placed, and
 	// "success, redeployed nothing" would be false, so every stack fails
 	// (agent-os-4d60).
-	cred := s.gitCredentials(dirPath)
-	top, topErr := s.repoTopLevel(dirPath, cred)
-
 	for _, stack := range stacks {
 		if topErr != nil {
 			failures = append(failures, RedeployFailure{
@@ -960,20 +1051,113 @@ func (s *GitService) PullVerified(dirPath string, redeploy bool, docker *DockerS
 	}
 
 	if len(failures) > 0 {
-		return truth.Partial("pulled new commits but some stacks failed to redeploy",
+		return withSiblings(truth.Partial("pulled new commits but some stacks failed to redeploy",
 			truth.KV("previousCommit", pullResult.PreviousCommit),
 			truth.KV("currentCommit", pullResult.CurrentCommit),
 			truth.KV("redeployedStacks", redeployed),
 			truth.KV("failedRedeploys", failures),
-		), pullResult
+		))
 	}
 
-	return truth.Success("pulled and redeployed",
+	return withSiblings(truth.Success("pulled and redeployed",
 		truth.KV("previousCommit", pullResult.PreviousCommit),
 		truth.KV("currentCommit", pullResult.CurrentCommit),
 		truth.KV("changedFiles", pullResult.ChangedFiles),
 		truth.KV("redeployedStacks", redeployed),
-	), pullResult
+	))
+}
+
+// siblingPlacement is every stack inside the repository top other than the
+// ones registered in dirPath (the exact match ListStacksByDirectory makes),
+// each with the repository-relative folder it had when placed, if any.
+type siblingPlacement struct {
+	stacks []placedSibling
+}
+
+type placedSibling struct {
+	models.Stack
+	// rel is the folder when placed; empty with err set when it could not
+	// be: a symlinked path whose folder does not exist resolves to nothing
+	// git could name.
+	rel string
+	err error
+}
+
+// placeSiblings places stacks against top. It runs before the pull when it
+// can: a folder the pull deletes cannot be placed afterwards when it was
+// registered through a symlink (agent-os-88xz).
+func placeSiblings(top, dirPath string, stacks []models.Stack) *siblingPlacement {
+	p := &siblingPlacement{}
+	for _, st := range stacks {
+		if st.Directory == dirPath {
+			continue
+		}
+		in, err := pathutil.IsContained(top, st.Directory)
+		switch {
+		case err != nil:
+			p.stacks = append(p.stacks, placedSibling{Stack: st, err: fmt.Errorf("could not tell whether %s is inside the repository: %w", st.Directory, err)})
+			continue
+		case !in:
+			continue
+		}
+		rel, ok, err := repoRel(top, st.Directory)
+		switch {
+		case err != nil:
+			p.stacks = append(p.stacks, placedSibling{Stack: st, err: err})
+		case !ok:
+			p.stacks = append(p.stacks, placedSibling{Stack: st, err: fmt.Errorf("the stack folder %s cannot be placed in the repository at %s", st.Directory, top)})
+		default:
+			p.stacks = append(p.stacks, placedSibling{Stack: st, rel: rel})
+		}
+	}
+	return p
+}
+
+// changed is the stacks whose compose or env file is among changedFiles.
+// Every stack is placed again after the pull and matched under both folders:
+// the pull may have deleted its folder (only the earlier placement names it),
+// created it, or retargeted a symlinked one (only the later placement names
+// the files it now reads). A match under either is a change. Without one, a
+// stack whose later placement failed, or that was placed neither time, or
+// whose files cannot be placed, is a failure, never "unchanged".
+func (p *siblingPlacement) changed(top string, changedFiles []string) ([]SiblingStack, []RedeployFailure) {
+	out := []SiblingStack{}
+	var failures []RedeployFailure
+	for _, st := range p.stacks {
+		var rels []string
+		if st.err == nil {
+			rels = append(rels, st.rel)
+		}
+		after, ok, afterErr := repoRel(top, st.Directory)
+		if afterErr == nil && ok && after != st.rel {
+			rels = append(rels, after)
+		}
+		hit := false
+		var fileErr error
+		for _, rel := range rels {
+			ok, err := relFilesChanged(rel, st.Stack, changedFiles)
+			if err != nil {
+				fileErr = err
+				break
+			}
+			hit = hit || ok
+		}
+		switch {
+		case fileErr != nil:
+			failures = append(failures, RedeployFailure{StackID: st.ID, Reason: fileErr.Error()})
+		case hit:
+			out = append(out, SiblingStack{StackID: st.ID, Name: st.ProjectName})
+		case afterErr != nil:
+			reason := fmt.Sprintf("after the pull: %v", afterErr)
+			if st.err != nil {
+				reason = fmt.Sprintf("%v; %s", st.err, reason)
+			}
+			failures = append(failures, RedeployFailure{StackID: st.ID, Reason: reason})
+		case len(rels) == 0:
+			failures = append(failures, RedeployFailure{StackID: st.ID, Reason: st.err.Error()})
+		}
+	}
+	return out, failures
 }
 
 // stackFilesChanged reports whether any changed file matches the stack's
@@ -990,6 +1174,12 @@ func stackFilesChanged(top string, stack models.Stack, changedFiles []string) (b
 	if !ok {
 		return false, fmt.Errorf("the stack folder %s is outside the repository at %s", stack.Directory, top)
 	}
+	return relFilesChanged(rel, stack, changedFiles)
+}
+
+// relFilesChanged is stackFilesChanged for a stack whose folder is already
+// placed at rel, repository-relative.
+func relFilesChanged(rel string, stack models.Stack, changedFiles []string) (bool, error) {
 	want := map[string]bool{}
 	for _, name := range []string{stack.ComposeFile, stack.EnvFile} {
 		if name == "" {

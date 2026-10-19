@@ -428,15 +428,23 @@ func (s *GitService) repoTopLevel(dirPath string, cred gitCreds) (string, error)
 // sees. An unanswerable containment check refuses rather than skipping the
 // stack, which would under-lock.
 func (s *GitService) lockRepo(top, kind string) (func(), error) {
+	_, release, err := s.lockRepoStacks(top, kind)
+	return release, err
+}
+
+// lockRepoStacks is lockRepo, also returning the stacks it locked: a caller
+// acting on some of them takes them from this list, never from a second read,
+// which could name a stack registered after the lock was taken (agent-os-88xz).
+func (s *GitService) lockRepoStacks(top, kind string) ([]models.Stack, func(), error) {
 	stacks, err := s.db.ListStacks()
 	if err != nil {
-		return nil, fmt.Errorf("could not list the stacks to lock: %w", err)
+		return nil, nil, fmt.Errorf("could not list the stacks to lock: %w", err)
 	}
 	var inRepo []models.Stack
 	for _, st := range stacks {
 		ok, err := pathutil.IsContained(top, st.Directory)
 		if err != nil {
-			return nil, fmt.Errorf("could not tell whether stack %s is inside the repository: %w", st.ProjectName, err)
+			return nil, nil, fmt.Errorf("could not tell whether stack %s is inside the repository: %w", st.ProjectName, err)
 		}
 		if ok {
 			inRepo = append(inRepo, st)
@@ -444,9 +452,9 @@ func (s *GitService) lockRepo(top, kind string) (func(), error) {
 	}
 	release, err := s.lockStacks(inRepo, kind)
 	if err != nil {
-		return nil, models.NewAppError(http.StatusConflict, models.ErrOperationInProgress, err.Error())
+		return nil, nil, models.NewAppError(http.StatusConflict, models.ErrOperationInProgress, err.Error())
 	}
-	return release, nil
+	return inRepo, release, nil
 }
 
 // headBranch is the branch HEAD names, or detached=true when it names none.

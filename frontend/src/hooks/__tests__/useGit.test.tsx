@@ -215,3 +215,50 @@ describe('useGitPull — failed-redeploy names are asserted, not validated', () 
     expect(warned).not.toContain('[object Object]')
   })
 })
+
+// ─── agent-os-88xz: sibling stacks changed by the pull ───────────────────────
+
+describe('useGitPull — siblings changed by the pull', () => {
+  it('names the sibling stacks that need a redeploy', async () => {
+    mockGitPull.mockResolvedValue({
+      outcome: 'success',
+      reason: 'pulled and redeployed',
+      details: {
+        siblingStacksChanged: [
+          { stack: 'stacks~b:web', name: 'web' },
+          { stack: 'stacks~c:db', name: 'db' },
+          { stack: 'stacks~d:cache', name: '' },
+        ],
+      },
+    } satisfies GitPullResult)
+
+    const wrapper = createWrapper()
+    const { result } = renderHook(() => useGitPull(), { wrapper })
+    act(() => {
+      result.current.mutate({ stackId: 'stack1', redeploy: true })
+    })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+    expect(toast.success).toHaveBeenCalledWith('pulled and redeployed')
+    expect(toast.info).toHaveBeenCalledTimes(1)
+    expect(toast.info).toHaveBeenCalledWith('Other stacks changed by this pull need a redeploy: web, db, stacks~d:cache')
+  })
+
+  it('says nothing more when no sibling changed', async () => {
+    mockGitPull.mockResolvedValue({
+      outcome: 'success',
+      reason: 'pulled new commits',
+      details: { siblingStacksChanged: [] },
+    } satisfies GitPullResult)
+
+    const wrapper = createWrapper()
+    const { result } = renderHook(() => useGitPull(), { wrapper })
+    act(() => {
+      result.current.mutate({ stackId: 'stack1', redeploy: false })
+    })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+    expect(toast.success).toHaveBeenCalledWith('pulled new commits')
+    expect(toast.info).not.toHaveBeenCalled()
+  })
+})

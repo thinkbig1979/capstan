@@ -126,6 +126,7 @@ export function useGitPush() {
  * - no_change → toast.info (already up to date)
  * - partial   → toast.warning with failed-redeploy list (audit finding #9)
  * - failed    → toast.error
+ * - siblingStacksChanged non-empty → toast.info naming them (agent-os-88xz)
  *
  * Always invalidates queryKeys.git.all(stackId) and queryKeys.stacks().
  */
@@ -161,6 +162,22 @@ export function useGitPull() {
             .join(', ')
           toast.warning(`Failed to redeploy: ${names}`)
         }
+      }
+
+      // agent-os-88xz: the pull rewrites every stack of the repository but
+      // redeploys only this one, so name the others whose files changed.
+      const rawSiblings = (result.details as {
+        siblingStacksChanged?: unknown
+      } | undefined)?.siblingStacksChanged
+      const siblings = Array.isArray(rawSiblings) ? rawSiblings : []
+      if (siblings.length > 0) {
+        const names = siblings
+          .map((s) => {
+            const sib = s as { name?: unknown; stack?: unknown } | null
+            return stringOr(sib?.name, '') || stringOr(sib?.stack, 'unknown')
+          })
+          .join(', ')
+        toast.info(`Other stacks changed by this pull need a redeploy: ${names}`)
       }
     },
   })
