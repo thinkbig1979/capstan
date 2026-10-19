@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -509,6 +510,9 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 	// removal path.
 	survivorsBeforePrompt, nestedBeforePrompt, survErr := h.listSurvivors(*stack)
 	if survErr != nil {
+		if renderStackPathError(c, id, "", survErr) {
+			return
+		}
 		renderResult(c, truth.Failed("failed to list stacks registered under stack directory", survErr,
 			truth.KV("id", id),
 			truth.KV("directory", stack.Directory),
@@ -638,6 +642,9 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 		}
 	})
 	if rmErr != nil {
+		if renderStackPathError(c, id, "stack compose down succeeded but its files were kept: ", rmErr) {
+			return
+		}
 		renderResult(c, truth.Failed("stack compose down succeeded but file removal failed", rmErr,
 			truth.KV("id", id),
 			truth.KV("directory", stack.Directory),
@@ -666,9 +673,9 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 // stack registered through a symlink to this folder is a survivor, and one in a
 // subfolder is nested, though neither row carries this directory's path. When
 // stack's own folder is a symlink, RemoveAll removes only the link, so counting
-// the target's stacks over-refuses; that is the safe direction. Any containment
-// check that cannot be answered refuses, since guessing destroys another
-// stack's files.
+// the target's stacks over-refuses; that is the safe direction. Any folder that
+// cannot be resolved refuses, since guessing destroys another stack's files,
+// and the error is a *stackPathError naming the stack whose folder it is.
 func (h *StacksHandler) listSurvivors(stack models.Stack) (survivors, nested []models.Stack, err error) {
 	registered, err := h.db.ListStacksByDirectory(stack.Directory)
 	if err != nil {
@@ -684,21 +691,31 @@ func (h *StacksHandler) listSurvivors(stack models.Stack) (survivors, nested []m
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to list stacks to check for stacks inside %s: %w", stack.Directory, err)
 	}
+	// Resolved once, so a failure here is this stack's and a failure below is
+	// the row's.
+	absDir, err := filepath.Abs(stack.Directory)
+	if err != nil {
+		return nil, nil, &stackPathError{stack: stack, err: err}
+	}
+	realDir, err := pathutil.ResolveExisting(absDir)
+	if err != nil {
+		return nil, nil, &stackPathError{stack: stack, err: err}
+	}
 	for _, s := range all {
 		if s.ID == stack.ID || s.Directory == stack.Directory {
 			continue
 		}
-		inside, err := pathutil.IsContained(stack.Directory, s.Directory)
+		inside, err := pathutil.IsContained(realDir, s.Directory)
 		if err != nil {
-			return nil, nil, fmt.Errorf("could not tell whether stack %s is inside %s: %w", s.ProjectName, stack.Directory, err)
+			return nil, nil, &stackPathError{stack: s, err: err}
 		}
 		if !inside {
 			continue
 		}
 		// Contained both ways is the same folder reached by another path.
-		same, err := pathutil.IsContained(s.Directory, stack.Directory)
+		same, err := pathutil.IsContained(s.Directory, realDir)
 		if err != nil {
-			return nil, nil, fmt.Errorf("could not tell whether stack %s shares the folder %s: %w", s.ProjectName, stack.Directory, err)
+			return nil, nil, &stackPathError{stack: s, err: err}
 		}
 		if same {
 			survivors = append(survivors, s)
@@ -707,6 +724,39 @@ func (h *StacksHandler) listSurvivors(stack models.Stack) (survivors, nested []m
 		}
 	}
 	return survivors, nested, nil
+}
+
+// stackPathError is a registered stack whose folder could not be resolved, so
+// whether a delete would remove its files cannot be told.
+type stackPathError struct {
+	stack models.Stack
+	err   error
+}
+
+func (e *stackPathError) Error() string {
+	return fmt.Sprintf("could not resolve the folder of stack %s (%s): %v", e.stack.ProjectName, e.stack.Directory, e.err)
+}
+
+func (e *stackPathError) Unwrap() error { return e.err }
+
+// renderStackPathError answers a delete that a stackPathError blocked, naming
+// that stack and its folder: the cause alone would reach only the server log,
+// and the user cannot fix a folder they are not told about. done says what
+// already happened, empty when nothing has.
+func renderStackPathError(c *gin.Context, id, done string, err error) bool {
+	var pathErr *stackPathError
+	if !errors.As(err, &pathErr) {
+		return false
+	}
+	renderResult(c, truth.Failed(
+		fmt.Sprintf("%scould not resolve the folder of stack %s (%s), so this delete cannot tell whether it would remove that stack's files; fix that folder or rescan, then retry",
+			done, pathErr.stack.ProjectName, pathErr.stack.Directory),
+		err,
+		truth.KV("id", id),
+		truth.KV("blockingStackId", pathErr.stack.ID),
+		truth.KV("blockingDirectory", pathErr.stack.Directory),
+	))
+	return true
 }
 
 // collateralEntries lists what a sole-stack delete would destroy beyond the
@@ -787,19 +837,34 @@ func (h *StacksHandler) removeStackFiles(stack models.Stack, absStackDir, absRoo
 		return fmt.Errorf("refusing to remove files from %s: it resolves outside the stacks root %s", absStackDir, absRoot)
 	}
 
-	if err := removeStackFile(absStackDir, stack.ComposeFile); err != nil {
-		return err
-	}
-
-	// The env file goes only when no survivor references the same one:
-	// determineEnvFile (services/scanner.go) falls back to .env for a named stack
-	// that has no .env.<name>, so two stacks legitimately share one env file.
-	for _, s := range survivors {
-		if s.EnvFile != "" && s.EnvFile == stack.EnvFile {
-			return nil
+	// Each file goes only when no survivor references the same one. Survivors
+	// are in this folder, so the same name is the same file. A survivor
+	// registered through a symlink to this folder names this stack's own
+	// compose file (agent-os-0s68), and determineEnvFile (services/scanner.go)
+	// falls back to .env for a named stack that has no .env.<name>, so two
+	// stacks legitimately share one env file.
+	if !survivorUses(survivors, stack.ComposeFile, func(s models.Stack) string { return s.ComposeFile }) {
+		if err := removeStackFile(absStackDir, stack.ComposeFile); err != nil {
+			return err
 		}
 	}
+	if survivorUses(survivors, stack.EnvFile, func(s models.Stack) string { return s.EnvFile }) {
+		return nil
+	}
 	return removeStackFile(absStackDir, stack.EnvFile)
+}
+
+// survivorUses reports whether any survivor's file, as file reads it, is name.
+func survivorUses(survivors []models.Stack, name string, file func(models.Stack) string) bool {
+	if name == "" {
+		return false
+	}
+	for _, s := range survivors {
+		if file(s) == name {
+			return true
+		}
+	}
+	return false
 }
 
 // removeStackFile removes name from absStackDir after proving the resolved path

@@ -82,8 +82,9 @@ func TestStacksHandler_DeleteNested_ThroughSymlinkStillRefused(t *testing.T) {
 }
 
 // A stack registered through a symlink to the SAME folder is a sibling, not a
-// nested stack: the delete takes only the deleted stack's own files, keeps the
-// folder, and keeps the .env the sibling shares.
+// nested stack: the delete keeps the folder, and keeps every file a sibling
+// shares. Registering the alias registers the deleted stack's own compose.yaml
+// a second time (alias:default), so that file is shared too.
 func TestStacksHandler_DeleteNested_AliasSiblingIsSurvivor(t *testing.T) {
 	f := newDeleteSiblingFixture(t)
 	parentDir := filepath.Join(f.tempDir, "parent")
@@ -95,6 +96,7 @@ func TestStacksHandler_DeleteNested_AliasSiblingIsSurvivor(t *testing.T) {
 	api, err := f.db.GetStack(apiID)
 	require.NoError(t, err)
 	require.Equal(t, ".env", api.EnvFile, "setup: the alias sibling must share the default .env")
+	aliasDefaultID := f.stackIDFor(t, alias, "compose.yaml")
 
 	w := f.deleteWithParams(t, f.stackIDFor(t, parentDir, "compose.yaml"), confirmAll)
 	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
@@ -102,7 +104,60 @@ func TestStacksHandler_DeleteNested_AliasSiblingIsSurvivor(t *testing.T) {
 	assert.DirExists(t, parentDir, "the folder stays while a sibling registered through an alias lives in it")
 	assert.FileExists(t, filepath.Join(parentDir, "compose.api.yaml"))
 	assert.FileExists(t, filepath.Join(parentDir, ".env"), "the alias sibling's .env is the same file")
-	assert.NoFileExists(t, filepath.Join(parentDir, "compose.yaml"), "the deleted stack's own file goes")
+	assert.FileExists(t, filepath.Join(parentDir, "compose.yaml"),
+		"alias:default is registered with the same compose.yaml, so it must survive")
+	_, err = f.db.GetStack(aliasDefaultID)
+	assert.NoError(t, err, "alias:default stays registered")
+}
+
+// A symlink inside the folder pointing back at it (F/self -> F) is the same
+// folder too.
+func TestStacksHandler_DeleteNested_SelfLinkIsSurvivor(t *testing.T) {
+	f := newDeleteSiblingFixture(t)
+	parentDir := filepath.Join(f.tempDir, "parent")
+	f.create(t, "parent", "")
+	self := filepath.Join(parentDir, "self")
+	require.NoError(t, os.Symlink(parentDir, self))
+	f.addSiblingStack(t, self, "compose.api.yaml")
+	selfID := f.stackIDFor(t, self, "compose.yaml")
+
+	w := f.deleteWithParams(t, f.stackIDFor(t, parentDir, "compose.yaml"), confirmAll)
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	assert.FileExists(t, filepath.Join(parentDir, "compose.yaml"),
+		"the stack registered at F/self uses the same compose.yaml")
+	assert.FileExists(t, filepath.Join(parentDir, "compose.api.yaml"))
+	_, err := f.db.GetStack(selfID)
+	assert.NoError(t, err)
+}
+
+// A registered stack whose folder cannot be resolved blocks the delete (it
+// might be inside), and the response names it, so the user can fix it.
+func TestStacksHandler_DeleteNested_UnresolvableStackNamedInResponse(t *testing.T) {
+	f := newDeleteSiblingFixture(t)
+	aDir := filepath.Join(f.tempDir, "a")
+	cDir := filepath.Join(f.tempDir, "c")
+	f.create(t, "a", "")
+	f.create(t, "c", "")
+	c, err := f.db.GetStack(f.stackIDFor(t, cDir, "compose.yaml"))
+	require.NoError(t, err)
+	// c's folder becomes a symlink to itself: resolving it fails with ELOOP.
+	require.NoError(t, os.RemoveAll(cDir))
+	require.NoError(t, os.Symlink(cDir, cDir))
+
+	w := f.deleteWithParams(t, f.stackIDFor(t, aDir, "compose.yaml"), confirmAll)
+	require.Equal(t, http.StatusInternalServerError, w.Code, "body=%s", w.Body.String())
+
+	var body struct {
+		Reason  string         `json:"reason"`
+		Details map[string]any `json:"details"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Contains(t, body.Reason, c.ProjectName+" ("+cDir+")",
+		"the reason is what the toast shows, so it must name the stack whose folder blocks the delete")
+	assert.Equal(t, c.ID, body.Details["blockingStackId"])
+	assert.Equal(t, cDir, body.Details["blockingDirectory"])
+	assert.FileExists(t, filepath.Join(aDir, "compose.yaml"), "a refused delete removes nothing")
 }
 
 // An exact-folder sibling keeps the per-file path, so a nested stack is not at

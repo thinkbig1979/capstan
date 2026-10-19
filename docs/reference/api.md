@@ -181,7 +181,10 @@ code at all until 2026-09-24.
   `STACK_DELETE_NESTED_STACKS`, naming them in the message and in
   `details.stacks` (`id`, `projectName`, `directory`); delete those first. A
   stack registered in the same folder through a symlink counts as a sibling:
-  only the deleted stack's own files go (agent-os-0s68).
+  the folder stays, and so does every file a sibling also uses. A registered
+  stack whose folder cannot be resolved blocks the delete with 500, named in
+  the reason and in `details.blockingStackId` and
+  `details.blockingDirectory` (agent-os-0s68).
 - `GET /api/v1/stacks/:id/logs` — fetch recent logs for a stack
 - `GET /api/v1/ws/logs/:id` — WebSocket stream of a stack's logs, tailing
 - `GET /api/v1/stacks/:id/containers` — list a stack's containers with live
