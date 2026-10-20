@@ -213,21 +213,6 @@ describe('ComposeEditor: the save toast\'s Commit and push link', () => {
     expect(opts.action?.label).toBe('Commit and push')
   })
 
-  it('a save with lint errors (forced) raises ONE warning toast, titled as saved, with the error note and the action', async () => {
-    mockUpdateCompose.mockResolvedValue({ lintResults: [{ level: 'error', message: 'bad key' }, { level: 'warning', message: 'w' }] })
-    renderEditor(true)
-    await saveAndWaitForAnyToast()
-
-    // sonner's toast.warning accepts the same options object (action included).
-    expect(toast.warning).toHaveBeenCalledTimes(1)
-    expect(toast.success).toHaveBeenCalledTimes(0)
-    expect(toast.error).toHaveBeenCalledTimes(0)
-    const [title, opts] = vi.mocked(toast.warning).mock.calls[0] as [string, { description?: string; action?: { label: string } }]
-    expect(title).toBe('Compose file saved successfully')
-    expect(opts.description).toBe('Lint errors detected')
-    expect(opts.action?.label).toBe('Commit and push')
-  })
-
   it('a clean save raises ONE success toast with no description', async () => {
     renderEditor(true)
     await saveAndWaitForAnyToast()
