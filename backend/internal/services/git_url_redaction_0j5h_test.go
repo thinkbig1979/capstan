@@ -81,8 +81,9 @@ func TestPush0j5h_ShortTokenDoesNotFlipTheURLClass(t *testing.T) {
 // URL classifications. Its output can hold the token, so every caller is a
 // place a credential could reach a message or a log; a new caller fails here
 // and has to be added deliberately. Read through go:embed (packageSources),
-// so a `go test -overlay` mutant reaches it. A call through a function value
-// is not seen.
+// so a `go test -overlay` mutant reaches it. A method value
+// (`f := s.gitCommandUnredacted`) counts as a caller; a call through a
+// function value obtained some other way is not seen.
 func TestGitCommandUnredactedCallers0j5h(t *testing.T) {
 	entries, err := packageSources.ReadDir(".")
 	require.NoError(t, err)
@@ -97,14 +98,12 @@ func TestGitCommandUnredactedCallers0j5h(t *testing.T) {
 		require.NoError(t, err)
 		file, err := parser.ParseFile(fset, name, src, 0)
 		require.NoError(t, err)
+		// Every declaration, not only function bodies: a package-level
+		// `var x = func(...) { ... }` caller is named "<var x>".
 		for _, d := range file.Decls {
-			fn, ok := d.(*ast.FuncDecl)
-			if !ok || fn.Body == nil {
-				continue
-			}
-			ast.Inspect(fn.Body, func(n ast.Node) bool {
+			ast.Inspect(d, func(n ast.Node) bool {
 				if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "gitCommandUnredacted" {
-					callers = append(callers, fn.Name.Name)
+					callers = append(callers, declName(d))
 				}
 				return true
 			})
@@ -113,4 +112,23 @@ func TestGitCommandUnredactedCallers0j5h(t *testing.T) {
 	sort.Strings(callers)
 	assert.Equal(t, []string{"gitCommandWithCreds", "pushPreconditions", "sshPullPrecheck"}, callers,
 		"gitCommandUnredacted returns the token unmasked: use gitCommandWithCreds unless the value only classifies a URL and never reaches a message or a log")
+}
+
+// declName names a top-level declaration for the caller list: the function,
+// or "<var a,b>" for the names a var/const declaration binds.
+func declName(d ast.Decl) string {
+	if fn, ok := d.(*ast.FuncDecl); ok {
+		return fn.Name.Name
+	}
+	var names []string
+	if g, ok := d.(*ast.GenDecl); ok {
+		for _, spec := range g.Specs {
+			if vs, ok := spec.(*ast.ValueSpec); ok {
+				for _, id := range vs.Names {
+					names = append(names, id.Name)
+				}
+			}
+		}
+	}
+	return "<var " + strings.Join(names, ",") + ">"
 }
