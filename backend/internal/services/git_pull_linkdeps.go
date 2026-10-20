@@ -44,6 +44,8 @@ func stackLinkDeps(top string, stack models.Stack) ([]string, error) {
 // that does not exist ends the walk there, so a dangling link yields the
 // target git lists as deleted. A loop, or a component git cannot be asked
 // about, is an error: the caller reports the stack, it is not skipped.
+// The first missing component is returned too, so deleting a folder link on
+// the way is a change even though git names only that link.
 func linkDeps(top, abs string) ([]string, error) {
 	var deps []string
 	rest := splitPath(abs)
@@ -62,6 +64,14 @@ func linkDeps(top, abs string) ([]string, error) {
 		next := filepath.Join(resolved, c)
 		fi, err := os.Lstat(next)
 		if os.IsNotExist(err) {
+			// The component git lists when the pull deletes a link or a folder
+			// on the way here: recorded as well as the path below it, which
+			// git never names (agent-os-juq9 review S1).
+			if parent, ok, err := repoRel(top, resolved); err != nil {
+				return nil, err
+			} else if ok {
+				deps = append(deps, path.Join(parent, c))
+			}
 			resolved = filepath.Join(append([]string{next}, rest...)...)
 			break
 		}
@@ -102,6 +112,39 @@ func linkDeps(top, abs string) ([]string, error) {
 
 func splitPath(p string) []string {
 	return strings.FieldsFunc(p, func(r rune) bool { return r == filepath.Separator })
+}
+
+// linkSnapshot is what stackLinkDeps found before the pull. err set means the
+// walk failed and deps is nil.
+type linkSnapshot struct {
+	deps []string
+	err  error
+}
+
+func snapshotLinks(top string, stack models.Stack) linkSnapshot {
+	deps, err := stackLinkDeps(top, stack)
+	return linkSnapshot{deps: deps, err: err}
+}
+
+// linkDepsChanged is whether a link the stack read through before the pull
+// (pre), or reads through after it, is among changedFiles. walkAfter false
+// leaves the later walk out when the caller reports its own failure. A walk
+// that failed is an error, never "unchanged"; a later walk that finds a
+// change wins over an earlier failure, since the pull may have fixed it.
+func linkDepsChanged(top string, stack models.Stack, pre linkSnapshot, walkAfter bool, changedFiles []string) (bool, error) {
+	if anyChanged(pre.deps, changedFiles) {
+		return true, nil
+	}
+	if walkAfter {
+		deps, err := stackLinkDeps(top, stack)
+		if err != nil {
+			return false, err
+		}
+		if anyChanged(deps, changedFiles) {
+			return true, nil
+		}
+	}
+	return false, pre.err
 }
 
 // anyChanged reports whether any of deps is among changedFiles.

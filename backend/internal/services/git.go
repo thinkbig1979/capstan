@@ -878,6 +878,9 @@ func (s *GitService) PullVerified(dirPath string, redeploy bool, docker *DockerS
 	// Siblings placed before the pull, while every folder it may delete still
 	// exists; nil without a lock, where they are placed after it.
 	var preplaced *siblingPlacement
+	// What each of dirPath's stacks read through before the pull, by stack id;
+	// empty without a lock, where the top is not known yet.
+	preLinks := map[string]linkSnapshot{}
 	// The repository top places the changed files after the pull. With a lock
 	// it is needed before the pull too: a pull rewrites the whole work tree,
 	// so every stack inside the top is locked, not only dirPath's
@@ -916,6 +919,7 @@ func (s *GitService) PullVerified(dirPath string, redeploy bool, docker *DockerS
 		for _, st := range repoStacks {
 			if st.Directory == dirPath {
 				lockedStacks = append(lockedStacks, st)
+				preLinks[st.ID] = snapshotLinks(top, st)
 			}
 		}
 		locked = true
@@ -1042,7 +1046,7 @@ func (s *GitService) PullVerified(dirPath string, redeploy bool, docker *DockerS
 			})
 			continue
 		}
-		changed, err := stackFilesChanged(top, stack, pullResult.ChangedFiles)
+		changed, err := stackFilesChangedSince(top, stack, pullResult.ChangedFiles, preLinks[stack.ID])
 		if err != nil {
 			failures = append(failures, RedeployFailure{StackID: stack.ID, Reason: err.Error()})
 			continue
@@ -1093,10 +1097,8 @@ type placedSibling struct {
 	// git could name.
 	rel string
 	err error
-	// deps are the links and targets the stack read through before the pull
-	// (stackLinkDeps); nil when it could not be placed or depsErr is set.
-	deps    []string
-	depsErr error
+	// links is what the stack read through before the pull (stackLinkDeps).
+	links linkSnapshot
 }
 
 // placeSiblings places stacks against top. It runs before the pull when it
@@ -1123,8 +1125,7 @@ func placeSiblings(top, dirPath string, stacks []models.Stack) *siblingPlacement
 		case !ok:
 			p.stacks = append(p.stacks, placedSibling{Stack: st, err: fmt.Errorf("the stack folder %s cannot be placed in the repository at %s", st.Directory, top)})
 		default:
-			deps, depsErr := stackLinkDeps(top, st)
-			p.stacks = append(p.stacks, placedSibling{Stack: st, rel: rel, deps: deps, depsErr: depsErr})
+			p.stacks = append(p.stacks, placedSibling{Stack: st, rel: rel, links: snapshotLinks(top, st)})
 		}
 	}
 	return p
@@ -1164,7 +1165,7 @@ func (p *siblingPlacement) changed(top string, changedFiles []string) ([]Sibling
 		// (agent-os-juq9, agent-os-9ut3). The later walk is skipped when the
 		// later placement failed; that failure is reported below.
 		if !hit && fileErr == nil {
-			hit, fileErr = p.linkChanged(top, st, afterErr == nil, changedFiles)
+			hit, fileErr = linkDepsChanged(top, st.Stack, st.links, afterErr == nil, changedFiles)
 		}
 		switch {
 		case fileErr != nil:
@@ -1184,26 +1185,6 @@ func (p *siblingPlacement) changed(top string, changedFiles []string) ([]Sibling
 	return out, failures
 }
 
-// linkChanged is whether a link the sibling reads through, before or after
-// the pull, is among changedFiles. A walk that failed is an error, never
-// "unchanged".
-func (p *siblingPlacement) linkChanged(top string, st placedSibling, walkAfter bool, changedFiles []string) (bool, error) {
-	if st.depsErr != nil {
-		return false, st.depsErr
-	}
-	if anyChanged(st.deps, changedFiles) {
-		return true, nil
-	}
-	if !walkAfter {
-		return false, nil
-	}
-	deps, err := stackLinkDeps(top, st.Stack)
-	if err != nil {
-		return false, err
-	}
-	return anyChanged(deps, changedFiles), nil
-}
-
 // stackFilesChanged reports whether any changed file matches the stack's
 // compose or env file. changedFiles are repository-top-relative (git's own
 // frame); the stack's files are named relative to its folder, so they are
@@ -1213,6 +1194,14 @@ func (p *siblingPlacement) linkChanged(top string, st placedSibling, walkAfter b
 // matches the link and its target (stackLinkDeps), since git names one or the
 // other, not the stack's own file name (agent-os-juq9, agent-os-9ut3).
 func stackFilesChanged(top string, stack models.Stack, changedFiles []string) (bool, error) {
+	return stackFilesChangedSince(top, stack, changedFiles, linkSnapshot{})
+}
+
+// stackFilesChangedSince is stackFilesChanged that also matches the links the
+// stack read through before the pull (pre): a pull that deletes or replaces a
+// folder link on the way to the compose file leaves nothing to walk to
+// afterwards (agent-os-juq9 review S1).
+func stackFilesChangedSince(top string, stack models.Stack, changedFiles []string, pre linkSnapshot) (bool, error) {
 	rel, ok, err := repoRel(top, stack.Directory)
 	if err != nil {
 		return false, err
@@ -1227,11 +1216,7 @@ func stackFilesChanged(top string, stack models.Stack, changedFiles []string) (b
 	if hit {
 		return true, nil
 	}
-	deps, err := stackLinkDeps(top, stack)
-	if err != nil {
-		return false, err
-	}
-	return anyChanged(deps, changedFiles), nil
+	return linkDepsChanged(top, stack, pre, true, changedFiles)
 }
 
 // relFilesChanged is stackFilesChanged for a stack whose folder is already
