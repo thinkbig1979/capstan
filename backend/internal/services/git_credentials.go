@@ -357,6 +357,16 @@ var lazyFetchSubcommands = map[string]bool{"pull": true, "commit": true, "push":
 // not be available"). LC_ALL=C is pinned on every child, so it is English.
 const lazyFetchRefusedText = "lazy fetching disabled"
 
+// objectMissingMessage fits every route that can refuse (reads, and the reads
+// inside pull and commit). Its remedy is the one that downloads the objects:
+// OBSERVED, git 2.47.3, `git fetch` and an up-to-date pull leave a missing
+// HEAD blob missing, `git status` fetches only what rename detection reads,
+// and `git diff HEAD` fetches what both status and the change diff need
+// (TestLazyFetch_* run it and then require the route to succeed).
+const objectMissingMessage = "This repository is a partial clone and an object git needs here was never downloaded. " +
+	"Capstan does not download missing objects. To download them, run `git diff HEAD` in this folder on the host " +
+	"(for a past commit's diff, `git show <commit>`), or re-clone the repository without --filter."
+
 // objectMissing turns a failure that noLazyFetchEnv caused into a 409 that
 // says why, instead of the bare 500 a plain error becomes. Any other error is
 // returned unchanged.
@@ -365,8 +375,7 @@ func objectMissing(err error, stderr string) error {
 		return err
 	}
 	return models.NewAppErrorWithCause(http.StatusConflict, models.ErrGitObjectMissing,
-		"This repository is a partial clone and an object this view needs was never downloaded; "+
-			"Capstan will not fetch it from a read view. Pull the stack, or run `git fetch` on the host.", err)
+		objectMissingMessage, err)
 }
 
 // gitCmdWithCreds builds the git child process for dirPath with the HTTPS

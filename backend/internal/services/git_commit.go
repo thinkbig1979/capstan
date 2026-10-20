@@ -1148,9 +1148,12 @@ func gitSubcommand(args []string) string {
 	return "command"
 }
 
-// gitGlobalOptsWithValue are git's global options that accept their value as
-// a separate argument (git.c handle_options, git 2.47).
+// gitGlobalOptsWithValue are git's global options that take the next argument
+// as their value. Derived, not copied: OBSERVED on git 2.47.3, running
+// `git <opt> pull version` for every global option in git(1); these are the
+// ones that consumed "pull". A newer git may add more. An unlisted one fails
+// safe unless its value is literally pull, commit or push.
 var gitGlobalOptsWithValue = map[string]bool{
-	"-c": true, "-C": true, "--git-dir": true, "--work-tree": true,
-	"--namespace": true, "--config-env": true,
+	"-c": true, "-C": true, "--config-env": true, "--git-dir": true,
+	"--work-tree": true, "--namespace": true, "--attr-source": true, "--shallow-file": true,
 }

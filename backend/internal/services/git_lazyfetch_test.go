@@ -115,6 +115,8 @@ func (f *lazyFix) requireMissing(t *testing.T, path string) {
 // requireControlFetches runs a raw git read with no Capstan argv or env and
 // requires it to run the marker: the fixture can fire, so a silent route is a
 // real result. It runs after the route, because the control fetches the blob.
+// The routes' controls are the remedy objectMissingMessage names, and each
+// test then requires the route to succeed, which proves the remedy works.
 func (f *lazyFix) requireControlFetches(t *testing.T, args ...string) {
 	t.Helper()
 	out, err := gitTry(t, f.top, args...)
@@ -130,7 +132,15 @@ func requireObjectMissing(t *testing.T, err error) {
 	require.True(t, errors.As(err, &appErr), "want a 409 GIT_OBJECT_MISSING, got a plain error (a bare 500): %v", err)
 	require.Equal(t, http.StatusConflict, appErr.Status)
 	require.Equal(t, models.ErrGitObjectMissing, appErr.Code)
-	require.Contains(t, appErr.Message, "partial clone")
+	require.Equal(t, objectMissingMessage, appErr.Message)
+	for _, want := range []string{"partial clone", "`git diff HEAD`", "`git show <commit>`", "without --filter"} {
+		require.Contains(t, appErr.Message, want)
+	}
+	// Remedies that download nothing (git fetch, an up-to-date pull) and the
+	// read-only framing that is false on pull and commit.
+	for _, wrong := range []string{"git fetch", "Pull the stack", "read view"} {
+		require.NotContains(t, appErr.Message, wrong)
+	}
 }
 
 // TestLazyFetch_GetStatus: status's rename detection reads the HEAD blob of
@@ -145,7 +155,9 @@ func TestLazyFetch_GetStatus(t *testing.T) {
 	require.Zero(t, f.runs(t), "GetStatus lazy-fetched, running the repository's remote.origin.uploadpack")
 	requireObjectMissing(t, err)
 
-	f.requireControlFetches(t, "status", "--porcelain")
+	f.requireControlFetches(t, "diff", "HEAD")
+	_, err = f.svc.GetStatus(f.top)
+	require.NoError(t, err, "after the message's remedy, GetStatus must succeed")
 }
 
 // TestLazyFetch_GetChanges: the commit dialog's list runs status first and
@@ -159,7 +171,9 @@ func TestLazyFetch_GetChanges(t *testing.T) {
 	require.Zero(t, f.runs(t), "GetChanges lazy-fetched, running the repository's remote.origin.uploadpack")
 	requireObjectMissing(t, err)
 
-	f.requireControlFetches(t, "status", "--porcelain=v2")
+	f.requireControlFetches(t, "diff", "HEAD")
+	_, err = f.svc.GetChanges(f.top)
+	require.NoError(t, err, "after the message's remedy, GetChanges must succeed")
 }
 
 // TestLazyFetch_GetChangeDiff: no rename, so status and the change list need
@@ -174,7 +188,9 @@ func TestLazyFetch_GetChangeDiff(t *testing.T) {
 	require.Zero(t, f.runs(t), "GetChangeDiff lazy-fetched, running the repository's remote.origin.uploadpack")
 	requireObjectMissing(t, err)
 
-	f.requireControlFetches(t, "diff", "HEAD", "--", "x")
+	f.requireControlFetches(t, "diff", "HEAD")
+	_, err = f.svc.GetChangeDiff(f.top, "x")
+	require.NoError(t, err, "after the message's remedy, GetChangeDiff must succeed")
 }
 
 // TestLazyFetch_LogRoutes: GetLog, GetLogForFile and GetDiff on the same
@@ -196,6 +212,8 @@ func TestLazyFetch_LogRoutes(t *testing.T) {
 	require.Zero(t, f.runs(t), "GetDiff lazy-fetched")
 
 	f.requireControlFetches(t, "show", f.c2)
+	_, err = f.svc.GetDiff(f.top, f.c2)
+	require.NoError(t, err, "after the message's remedy, GetDiff must succeed")
 }
 
 // TestLazyFetch_PullStillFetches: pull's checkout needs the blobs it moves to,
@@ -233,6 +251,7 @@ func TestLazyFetch_GitSubcommand(t *testing.T) {
 		{append(append([]string{}, prefix...), "pull", "--ff-only"), "pull"},
 		{append(append([]string{}, prefix...), "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", "commit", "--only"), "commit"},
 		{append(append([]string{}, prefix...), "-c", "push.gpgSign=false", "push", "--porcelain"), "push"},
+		{[]string{"--attr-source", "push", "--shallow-file", "pull", "status"}, "status"},
 		{[]string{"-c", "x=y"}, "command"},
 	} {
 		require.Equal(t, tc.want, gitSubcommand(tc.args), "%q", tc.args)
