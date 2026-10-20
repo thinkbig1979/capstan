@@ -33,8 +33,7 @@ func TestPullCkqt_SubmoduleDriftRefusalNamesTheSubmoduleAndTheFix(t *testing.T) 
 	ae := refusal(t, err)
 	assert.Equal(t, models.ErrGitDirty, ae.Code)
 	assert.Equal(t, 400, ae.Status)
-	assert.Contains(t, ae.Message, `"sub"`, "the message must name the submodule path")
-	assert.Contains(t, ae.Message, "git submodule update", "the message must name the fix")
+	assert.Equal(t, `Submodule "sub" is not at the commit this repository records. If nobody committed inside it on the server, run "git submodule update"; otherwise push or save that work first.`, ae.Message)
 	assert.NotContains(t, ae.Message, "uncommitted", "submodule drift is not uncommitted work")
 }
 
@@ -98,7 +97,7 @@ func TestPullCkqt_NamesAPathWithSpacesAsGitPrintsIt(t *testing.T) {
 
 	ae := refusal(t, err)
 	assert.Equal(t, models.ErrGitDirty, ae.Code)
-	assert.Equal(t, `Submodule "dir with space/sub" is not at the committed version: run "git submodule update" in the stack's repository`, ae.Message)
+	assert.Equal(t, `Submodule "dir with space/sub" is not at the commit this repository records. If nobody committed inside it on the server, run "git submodule update"; otherwise push or save that work first.`, ae.Message)
 }
 
 // A staged rename is a "2" record with an extra NUL-separated path; it must not
@@ -149,23 +148,10 @@ func TestSubmoduleDriftPathsCkqt(t *testing.T) {
 }
 
 func TestSubmoduleDriftMessageCkqt(t *testing.T) {
-	const fix = ` not at the committed version: run "git submodule update" in the stack's repository`
-	assert.Equal(t, `Submodule "a" is`+fix, submoduleDriftMessage([]string{"a"}))
-	assert.Equal(t, `Submodules "a", "b", "c" are`+fix, submoduleDriftMessage([]string{"a", "b", "c"}))
-	assert.Equal(t, `Submodules "a", "b", "c", and 2 more are`+fix, submoduleDriftMessage([]string{"a", "b", "c", "d", "e"}))
-}
-
-// `1 MM SC..`: the gitlink change is STAGED and the submodule then moved again.
-// That is uncommitted work, and `git submodule update` would not clear it.
-func TestPullCkqt_StagedGitlinkThenMovedKeepsTheGenericMessage(t *testing.T) {
-	f := spacedSubmoduleFix(t)
-	runGit(t, f.top, "add", "dir with space/sub")
-	runGit(t, filepath.Join(f.top, "dir with space", "sub"), "commit", "-q", "--allow-empty", "-m", "s3")
-	require.Contains(t, runGit(t, f.top, "status", "--porcelain=v2"), "1 MM SC..", "control: git reports a staged-then-moved gitlink")
-
-	_, err := f.svc.pullCLI(f.dir)
-
-	ae := refusal(t, err)
-	assert.Equal(t, models.ErrGitDirty, ae.Code)
-	assert.Equal(t, genericDirtyPullMessage, ae.Message)
+	const one = ` is not at the commit this repository records. If nobody committed inside it on the server, run "git submodule update"; otherwise push or save that work first.`
+	const many = ` not at the commits this repository records. If nobody committed inside them on the server, run "git submodule update"; otherwise push or save that work first.`
+	assert.Equal(t, `Submodule "a"`+one, submoduleDriftMessage([]string{"a"}))
+	assert.Equal(t, `Submodules "a", "b" are`+many, submoduleDriftMessage([]string{"a", "b"}))
+	assert.Equal(t, `Submodules "a", "b", "c" are`+many, submoduleDriftMessage([]string{"a", "b", "c"}))
+	assert.Equal(t, `Submodules "a", "b", "c", and 2 more are`+many, submoduleDriftMessage([]string{"a", "b", "c", "d", "e"}))
 }

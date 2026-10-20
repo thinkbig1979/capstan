@@ -569,11 +569,16 @@ func submoduleDriftMessage(paths []string) string {
 		}
 		quoted = append(quoted, fmt.Sprintf("%q", p))
 	}
-	subject := "Submodule " + strings.Join(quoted, ", ") + " is"
+	// Worded for both ways a submodule gets here (D184): Capstan's pull left it
+	// BEHIND the recorded commit, or someone committed inside it on the host
+	// and it is AHEAD. Status cannot tell the two apart (both are `.M SC..`),
+	// and `git submodule update` on the second would orphan that commit.
 	if len(paths) > 1 {
-		subject = "Submodules " + strings.Join(quoted, ", ") + " are"
+		return "Submodules " + strings.Join(quoted, ", ") + " are not at the commits this repository records. " +
+			"If nobody committed inside them on the server, run \"git submodule update\"; otherwise push or save that work first."
 	}
-	return subject + " not at the committed version: run \"git submodule update\" in the stack's repository"
+	return "Submodule " + strings.Join(quoted, ", ") + " is not at the commit this repository records. " +
+		"If nobody committed inside it on the server, run \"git submodule update\"; otherwise push or save that work first."
 }
 
 // submoduleDriftPaths returns the submodule paths of a `status --porcelain=v2 -z`
@@ -655,7 +660,8 @@ func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
 	// also update the submodule work tree, and this one does not. After a
 	// pull that moves a submodule the folder reads as having uncommitted
 	// changes, and later pulls are refused, until `git submodule update` runs
-	// on the host (TestPull1vkh_LeavesSubmoduleWorkTreeBehind).
+	// on the host (TestPull1vkh_LeavesSubmoduleWorkTreeBehind). The refusal
+	// then names the submodule (dirtyPullMessage, agent-os-ckqt).
 	if _, err = s.gitCommandWithCreds(dirPath, cred, "pull", "--ff-only", "--no-recurse-submodules"); err != nil {
 		// Two defects left here together (agent-os-fv2j). Every failure used
 		// to become one 500 GIT_CONFLICT, and the up-to-date case was
