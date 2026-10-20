@@ -146,19 +146,9 @@ func (w *WatcherService) handleEvent(event fsnotify.Event) {
 func (w *WatcherService) shouldProcessEvent(filePath string) bool {
 	filename := filepath.Base(filePath)
 
-	composePrefixes := []string{
-		"compose",
-		"docker-compose",
-	}
-
-	for _, prefix := range composePrefixes {
-		if strings.HasPrefix(filename, prefix+".") &&
-			(strings.HasSuffix(filename, ".yaml") || strings.HasSuffix(filename, ".yml")) {
-			return true
-		}
-	}
-
-	return strings.HasPrefix(filename, ".env")
+	// isComposeFileName is the scanner's own matcher: a name the scanner
+	// registers a stack from must also trigger a rescan (agent-os-eadg).
+	return isComposeFileName(filename) || strings.HasPrefix(filename, ".env")
 }
 
 func (w *WatcherService) scheduleRescan(dirPath string) {

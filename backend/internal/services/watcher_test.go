@@ -54,8 +54,9 @@ func TestWatcherService_ShouldProcessEvent(t *testing.T) {
 		// A compose file must carry a yaml/yml extension.
 		{"compose.txt", "/srv/stacks/web/compose.txt", false},
 		{"compose.yml.bak", "/srv/stacks/web/compose.yml.bak", false},
-		// The prefix must be followed by a dot, so these are not compose files.
-		{"composer.yml", "/srv/stacks/web/composer.yml", false},
+		// The scanner registers compose*.yml, so composer.yml is a stack and its
+		// edits must rescan (agent-os-eadg); a name with no extension is not.
+		{"composer.yml", "/srv/stacks/web/composer.yml", true},
 		{"bare compose", "/srv/stacks/web/compose", false},
 		{"unrelated yaml", "/srv/stacks/web/values.yaml", false},
 		{"env without dot prefix", "/srv/stacks/web/env", false},
