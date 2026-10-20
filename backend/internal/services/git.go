@@ -1093,6 +1093,10 @@ type placedSibling struct {
 	// git could name.
 	rel string
 	err error
+	// deps are the links and targets the stack read through before the pull
+	// (stackLinkDeps); nil when it could not be placed or depsErr is set.
+	deps    []string
+	depsErr error
 }
 
 // placeSiblings places stacks against top. It runs before the pull when it
@@ -1119,7 +1123,8 @@ func placeSiblings(top, dirPath string, stacks []models.Stack) *siblingPlacement
 		case !ok:
 			p.stacks = append(p.stacks, placedSibling{Stack: st, err: fmt.Errorf("the stack folder %s cannot be placed in the repository at %s", st.Directory, top)})
 		default:
-			p.stacks = append(p.stacks, placedSibling{Stack: st, rel: rel})
+			deps, depsErr := stackLinkDeps(top, st)
+			p.stacks = append(p.stacks, placedSibling{Stack: st, rel: rel, deps: deps, depsErr: depsErr})
 		}
 	}
 	return p
@@ -1154,6 +1159,13 @@ func (p *siblingPlacement) changed(top string, changedFiles []string) ([]Sibling
 			}
 			hit = hit || ok
 		}
+		// The links the stack read through before the pull and reads through
+		// now: retargeting one lists the link, not a file under the folder
+		// (agent-os-juq9, agent-os-9ut3). The later walk is skipped when the
+		// later placement failed; that failure is reported below.
+		if !hit && fileErr == nil {
+			hit, fileErr = p.linkChanged(top, st, afterErr == nil, changedFiles)
+		}
 		switch {
 		case fileErr != nil:
 			failures = append(failures, RedeployFailure{StackID: st.ID, Reason: fileErr.Error()})
@@ -1170,6 +1182,26 @@ func (p *siblingPlacement) changed(top string, changedFiles []string) ([]Sibling
 		}
 	}
 	return out, failures
+}
+
+// linkChanged is whether a link the sibling reads through, before or after
+// the pull, is among changedFiles. A walk that failed is an error, never
+// "unchanged".
+func (p *siblingPlacement) linkChanged(top string, st placedSibling, walkAfter bool, changedFiles []string) (bool, error) {
+	if st.depsErr != nil {
+		return false, st.depsErr
+	}
+	if anyChanged(st.deps, changedFiles) {
+		return true, nil
+	}
+	if !walkAfter {
+		return false, nil
+	}
+	deps, err := stackLinkDeps(top, st.Stack)
+	if err != nil {
+		return false, err
+	}
+	return anyChanged(deps, changedFiles), nil
 }
 
 // stackFilesChanged reports whether any changed file matches the stack's
