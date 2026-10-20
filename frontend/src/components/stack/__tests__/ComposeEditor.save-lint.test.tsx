@@ -166,11 +166,15 @@ describe('ComposeEditor — save/lint decision logic', () => {
     expect(toast.success).not.toHaveBeenCalled()
   })
 
-  it('pluralises the error count in the dialog', async () => {
+  // Exact rendered text, so a dropped space before the count ("has1 error")
+  // or after it goes red; a warning in the mix must not be counted.
+  it.each([
+    [1, 'Your compose file has 1 error. A compose file with errors cannot be saved. Fix them, then save again.'],
+    [2, 'Your compose file has 2 errors. A compose file with errors cannot be saved. Fix them, then save again.'],
+  ])('dialog description reads exactly right for %i error(s)', async (n, expected) => {
     mockLintCompose.mockResolvedValue({
       lintResults: [
-        { level: 'error', message: 'First problem', line: 1 },
-        { level: 'error', message: 'Second problem', line: 2 },
+        ...Array.from({ length: n }, (_, i) => ({ level: 'error', message: `Problem ${i}`, line: i + 1 })),
         { level: 'warning', message: 'Not counted' },
       ],
     })
@@ -180,7 +184,8 @@ describe('ComposeEditor — save/lint decision logic', () => {
     await triggerCtrlSSave()
 
     const dialog = await screen.findByRole('dialog')
-    expect(within(dialog).getByText('2 errors')).toBeInTheDocument()
+    const description = document.getElementById(dialog.getAttribute('aria-describedby') ?? '')
+    expect(description?.textContent).toBe(expected)
   })
 
   it('saves a file with only lint warnings, with no dialog', async () => {

@@ -24,9 +24,10 @@ interface UseComposeSaveAndLintArgs {
 /**
  * Owns the save + lint mutations and the lint-before-save decision (audit
  * finding-adjacent behavior, not touched here): a normal save first POSTs to
- * /compose/lint; if that lint run reports errors, a confirm dialog is shown
- * instead of saving; if the lint request itself fails, the save proceeds
- * directly (no confirm dialog, no error surfaced).
+ * /compose/lint; if that lint run reports errors, a dialog telling the user to fix
+ * them is shown instead of saving (the server refuses such a file anyway); if
+ * the lint request itself fails, the save proceeds directly (no dialog, no
+ * error surfaced).
  */
 export function useComposeSaveAndLint({
   stackId,
