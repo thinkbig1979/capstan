@@ -12,7 +12,7 @@ import { queryKeys } from '@/lib/query-keys'
 interface UseComposeSaveAndLintArgs {
   stackId: string
   viewRef: ReturnType<typeof useCodeMirrorEditor>['viewRef']
-  handleSaveRef: RefObject<(forceSave?: boolean) => void>
+  handleSaveRef: RefObject<() => void>
   setLastSaved: (content: string) => void
   /**
    * Set for a git stack: the save toast then offers "Commit and push", which
@@ -24,9 +24,10 @@ interface UseComposeSaveAndLintArgs {
 /**
  * Owns the save + lint mutations and the lint-before-save decision (audit
  * finding-adjacent behavior, not touched here): a normal save first POSTs to
- * /compose/lint; if that lint run reports errors, a confirm dialog is shown
- * instead of saving; if the lint request itself fails, the save proceeds
- * directly (no confirm dialog, no error surfaced).
+ * /compose/lint; if that lint run reports errors, a dialog telling the user to fix
+ * them is shown instead of saving (the server refuses such a file anyway); if
+ * the lint request itself fails, the save proceeds directly (no dialog, no
+ * error surfaced).
  */
 export function useComposeSaveAndLint({
   stackId,
@@ -83,15 +84,9 @@ export function useComposeSaveAndLint({
   })
 
   const handleSave = useCallback(
-    async (forceSave = false) => {
+    async () => {
       if (!viewRef.current) return
       const currentContent = viewRef.current.state.doc.toString()
-
-      if (forceSave) {
-        saveMutation.mutate(currentContent)
-        setShowSaveConfirm(false)
-        return
-      }
 
       setIsLintingBeforeSave(true)
       try {

@@ -15,7 +15,6 @@ interface SaveConfirmDialogProps {
   onOpenChange: (open: boolean) => void
   errorCount: number
   lintResults: LintResult[]
-  onSaveAnyway: () => void
 }
 
 export function SaveConfirmDialog({
@@ -23,7 +22,6 @@ export function SaveConfirmDialog({
   onOpenChange,
   errorCount,
   lintResults,
-  onSaveAnyway,
 }: SaveConfirmDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -31,11 +29,14 @@ export function SaveConfirmDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <AlertCircle className="h-5 w-5 text-warning" />
-            Save with Lint Errors?
+            Fix Lint Errors Before Saving
           </DialogTitle>
           <DialogDescription>
-            Your compose file has <span className="font-semibold text-destructive">{errorCount} error(s)</span>.
-            Would you like to save anyway or fix the errors first?
+            Your compose file has{' '}
+            <span className="font-semibold text-destructive">
+              {errorCount} {errorCount === 1 ? 'error' : 'errors'}
+            </span>
+            . A compose file with errors cannot be saved. Fix them, then save again.
           </DialogDescription>
         </DialogHeader>
         <div className="max-h-60 overflow-y-auto rounded-md border bg-muted/50 p-3">
@@ -55,11 +56,8 @@ export function SaveConfirmDialog({
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button onClick={() => onOpenChange(false)}>
             Fix errors first
-          </Button>
-          <Button onClick={onSaveAnyway}>
-            Save anyway
           </Button>
         </DialogFooter>
       </DialogContent>
