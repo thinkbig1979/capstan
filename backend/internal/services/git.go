@@ -573,12 +573,20 @@ func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
 		return nil, err
 	}
 
-	// --no-recurse-submodules: an on-demand submodule fetch would contact
-	// each changed submodule's own URL with its own core.sshCommand, outside
-	// the ssh rules above (agent-os-1vkh). The flag, not
-	// `-c fetch.recurseSubmodules=no`: with submodule.recurse=true pull passes
-	// --recurse-submodules itself, which outranks that config (OBSERVED, git
-	// 2.39.5 and 2.47.3, TestPull1vkh_NeverFetchesSubmodules).
+	// --no-recurse-submodules: a pull never fetches or updates a submodule.
+	// A submodule fetch would contact each changed submodule's own URL with
+	// its own core.sshCommand, outside the ssh rules above, and would hand
+	// the folder's https token to the submodule's host, since the credential
+	// helper answers any host (gitCredentialHelper) (agent-os-1vkh). The
+	// flag, not `-c fetch.recurseSubmodules=no`: with submodule.recurse=true
+	// pull passes --recurse-submodules itself, which outranks that config
+	// (OBSERVED, git 2.39.5 and 2.47.3, TestPull1vkh_NeverFetchesSubmodules).
+	//
+	// The cost, chosen (D177): with submodule.recurse=true a plain pull would
+	// also update the submodule work tree, and this one does not. After a
+	// pull that moves a submodule the folder reads as having uncommitted
+	// changes, and later pulls are refused, until `git submodule update` runs
+	// on the host (TestPull1vkh_LeavesSubmoduleWorkTreeBehind).
 	if _, err = s.gitCommandWithCreds(dirPath, cred, "pull", "--ff-only", "--no-recurse-submodules"); err != nil {
 		// Two defects left here together (agent-os-fv2j). Every failure used
 		// to become one 500 GIT_CONFLICT, and the up-to-date case was

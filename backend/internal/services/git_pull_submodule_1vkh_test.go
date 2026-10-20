@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
 // submodulePullFix is a commitFix whose repository has a submodule "sub", and
@@ -86,4 +87,69 @@ func TestPull1vkh_InstrumentSeesSubmoduleSsh(t *testing.T) {
 	_, err := gitTry(t, f.top, "pull", "--ff-only")
 	require.Error(t, err, "the submodule fetch over the fake ssh should fail the plain pull")
 	assert.Contains(t, rde7Ran(t, record), "sub core.sshCommand")
+}
+
+// workingSubmodulePullFix is submodulePullFix with a submodule that CAN be
+// fetched: a local path, file transport allowed, so a recursing pull would
+// update it. Its remote.origin.uploadpack records every fetch from it into
+// the returned file and then serves it.
+func workingSubmodulePullFix(t *testing.T) (f *commitFix, record string) {
+	t.Helper()
+	t.Setenv("GIT_CONFIG_PARAMETERS", "'protocol.file.allow=always'")
+	f = newCommitFix(t, false)
+	f.svc.config.DataDir = f.dataDir
+
+	sub := filepath.Join(t.TempDir(), "sub")
+	runGit(t, filepath.Dir(sub), "init", "-q", "-b", "main", sub)
+	runGit(t, sub, "commit", "-q", "--allow-empty", "-m", "s1")
+	runGit(t, f.top, "submodule", "add", "-q", sub, "sub")
+	runGit(t, f.top, "commit", "-q", "-m", "add sub")
+	runGit(t, f.top, "push", "-q", "origin", "main")
+
+	other := filepath.Join(t.TempDir(), "other")
+	runGit(t, filepath.Dir(other), "clone", "-q", f.bare, other)
+	runGit(t, other, "submodule", "update", "-q", "--init")
+	runGit(t, sub, "commit", "-q", "--allow-empty", "-m", "s2")
+	runGit(t, filepath.Join(other, "sub"), "pull", "-q", "origin", "main")
+	runGit(t, other, "commit", "-q", "-am", "move sub")
+	runGit(t, other, "push", "-q", "origin", "main")
+
+	record = filepath.Join(t.TempDir(), "uploadpack.record")
+	wrapper := filepath.Join(t.TempDir(), "uploadpack")
+	require.NoError(t, os.WriteFile(wrapper, []byte("#!/bin/sh\necho \"uploadpack $*\" >> "+record+"\nexec git upload-pack \"$@\"\n"), 0o755)) //nolint:gosec // test-owned fake under t.TempDir()
+	runGit(t, filepath.Join(f.top, "sub"), "config", "remote.origin.uploadpack", wrapper)
+	runGit(t, f.top, "config", "submodule.recurse", "true")
+	return f, record
+}
+
+// TestPull1vkh_LeavesSubmoduleWorkTreeBehind pins the trade the flag makes
+// (D177): with submodule.recurse=true a plain pull would fetch AND update the
+// submodule; Capstan's pull does neither, so the folder then reads as having
+// uncommitted changes and the next pull is refused until
+// `git submodule update` runs on the host. The positive side is the same
+// fixture under plain git, which does fetch and update.
+func TestPull1vkh_LeavesSubmoduleWorkTreeBehind(t *testing.T) {
+	t.Run("capstan pull", func(t *testing.T) {
+		f, record := workingSubmodulePullFix(t)
+		subBefore := runGit(t, filepath.Join(f.top, "sub"), "rev-parse", "HEAD")
+
+		_, err := f.svc.pullCLI(f.dir)
+
+		require.NoError(t, err)
+		assert.Equal(t, f.remoteMain(t), f.head(t), "the superproject did not fast-forward")
+		assert.Empty(t, rde7Ran(t, record), "the submodule was fetched")
+		assert.Equal(t, subBefore, runGit(t, filepath.Join(f.top, "sub"), "rev-parse", "HEAD"), "the submodule work tree was updated")
+		assert.Equal(t, "M sub", runGit(t, f.top, "status", "--porcelain"))
+		_, err = f.svc.pullCLI(f.dir)
+		var ae *models.AppError
+		require.ErrorAs(t, err, &ae)
+		assert.Equal(t, models.ErrGitDirty, ae.Code, "the documented consequence: the next pull is refused")
+	})
+	t.Run("plain git on the same fixture", func(t *testing.T) {
+		f, record := workingSubmodulePullFix(t)
+		subBefore := runGit(t, filepath.Join(f.top, "sub"), "rev-parse", "HEAD")
+		runGit(t, f.top, "pull", "-q", "--ff-only")
+		assert.Contains(t, rde7Ran(t, record), "uploadpack")
+		assert.NotEqual(t, subBefore, runGit(t, filepath.Join(f.top, "sub"), "rev-parse", "HEAD"))
+	})
 }
