@@ -561,7 +561,13 @@ func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
 		return nil, err
 	}
 
-	if _, err = s.gitCommandWithCreds(dirPath, cred, "pull", "--ff-only"); err != nil {
+	// --no-recurse-submodules: an on-demand submodule fetch would contact
+	// each changed submodule's own URL with its own core.sshCommand, outside
+	// the ssh rules above (agent-os-1vkh). The flag, not
+	// `-c fetch.recurseSubmodules=no`: with submodule.recurse=true pull passes
+	// --recurse-submodules itself, which outranks that config (OBSERVED, git
+	// 2.39.5 and 2.47.3, TestPull1vkh_NeverFetchesSubmodules).
+	if _, err = s.gitCommandWithCreds(dirPath, cred, "pull", "--ff-only", "--no-recurse-submodules"); err != nil {
 		// Two defects left here together (agent-os-fv2j). Every failure used
 		// to become one 500 GIT_CONFLICT, and the up-to-date case was
 		// recognised by matching git's own prose. pullFailure replaces the
