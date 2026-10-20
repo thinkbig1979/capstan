@@ -736,12 +736,15 @@ func sshRemoteRefusal(lead string, c gitCreds) error {
 // auth has no key by choice, so its ssh remote is refused too, as push
 // refuses it (agent-os-rde7); a directory merely without a key (inherit, no
 // global key) keeps running ssh as before.
+//
+// The URL is read unredacted: a token masked to "***" inside it can change
+// its shape either way (agent-os-0j5h). It is only classified, never shown.
 func (s *GitService) sshPullPrecheck(dirPath string, c gitCreds) error {
 	noKey := c.sshKey == "" && c.sshErr == nil
 	if noKey && !c.httpsAuth {
 		return nil
 	}
-	u, err := s.gitCommandWithCreds(dirPath, c, "ls-remote", "--get-url") //geterrors:ignore a failed read (no remote configured exits 128) means the URL is unknown, so the key is checked anyway: fail closed, and the pull reports its own failure
+	u, err := s.gitCommandUnredacted(dirPath, c, "ls-remote", "--get-url") //geterrors:ignore a failed read (no remote configured exits 128) means the URL is unknown, so the key is checked anyway: fail closed, and the pull reports its own failure
 	if err != nil {
 		return c.sshReady()
 	}

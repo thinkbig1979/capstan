@@ -276,7 +276,15 @@ setting and fetches (agent-os-taa7).
   message names the path and the fix. A folder whose git auth is HTTPS has
   no SSH key, so an SSH pull URL answers **409 `GIT_SSH_UNSUPPORTED`** before
   any ssh runs, as push does; https and local remotes are unaffected
-  (agent-os-rde7).
+  (agent-os-rde7). A pull never fetches or updates submodules, even with
+  `submodule.recurse` or `fetch.recurseSubmodules` set, so no submodule URL
+  is contacted, no submodule `core.sshCommand` runs, and the folder's https
+  token is not sent to a submodule's host (agent-os-1vkh). After a pull that
+  moves a submodule, the folder reads as having uncommitted changes and later
+  pulls answer **400 `GIT_DIRTY`** until `git submodule update` runs on the
+  host. The ssh-or-https check
+  reads the remote URL as configured, never the token-masked form
+  (agent-os-0j5h).
   A pull moves the whole work tree,
   so it locks every stack of the repository, not only the requested stack's
   folder, and answers **409 `OPERATION_IN_PROGRESS`** naming the busy stack
