@@ -1176,8 +1176,10 @@ func (p *siblingPlacement) changed(top string, changedFiles []string) ([]Sibling
 // compose or env file. changedFiles are repository-top-relative (git's own
 // frame); the stack's files are named relative to its folder, so they are
 // placed under the folder's repository-relative path first (agent-os-4d60).
-// The folder is resolved, not the files: git names a symlinked compose file by
-// the link, and a file deleted by the pull has nothing to resolve.
+// The folder is resolved, not the files: a file deleted by the pull has
+// nothing to resolve. A stack that reads its files through a symlink also
+// matches the link and its target (stackLinkDeps), since git names one or the
+// other, not the stack's own file name (agent-os-juq9, agent-os-9ut3).
 func stackFilesChanged(top string, stack models.Stack, changedFiles []string) (bool, error) {
 	rel, ok, err := repoRel(top, stack.Directory)
 	if err != nil {
@@ -1186,7 +1188,18 @@ func stackFilesChanged(top string, stack models.Stack, changedFiles []string) (b
 	if !ok {
 		return false, fmt.Errorf("the stack folder %s is outside the repository at %s", stack.Directory, top)
 	}
-	return relFilesChanged(rel, stack, changedFiles)
+	hit, err := relFilesChanged(rel, stack, changedFiles)
+	if err != nil {
+		return false, err
+	}
+	if hit {
+		return true, nil
+	}
+	deps, err := stackLinkDeps(top, stack)
+	if err != nil {
+		return false, err
+	}
+	return anyChanged(deps, changedFiles), nil
 }
 
 // relFilesChanged is stackFilesChanged for a stack whose folder is already
