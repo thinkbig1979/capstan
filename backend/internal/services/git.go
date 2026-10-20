@@ -534,6 +534,80 @@ func gitDiagnostic(stdout, stderr string) string {
 	}
 }
 
+// genericDirtyPullMessage is the refusal for a folder with real uncommitted work.
+const genericDirtyPullMessage = "Working directory has uncommitted changes"
+
+// maxNamedSubmodules caps how many submodule paths a refusal lists.
+const maxNamedSubmodules = 3
+
+// dirtyPullMessage words the 400 GIT_DIRTY refusal. Capstan's pull never
+// updates a submodule (--no-recurse-submodules, agent-os-1vkh), so after a pull
+// moves one the folder reads as dirty until `git submodule update` runs on the
+// host. When that drift is ALL the dirt, the message names it instead of
+// calling it uncommitted work (agent-os-ckqt, D180). The refusal itself stays.
+// Any doubt (a second status call that fails, a record that is not plain
+// pointer drift) answers with today's generic message.
+func (s *GitService) dirtyPullMessage(dirPath string, cred gitCreds) string {
+	out, err := s.gitCommandWithCreds(dirPath, cred, "status", "--porcelain=v2", "-z")
+	if err != nil {
+		return genericDirtyPullMessage
+	}
+	paths, ok := submoduleDriftPaths(out)
+	if !ok {
+		return genericDirtyPullMessage
+	}
+	return submoduleDriftMessage(paths)
+}
+
+// submoduleDriftMessage names up to maxNamedSubmodules paths, then a count.
+func submoduleDriftMessage(paths []string) string {
+	quoted := make([]string, 0, maxNamedSubmodules+1)
+	for i, p := range paths {
+		if i == maxNamedSubmodules {
+			quoted = append(quoted, fmt.Sprintf("and %d more", len(paths)-maxNamedSubmodules))
+			break
+		}
+		quoted = append(quoted, fmt.Sprintf("%q", p))
+	}
+	// Worded for both ways a submodule gets here (D184): Capstan's pull left it
+	// BEHIND the recorded commit, or someone committed inside it on the host
+	// and it is AHEAD. Status cannot tell the two apart (both are `.M SC..`),
+	// and `git submodule update` on the second would orphan that commit.
+	if len(paths) > 1 {
+		return "Submodules " + strings.Join(quoted, ", ") + " are not at the commits this repository records. " +
+			"If nobody committed inside them on the server, run \"git submodule update\"; otherwise push or save that work first."
+	}
+	return "Submodule " + strings.Join(quoted, ", ") + " is not at the commit this repository records. " +
+		"If nobody committed inside it on the server, run \"git submodule update\"; otherwise push or save that work first."
+}
+
+// submoduleDriftPaths returns the submodule paths of a `status --porcelain=v2 -z`
+// output, and ok=true only when EVERY record is a plain submodule pointer move.
+// That is a "1" record whose XY is ".M" and whose submodule field is exactly
+// "SC..": the gitlink differs from the recorded commit, nothing about it is
+// staged (a Capstan pull moves HEAD and the index together, so the drift it
+// leaves is always ".M"; "MM" is staged work), and the submodule's own work
+// tree is clean.
+// "S.M." / "S..U" (work inside the submodule), rename and copy ("2", which also
+// carries a second NUL-separated path), unmerged ("u"), untracked ("?") and
+// ignored ("!") records all return ok=false at the first one met, so no record
+// kind with a different field count can shift the stream. Paths are as git
+// prints them, relative to the repository root.
+func submoduleDriftPaths(out string) (paths []string, ok bool) {
+	for _, rec := range strings.Split(out, "\x00") {
+		if rec == "" {
+			continue
+		}
+		// "1 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <path>": the path is the 9th field and may hold spaces.
+		fields := strings.SplitN(rec, " ", 9)
+		if len(fields) != 9 || fields[0] != "1" || fields[1] != ".M" || fields[2] != "SC.." {
+			return nil, false
+		}
+		paths = append(paths, fields[8])
+	}
+	return paths, len(paths) > 0
+}
+
 func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
 	slog.Debug("Pulling git changes (CLI)", "path", dirPath)
 
@@ -558,7 +632,7 @@ func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
 		return nil, fmt.Errorf("failed to check status: %w", err)
 	}
 	if strings.TrimSpace(dirtyOutput) != "" {
-		return nil, models.NewAppError(400, models.ErrGitDirty, "Working directory has uncommitted changes")
+		return nil, models.NewAppError(400, models.ErrGitDirty, s.dirtyPullMessage(dirPath, cred))
 	}
 
 	previousCommit, err := s.gitCommandWithCreds(dirPath, cred, "rev-parse", "HEAD")
@@ -586,7 +660,8 @@ func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
 	// also update the submodule work tree, and this one does not. After a
 	// pull that moves a submodule the folder reads as having uncommitted
 	// changes, and later pulls are refused, until `git submodule update` runs
-	// on the host (TestPull1vkh_LeavesSubmoduleWorkTreeBehind).
+	// on the host (TestPull1vkh_LeavesSubmoduleWorkTreeBehind). The refusal
+	// then names the submodule (dirtyPullMessage, agent-os-ckqt).
 	if _, err = s.gitCommandWithCreds(dirPath, cred, "pull", "--ff-only", "--no-recurse-submodules"); err != nil {
 		// Two defects left here together (agent-os-fv2j). Every failure used
 		// to become one 500 GIT_CONFLICT, and the up-to-date case was

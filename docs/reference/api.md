@@ -282,7 +282,10 @@ setting and fetches (agent-os-taa7).
   token is not sent to a submodule's host (agent-os-1vkh). After a pull that
   moves a submodule, the folder reads as having uncommitted changes and later
   pulls answer **400 `GIT_DIRTY`** until `git submodule update` runs on the
-  host. The ssh-or-https check
+  host. When a moved submodule pointer is the only change, the refusal names the
+  submodule and says to run `git submodule update` only if nobody committed
+  inside it on the server; any real change keeps "Working directory has
+  uncommitted changes". The ssh-or-https check
   reads the remote URL as configured, never the token-masked form
   (agent-os-0j5h).
   A pull moves the whole work tree,

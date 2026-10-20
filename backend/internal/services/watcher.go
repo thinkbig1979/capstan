@@ -113,22 +113,22 @@ func (w *WatcherService) watchLoop() {
 }
 
 func (w *WatcherService) handleEvent(event fsnotify.Event) {
+	// A new directory is handled BEFORE the filename filter: the filter is for
+	// files, and a folder named `newstack` fails it, so it was never watched
+	// and edits inside it triggered no rescan (agent-os-3uu8).
+	if event.Op&fsnotify.Create == fsnotify.Create {
+		info, err := os.Stat(event.Name) //geterrors:ignore a Create event for a path that is already gone stats with an error, and the only question here is "is this a new directory to watch"
+		if err == nil && info.IsDir() {
+			w.watchNewDir(event.Name)
+			return
+		}
+	}
+
 	if !w.shouldProcessEvent(event.Name) {
 		return
 	}
 
 	dirPath := filepath.Dir(event.Name)
-
-	if event.Op&fsnotify.Create == fsnotify.Create {
-		info, err := os.Stat(event.Name) //geterrors:ignore a Create event for a path that is already gone stats with an error, and the only question here is "is this a new directory to watch"
-		if err == nil && info.IsDir() {
-			slog.Info("New subdirectory detected, adding to watcher", "path", event.Name)
-			if err := w.watcher.Add(event.Name); err != nil {
-				slog.Warn("Failed to watch new subdirectory", "path", event.Name, "error", err)
-			}
-			return
-		}
-	}
 
 	isRootDir := false
 	for _, stacksDir := range w.config.GetAllStacksDirs() {
@@ -140,6 +140,56 @@ func (w *WatcherService) handleEvent(event fsnotify.Event) {
 
 	if !isRootDir && !strings.HasPrefix(filepath.Base(dirPath), ".") {
 		w.scheduleRescan(dirPath)
+	}
+}
+
+// watchNewDir adds a directory created at runtime under the same rule the boot
+// walk applies in addWatchPaths: a direct child of a configured stacks dir,
+// not starting with ".". Deeper and hidden folders were never watched at boot.
+// The configured stacks dirs are set at boot and a settings change to them is
+// applied at the next boot, never written into a running Config (safe-defaults
+// rule 14), so this membership check and addWatchPaths read the same list.
+func (w *WatcherService) watchNewDir(path string) {
+	if strings.HasPrefix(filepath.Base(path), ".") {
+		return
+	}
+	// A symlink to a directory is skipped, as the boot walk (DirEntry.IsDir is
+	// false for a symlink), the scanner and the prune walk all skip it; watched
+	// here it would register a stack the next full scan prunes.
+	if fi, err := os.Lstat(path); err != nil || fi.Mode()&os.ModeSymlink != 0 { //geterrors:ignore a path that vanished since the Create event is simply not a folder to watch
+		return
+	}
+	parent := filepath.Clean(filepath.Dir(path))
+	isStackFolder := false
+	for _, stacksDir := range w.config.GetAllStacksDirs() {
+		if filepath.Clean(stacksDir) == parent {
+			isStackFolder = true
+			break
+		}
+	}
+	if !isStackFolder {
+		return
+	}
+
+	slog.Info("New subdirectory detected, adding to watcher", "path", path)
+	if err := w.watcher.Add(path); err != nil {
+		slog.Warn("Failed to watch new subdirectory", "path", path, "error", err)
+		return
+	}
+
+	// A file written between the mkdir and the Add above fired no event this
+	// watcher could see, so look once for what is already inside. An empty
+	// folder is left alone: a rescan would register a directory row for it.
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		slog.Warn("Failed to read new subdirectory", "path", path, "error", err)
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() && w.shouldProcessEvent(entry.Name()) {
+			w.scheduleRescan(path)
+			return
+		}
 	}
 }
 
