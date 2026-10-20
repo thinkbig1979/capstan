@@ -342,9 +342,14 @@ var gitHardeningArgs = []string{
 }
 
 // lazyFetchSubcommands are the git children that may lazy-fetch in a partial
-// clone: pull checks out blobs it has not downloaded, commit's summary diffs
-// against the old blob, and push may need objects its pack walks. Every other
-// child runs with noLazyFetchEnv (gitCmdWithCreds).
+// clone. Every other child runs with noLazyFetchEnv (gitCmdWithCreds).
+//   - pull checks out blobs it has not downloaded (TestLazyFetch_PullStillFetches
+//     fails without it).
+//   - commit: OBSERVED, git 2.47.3, `commit --only -- x` with HEAD:x missing
+//     exits 128 "could not fetch ... from promisor remote" under the variable.
+//   - push: not tested to need it; a push of a new branch passed under the
+//     variable. Kept so a push's object walk that reaches a missing object
+//     fetches rather than fails (INFERRED).
 var lazyFetchSubcommands = map[string]bool{"pull": true, "commit": true, "push": true}
 
 // lazyFetchRefusedText is what git prints when noLazyFetchEnv stops a fetch
