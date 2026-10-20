@@ -155,3 +155,18 @@ func TestSubmoduleDriftMessageCkqt(t *testing.T) {
 	assert.Equal(t, `Submodules "a", "b", "c" are`+many, submoduleDriftMessage([]string{"a", "b", "c"}))
 	assert.Equal(t, `Submodules "a", "b", "c", and 2 more are`+many, submoduleDriftMessage([]string{"a", "b", "c", "d", "e"}))
 }
+
+// `1 MM SC..`: the gitlink change is STAGED and the submodule then moved again.
+// That is uncommitted work, and `git submodule update` would not clear it.
+func TestPullCkqt_StagedGitlinkThenMovedKeepsTheGenericMessage(t *testing.T) {
+	f := spacedSubmoduleFix(t)
+	runGit(t, f.top, "add", "dir with space/sub")
+	runGit(t, filepath.Join(f.top, "dir with space", "sub"), "commit", "-q", "--allow-empty", "-m", "s3")
+	require.Contains(t, runGit(t, f.top, "status", "--porcelain=v2"), "1 MM SC..", "control: git reports a staged-then-moved gitlink")
+
+	_, err := f.svc.pullCLI(f.dir)
+
+	ae := refusal(t, err)
+	assert.Equal(t, models.ErrGitDirty, ae.Code)
+	assert.Equal(t, genericDirtyPullMessage, ae.Message)
+}
