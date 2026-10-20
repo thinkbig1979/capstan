@@ -331,14 +331,37 @@ func (s *GitService) httpsCredentials(dirPath string, cred *models.Directory, er
 //     stat-dirty, so its filter runs on every status rather than once
 //     (OBSERVED: 3 runs over 3 statuses, against 1 without the flag); the
 //     dirty answer stays correct.
-//   - In a partial clone, a read that needs a missing blob (diff HEAD on a
-//     file never fetched) still lazy-fetches through the repo's upload-pack.
-//     noLazyFetchEnv cannot go here: pull's checkout needs lazy fetch.
+//
+// A partial clone's lazy fetch is closed by noLazyFetchEnv in gitCmdWithCreds
+// rather than here, because pull, commit and push still need it.
 var gitHardeningArgs = []string{
 	"-c", "core.fsmonitor=false",
 	"-c", "log.showSignature=false",
 	"-c", "log.follow=false",
 	"--no-optional-locks",
+}
+
+// lazyFetchSubcommands are the git children that may lazy-fetch in a partial
+// clone: pull checks out blobs it has not downloaded, commit's summary diffs
+// against the old blob, and push may need objects its pack walks. Every other
+// child runs with noLazyFetchEnv (gitCmdWithCreds).
+var lazyFetchSubcommands = map[string]bool{"pull": true, "commit": true, "push": true}
+
+// lazyFetchRefusedText is what git prints when noLazyFetchEnv stops a fetch
+// (OBSERVED, git 2.47.3: "warning: lazy fetching disabled; some objects may
+// not be available"). LC_ALL=C is pinned on every child, so it is English.
+const lazyFetchRefusedText = "lazy fetching disabled"
+
+// objectMissing turns a failure that noLazyFetchEnv caused into a 409 that
+// says why, instead of the bare 500 a plain error becomes. Any other error is
+// returned unchanged.
+func objectMissing(err error, stderr string) error {
+	if !strings.Contains(stderr, lazyFetchRefusedText) {
+		return err
+	}
+	return models.NewAppErrorWithCause(http.StatusConflict, models.ErrGitObjectMissing,
+		"This repository is a partial clone and an object this view needs was never downloaded; "+
+			"Capstan will not fetch it from a read view. Pull the stack, or run `git fetch` on the host.", err)
 }
 
 // gitCmdWithCreds builds the git child process for dirPath with the HTTPS
@@ -409,6 +432,16 @@ func (s *GitService) gitCmdWithCreds(ctx context.Context, dirPath string, c gitC
 	// forwarded from Capstan's own environment.
 	env := append(stripCapstanSecrets(os.Environ()), "GIT_TERMINAL_PROMPT=0",
 		"LC_ALL=C", "LANGUAGE=")
+
+	// In a partial clone, a read that needs an object never downloaded (status
+	// rename detection, diff HEAD) fetches it from the promisor remote, which
+	// runs the repository's own remote.<name>.uploadpack, core.sshCommand or
+	// remote helper (agent-os-taa7). Every child refuses that by default, so a
+	// new read cannot forget to; it then fails instead. Only the children in
+	// lazyFetchSubcommands keep it. git before 2.45 ignores the variable.
+	if !lazyFetchSubcommands[gitSubcommand(append(gitArgs, args...))] {
+		env = append(env, noLazyFetchEnv...)
+	}
 
 	switch {
 	case c.sshErr != nil:

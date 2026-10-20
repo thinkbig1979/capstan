@@ -479,8 +479,8 @@ func (s *GitService) gitCommandWithCreds(dirPath string, cred gitCreds, args ...
 	// with %w), and a killed process reports exit code -1, so gitExitCode
 	// classifies it as "git never answered", which is what it is.
 	if err := timeoutError(ctx, cmd.Run(), "command"); err != nil {
-		return "", fmt.Errorf("git %s: %w (%s)", args[0], err,
-			redactToken(gitDiagnostic(stdout.String(), stderr.String()), cred.token))
+		return "", objectMissing(fmt.Errorf("git %s: %w (%s)", args[0], err,
+			redactToken(gitDiagnostic(stdout.String(), stderr.String()), cred.token)), stderr.String())
 	}
 
 	// A zero-exit diagnostic is dropped from the DATA and recorded here instead.

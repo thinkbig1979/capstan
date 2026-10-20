@@ -1125,17 +1125,20 @@ func (s *GitService) gitRun(dirPath string, cred gitCreds, env []string, args ..
 	stdout = redactToken(out.String(), cred.token)
 	stderr = redactToken(errOut.String(), cred.token)
 	if runErr != nil {
-		return stdout, stderr, fmt.Errorf("git %s: %w (%s)", gitSubcommand(args), runErr, gitDiagnostic(stdout, stderr))
+		return stdout, stderr, objectMissing(fmt.Errorf("git %s: %w (%s)", gitSubcommand(args), runErr, gitDiagnostic(stdout, stderr)), stderr)
 	}
 	return stdout, stderr, nil
 }
 
-// gitSubcommand names the subcommand in args, past any leading options and
-// `-c key=value` pairs, for an error message.
+// gitSubcommand names the subcommand in args, past any leading global options,
+// for an error message and for gitCmdWithCreds' lazy-fetch decision. The
+// global options that take their value as the NEXT argument are skipped with
+// it, so a value such as `-c alias.x=push` or `-C push` is never read as the
+// subcommand.
 func gitSubcommand(args []string) string {
 	for i := 0; i < len(args); i++ {
 		switch {
-		case args[i] == "-c":
+		case gitGlobalOptsWithValue[args[i]]:
 			i++
 		case strings.HasPrefix(args[i], "-"):
 		default:
@@ -1143,4 +1146,11 @@ func gitSubcommand(args []string) string {
 		}
 	}
 	return "command"
+}
+
+// gitGlobalOptsWithValue are git's global options that accept their value as
+// a separate argument (git.c handle_options, git 2.47).
+var gitGlobalOptsWithValue = map[string]bool{
+	"-c": true, "-C": true, "--git-dir": true, "--work-tree": true,
+	"--namespace": true, "--config-env": true,
 }

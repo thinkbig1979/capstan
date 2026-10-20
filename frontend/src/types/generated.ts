@@ -564,6 +564,11 @@ export const ErrGitPushRejected = "GIT_PUSH_REJECTED";
  * push over (git://, a <transport>:: helper). 409.
  */
 export const ErrGitPushURLUnsupported = "GIT_PUSH_URL_UNSUPPORTED";
+/**
+ * ErrGitObjectMissing: a read in a partial clone needs an object that was
+ * never downloaded, and reads do not fetch it (agent-os-taa7). 409.
+ */
+export const ErrGitObjectMissing = "GIT_OBJECT_MISSING";
 export interface AppError {
   code: string;
   message: string;
