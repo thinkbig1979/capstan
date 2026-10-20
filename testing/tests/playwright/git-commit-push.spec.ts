@@ -43,10 +43,12 @@ const AUTH_DISABLED = (process.env.AUTH_DISABLED ?? 'false') === 'true'
 
 const STACK_NAME = 'git-commit-push-pw'
 const COMPOSE_FILE = 'compose.yaml'
-// The same lint-clean shape as backup-flow's test-app: a lint warning raises a second
-// toast that stacks over the "saved" one and keeps its action button from being stable.
+// The same lint-clean shape as backup-flow's test-app, so GIT-PW-001 saves without a lint
+// finding. GIT-PW-002 drops the restart policy to get one (agent-os-s35c).
 const SEED_COMPOSE =
   'services:\n  web:\n    image: public.ecr.aws/docker/library/nginx:1.25-alpine\n    restart: unless-stopped\n'
+const WARNING_COMPOSE =
+  'services:\n  web:\n    image: public.ecr.aws/docker/library/nginx:1.25-alpine\n'
 const EDIT_MARKER = '# edited by git-commit-push e2e'
 const COMMIT_MESSAGE = 'Note the e2e edit in compose'
 const AUTHOR_NAME = 'Capstan E2E'
@@ -229,5 +231,33 @@ test.describe('git: commit and push from the UI', () => {
     expect(remote('log', '-1', '--format=%an <%ae>', 'main')).toBe(`${AUTHOR_NAME} <${AUTHOR_EMAIL}>`)
     expect(remote('show', '--name-only', '--format=', 'main')).toBe(COMPOSE_FILE)
     expect(remote('show', `main:${COMPOSE_FILE}`)).toContain(EDIT_MARKER)
+  })
+
+  // agent-os-s35c: a lint warning on save used to raise a second toast over the
+  // "saved" one, and Playwright could not click "Commit and push" because the
+  // warning toast intercepted pointer events. Now one toast carries both.
+  test('GIT-PW-002: a save that raises a lint warning leaves "Commit and push" clickable', async ({ page }) => {
+    // Uncommitted, so the dialog would list it; no restart policy raises the warning.
+    writeFileSync(join(stackFolder, COMPOSE_FILE), WARNING_COMPOSE)
+
+    await page.goto(`/stacks/${encodeURIComponent(stackId)}/editor`)
+    const cm = page.locator('.cm-content').first()
+    await expect(cm).toBeVisible()
+    await expect(cm).toContainText('nginx:1.25-alpine')
+    await cm.click()
+    await page.keyboard.press('Control+End')
+    await page.keyboard.type(`\n${EDIT_MARKER}-warning`)
+
+    await page.getByRole('button', { name: 'Save', exact: true }).click()
+    const toasts = page.locator('[data-sonner-toast]')
+    const toast = toasts.filter({ hasText: 'Compose file saved' })
+    await expect(toast).toBeVisible()
+    await expect(toast).toContainText('Lint warnings detected')
+    // One toast for the whole save: a second one is what covered the action.
+    await expect(toasts).toHaveCount(1)
+
+    // Playwright fails this click when another element intercepts pointer events.
+    await toast.getByRole('button', { name: 'Commit and push' }).click()
+    await expect(page.getByRole('dialog', { name: 'Commit and push' })).toBeVisible()
   })
 })

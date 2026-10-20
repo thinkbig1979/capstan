@@ -184,6 +184,76 @@ describe('ComposeEditor: the save toast\'s Commit and push link', () => {
     expect(git.changes).toHaveBeenCalledTimes(1)
   })
 
+  // agent-os-s35c: a lint finding used to raise a SECOND toast that stacked over
+  // the saved toast and covered its "Commit and push" action. One toast per
+  // save now; every branch is pinned by call type AND count, because
+  // toHaveBeenCalledWith matches any call and cannot see a double emit.
+  async function saveAndWaitForAnyToast() {
+    await waitFor(() => expect(capturedOnSave).toBeDefined())
+    await act(async () => {
+      capturedOnSave?.()
+    })
+    await waitFor(() => expect(mockUpdateCompose).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(
+      vi.mocked(toast.success).mock.calls.length + vi.mocked(toast.warning).mock.calls.length + vi.mocked(toast.error).mock.calls.length,
+    ).toBeGreaterThan(0))
+  }
+
+  it('a save with lint warnings raises ONE success toast carrying the warning note and the action', async () => {
+    mockUpdateCompose.mockResolvedValue({ lintResults: [{ level: 'warning', message: 'no restart policy' }] })
+    renderEditor(true)
+    await saveAndWaitForAnyToast()
+
+    expect(toast.success).toHaveBeenCalledTimes(1)
+    expect(toast.warning).toHaveBeenCalledTimes(0)
+    expect(toast.error).toHaveBeenCalledTimes(0)
+    const [title, opts] = vi.mocked(toast.success).mock.calls[0] as [string, { description?: string; action?: { label: string; onClick: () => void } }]
+    expect(title).toBe('Compose file saved successfully')
+    expect(opts.description).toBe('Lint warnings detected')
+    expect(opts.action?.label).toBe('Commit and push')
+  })
+
+  it('a save with lint errors (forced) raises ONE warning toast, titled as saved, with the error note and the action', async () => {
+    mockUpdateCompose.mockResolvedValue({ lintResults: [{ level: 'error', message: 'bad key' }, { level: 'warning', message: 'w' }] })
+    renderEditor(true)
+    await saveAndWaitForAnyToast()
+
+    // sonner's toast.warning accepts the same options object (action included).
+    expect(toast.warning).toHaveBeenCalledTimes(1)
+    expect(toast.success).toHaveBeenCalledTimes(0)
+    expect(toast.error).toHaveBeenCalledTimes(0)
+    const [title, opts] = vi.mocked(toast.warning).mock.calls[0] as [string, { description?: string; action?: { label: string } }]
+    expect(title).toBe('Compose file saved successfully')
+    expect(opts.description).toBe('Lint errors detected')
+    expect(opts.action?.label).toBe('Commit and push')
+  })
+
+  it('a clean save raises ONE success toast with no description', async () => {
+    renderEditor(true)
+    await saveAndWaitForAnyToast()
+
+    expect(toast.success).toHaveBeenCalledTimes(1)
+    expect(toast.warning).toHaveBeenCalledTimes(0)
+    expect(toast.error).toHaveBeenCalledTimes(0)
+    const [, opts] = vi.mocked(toast.success).mock.calls[0] as [string, { description?: string; action?: unknown }]
+    expect(opts.description).toBeUndefined()
+    expect(opts.action).toBeDefined()
+  })
+
+  it('a non-git stack with lint warnings still gets one toast, with the note and no action', async () => {
+    mockUpdateCompose.mockResolvedValue({ lintResults: [{ level: 'warning', message: 'no restart policy' }] })
+    renderEditor(false)
+    await saveAndWaitForAnyToast()
+
+    expect(toast.success).toHaveBeenCalledTimes(1)
+    expect(toast.warning).toHaveBeenCalledTimes(0)
+    expect(toast.error).toHaveBeenCalledTimes(0)
+    expect(vi.mocked(toast.success).mock.calls[0]).toEqual([
+      'Compose file saved successfully',
+      { description: 'Lint warnings detected' },
+    ])
+  })
+
   it('a stack that is not a git repository gets the plain toast and no link', async () => {
     renderEditor(false)
     await save()
