@@ -128,6 +128,9 @@ func TestSubmoduleDriftPathsCkqt(t *testing.T) {
 		{"two", drift("a") + drift("b c/d"), []string{"a", "b c/d"}, true},
 		{"empty", "", nil, false},
 		{"file change", "1 .M N... 100644 100644 100644 " + h + " " + h + " x\x00", nil, false},
+		{"staged then moved again", "1 MM SC.. 160000 160000 160000 " + h + " " + h + " sub\x00", nil, false},
+		{"new submodule then moved", "1 AM SC.. 160000 160000 160000 " + h + " " + h + " sub\x00", nil, false},
+		{"unmerged with SC.. field", "u UU SC.. 160000 160000 160000 160000 " + h + " " + h + " " + h + " sub\x00", nil, false},
 		{"inner change", "1 .M S.M. 160000 160000 160000 " + h + " " + h + " sub\x00", nil, false},
 		{"inner untracked", "1 .M SC.U 160000 160000 160000 " + h + " " + h + " sub\x00", nil, false},
 		{"untracked", drift("sub") + "? new.txt\x00", nil, false},
@@ -150,4 +153,19 @@ func TestSubmoduleDriftMessageCkqt(t *testing.T) {
 	assert.Equal(t, `Submodule "a" is`+fix, submoduleDriftMessage([]string{"a"}))
 	assert.Equal(t, `Submodules "a", "b", "c" are`+fix, submoduleDriftMessage([]string{"a", "b", "c"}))
 	assert.Equal(t, `Submodules "a", "b", "c", and 2 more are`+fix, submoduleDriftMessage([]string{"a", "b", "c", "d", "e"}))
+}
+
+// `1 MM SC..`: the gitlink change is STAGED and the submodule then moved again.
+// That is uncommitted work, and `git submodule update` would not clear it.
+func TestPullCkqt_StagedGitlinkThenMovedKeepsTheGenericMessage(t *testing.T) {
+	f := spacedSubmoduleFix(t)
+	runGit(t, f.top, "add", "dir with space/sub")
+	runGit(t, filepath.Join(f.top, "dir with space", "sub"), "commit", "-q", "--allow-empty", "-m", "s3")
+	require.Contains(t, runGit(t, f.top, "status", "--porcelain=v2"), "1 MM SC..", "control: git reports a staged-then-moved gitlink")
+
+	_, err := f.svc.pullCLI(f.dir)
+
+	ae := refusal(t, err)
+	assert.Equal(t, models.ErrGitDirty, ae.Code)
+	assert.Equal(t, genericDirtyPullMessage, ae.Message)
 }

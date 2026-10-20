@@ -110,3 +110,30 @@ func TestWatcher3uu8_StacksDirWithTrailingSlashStillMatches(t *testing.T) {
 		return false
 	}, 5*time.Second, 20*time.Millisecond)
 }
+
+// A symlink to a directory is skipped at boot, by the scanner and by the prune
+// walk, so a runtime one must not be watched or registered either.
+func TestWatcher3uu8_RuntimeSymlinkedFolderIsNotWatchedOrRegistered(t *testing.T) {
+	root := t.TempDir()
+	target := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(target, "compose.yaml"), []byte(composeBody), 0o644))
+	w, scanner := newTestWatcher(t, root)
+	require.NoError(t, w.Start())
+
+	linked := filepath.Join(root, "linked")
+	require.NoError(t, os.Symlink(target, linked))
+	sentinel := filepath.Join(root, "sentinel")
+	require.NoError(t, os.Mkdir(sentinel, 0o755)) // created last: once watched, the symlink event was handled
+	require.Eventually(t, func() bool {
+		for _, p := range w.watcher.WatchList() {
+			if p == sentinel {
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, 20*time.Millisecond, "control: a real folder is watched")
+
+	assert.NotContains(t, w.watcher.WatchList(), linked)
+	time.Sleep(2 * DEBOUNCE_DELAY) // a wrongly scheduled rescan would have fired by now
+	assert.Zero(t, stackCount(t, scanner))
+}

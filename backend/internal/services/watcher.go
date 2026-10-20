@@ -153,6 +153,12 @@ func (w *WatcherService) watchNewDir(path string) {
 	if strings.HasPrefix(filepath.Base(path), ".") {
 		return
 	}
+	// A symlink to a directory is skipped, as the boot walk (DirEntry.IsDir is
+	// false for a symlink), the scanner and the prune walk all skip it; watched
+	// here it would register a stack the next full scan prunes.
+	if fi, err := os.Lstat(path); err != nil || fi.Mode()&os.ModeSymlink != 0 { //geterrors:ignore a path that vanished since the Create event is simply not a folder to watch
+		return
+	}
 	parent := filepath.Clean(filepath.Dir(path))
 	isStackFolder := false
 	for _, stacksDir := range w.config.GetAllStacksDirs() {

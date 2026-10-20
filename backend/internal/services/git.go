@@ -578,8 +578,11 @@ func submoduleDriftMessage(paths []string) string {
 
 // submoduleDriftPaths returns the submodule paths of a `status --porcelain=v2 -z`
 // output, and ok=true only when EVERY record is a plain submodule pointer move.
-// That is a "1" record whose submodule field is exactly "SC..": the gitlink
-// differs from the recorded commit and the submodule's own work tree is clean.
+// That is a "1" record whose XY is ".M" and whose submodule field is exactly
+// "SC..": the gitlink differs from the recorded commit, nothing about it is
+// staged (a Capstan pull moves HEAD and the index together, so the drift it
+// leaves is always ".M"; "MM" is staged work), and the submodule's own work
+// tree is clean.
 // "S.M." / "S..U" (work inside the submodule), rename and copy ("2", which also
 // carries a second NUL-separated path), unmerged ("u"), untracked ("?") and
 // ignored ("!") records all return ok=false at the first one met, so no record
@@ -592,7 +595,7 @@ func submoduleDriftPaths(out string) (paths []string, ok bool) {
 		}
 		// "1 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <path>": the path is the 9th field and may hold spaces.
 		fields := strings.SplitN(rec, " ", 9)
-		if len(fields) != 9 || fields[0] != "1" || fields[2] != "SC.." {
+		if len(fields) != 9 || fields[0] != "1" || fields[1] != ".M" || fields[2] != "SC.." {
 			return nil, false
 		}
 		paths = append(paths, fields[8])
