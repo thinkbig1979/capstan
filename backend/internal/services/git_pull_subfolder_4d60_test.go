@@ -44,6 +44,9 @@ type pull4d60 struct {
 	mount func(t *testing.T, root, work string) string
 	// pathHook runs before PullVerified, to put a fake git first on PATH.
 	pathHook func(t *testing.T, bin string)
+	// lock installs the operation lock main.go installs, which is what makes
+	// PullVerified place stacks before the pull (agent-os-juq9 review S2).
+	lock bool
 }
 
 type pulled4d60 struct {
@@ -116,6 +119,9 @@ func run4d60(t *testing.T, c pull4d60) pulled4d60 {
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	svc := NewGitService(&config.Config{}, db)
+	if c.lock {
+		svc.SetOperationLock(NewOperationLock())
+	}
 	// Not &DockerService{}: it panics in buildComposeArgs once a stack matches.
 	ar, pr := svc.PullVerified(filepath.Join(base, filepath.FromSlash(c.pullDir)), true,
 		&DockerService{config: &config.Config{DataDir: t.TempDir()}})
