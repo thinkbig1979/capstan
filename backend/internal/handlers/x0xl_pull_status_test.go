@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -47,6 +48,14 @@ func TestGitPull_FailureStatusReachesTheWire(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
+	// A pull names a registered stack (agent-os-hmoy), so each folder is one.
+	for _, name := range []string{"dirty", "bare", "notrepo"} {
+		require.NoError(t, db.UpsertDirectory(models.Directory{Path: filepath.Join(stacksDir, name), Name: name,
+			RootDir: stacksDir, ScannedAt: time.Now()}))
+		require.NoError(t, db.UpsertStack(models.Stack{ID: "s-" + name, ProjectName: name,
+			Directory: filepath.Join(stacksDir, name), ComposeFile: "compose.yml", Status: "stopped"}))
+	}
+
 	cfg := &config.Config{StacksDir: stacksDir}
 	handler := NewGitHandler(services.NewGitService(cfg, db), nil, db, cfg)
 	router := gin.New()
@@ -67,7 +76,7 @@ func TestGitPull_FailureStatusReachesTheWire(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.dir, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/git/pull?dir="+tc.dir, nil))
+			router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/git/pull?stackId=s-"+tc.dir, nil))
 			require.Equal(t, tc.wantStatus, w.Code, "body=%s", w.Body.String())
 
 			var body struct {

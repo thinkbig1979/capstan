@@ -252,7 +252,10 @@ With a live token, all four behave exactly as they did before.
 
 - `GET /api/v1/git` — status; the web UI passes `?stackId=<id>`, but the
   route itself is a plain query-string GET
-- `POST /api/v1/git/pull` — pull changes. SSH remotes use the folder's
+- `POST /api/v1/git/pull` — pull changes. Takes `?stackId=<id>` only; a
+  request without it (including the old `?dir=`) answers **400
+  `VALIDATION_ERROR` "Pull needs a stackId"** and pulls nothing
+  (agent-os-hmoy). SSH remotes use the folder's
   SSH key when its git auth is SSH, else the global key in Settings > Git
   (`git_ssh_key`, then `GIT_SSH_KEY`). The built-in default
   `$HOME/.ssh/id_rsa`, when no file is there, means no key: ssh runs as it
@@ -261,7 +264,10 @@ With a live token, all four behave exactly as they did before.
   `GIT_SSH_KEY_UNUSABLE` before pulling when the pull URL is SSH and that key
   is missing, unreadable, readable by other users, or a path ssh would misread
   (not absolute, or holding `"`, `\`, `${` or a control character); the
-  message names the path and the fix.
+  message names the path and the fix. A folder whose git auth is HTTPS has
+  no SSH key, so an SSH pull URL answers **409 `GIT_SSH_UNSUPPORTED`** before
+  any ssh runs, as push does; https and local remotes are unaffected
+  (agent-os-rde7).
   A pull moves the whole work tree,
   so it locks every stack of the repository, not only the requested stack's
   folder, and answers **409 `OPERATION_IN_PROGRESS`** naming the busy stack
@@ -270,7 +276,11 @@ With a live token, all four behave exactly as they did before.
   stack of the repository answers 409 meanwhile. A folder outside any
   repository answers **404 `GIT_NOT_REPO`**, a folder that no longer exists
   **404 `STACK_DIR_MISSING`**, and a bare repository **409 `GIT_BARE_REPO`**,
-  all before pulling anything. With `?redeploy=true` it redeploys only the
+  all before pulling anything. A registered stack, anywhere, whose folder
+  cannot be resolved refuses the pull, commit and push alike (500, locking
+  cannot tell whether it is inside the repository); the reason names it and
+  its folder, and `details.blockingStackId` and `details.blockingDirectory`
+  carry them (agent-os-l4h6). With `?redeploy=true` it redeploys only the
   requested folder's stacks whose compose or env file changed. Every result
   after a successful diff carries `details.siblingStacksChanged`,
   `[{stack, name}]`: the repository's other stacks whose compose or env file
