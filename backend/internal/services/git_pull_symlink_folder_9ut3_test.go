@@ -3,6 +3,7 @@ package services
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -212,4 +213,24 @@ func TestPullSiblings_LoopFixedByPull_9ut3(t *testing.T) {
 			t.Fatalf("siblingStacksChanged = %v, want [L]; changed=%q fails=%v", ids, got.pr.ChangedFiles, got.ar.Details["siblingCheckFailures"])
 		}
 	})
+}
+
+// The sibling form of the pre-walk-error shape (see linkLoopThenFolder): the
+// sibling is a siblingCheckFailure, never absent from both lists.
+func TestPullSiblings_PreWalkErrorCleanPostWalk_9ut3(t *testing.T) {
+	got := run4d60(t, pull4d60{
+		lock:    true,
+		files:   map[string]string{"plain/compose.yaml": composeOld4d60},
+		changes: map[string]string{"plain/compose.yaml": composeNew4d60},
+		stacks: []stack4d60{
+			{id: "P", dir: "plain", compose: "compose.yaml"},
+			{id: "A", dir: "stackA", compose: "compose.yaml"},
+		},
+		pullDir: "plain",
+		prep:    linkLoopThenFolder,
+	})
+	fails, _ := got.ar.Details["siblingCheckFailures"].([]RedeployFailure)
+	if ids := siblingIDs9ut3(t, got); len(ids) != 0 || len(fails) != 1 || fails[0].StackID != "A" || !strings.Contains(fails[0].Reason, "symbolic links") {
+		t.Fatalf("a pre-pull walk error was lost: siblings=%v fails=%v changed=%q", ids, got.ar.Details["siblingCheckFailures"], got.pr.ChangedFiles)
+	}
 }

@@ -310,3 +310,41 @@ func TestPull_SymlinkAbsoluteInRepoTargetRedeploys_Juq9(t *testing.T) {
 		}
 	})
 }
+
+// linkLoopThenFolder is the shape where the walk before the pull fails and
+// the one after it is clean and matches nothing: X <-> X2 is a loop on the
+// compose path, then the pull turns X into a real folder holding only
+// other.txt. git lists "X" and "X/other.txt"; the post walk records
+// X/compose.yaml, which is missing and not listed. Only the pre-pull error
+// says this stack's files were unreadable, and dropping it would read the
+// stack as unchanged.
+func linkLoopThenFolder(t *testing.T, work string) {
+	t.Helper()
+	seedLinks(t, work, map[string]string{"X": "X2", "X2": "X", "stackA/compose.yaml": "../X/compose.yaml"}, true)
+	removeInSeed(t, work, "X")
+	seed := filepath.Join(filepath.Dir(work), "seed")
+	if err := os.MkdirAll(filepath.Join(seed, "X"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(seed, "X", "other.txt"), []byte("x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The requested stack is reported, never read as unchanged: a failedRedeploy
+// with the loop error, outcome partial, no docker call for it. Locked only: the
+// pre-pull walk exists only with the lock, as in production.
+func TestPull_SymlinkPreWalkErrorCleanPostWalkRedeploy_Juq9(t *testing.T) {
+	got := run4d60(t, pull4d60{
+		lock:    true,
+		files:   map[string]string{"keep.txt": "k\n"},
+		changes: map[string]string{},
+		stacks:  []stack4d60{{id: "A", dir: "stackA", compose: "compose.yaml"}},
+		pullDir: "stackA",
+		prep:    linkLoopThenFolder,
+	})
+	if got.ar.Outcome != "partial" || !strings.Contains(got.reason["A"], "symbolic links") || got.dockerSaw("A") {
+		t.Fatalf("a pre-pull walk error was lost: changed=%q failed=%v reason=%v docker=%q outcome=%s",
+			got.pr.ChangedFiles, got.failed, got.reason, got.docker, got.ar.Outcome)
+	}
+}
