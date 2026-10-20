@@ -104,8 +104,8 @@ for small changes without leaving the browser.
 **Gotchas**
 
 - **Saving does not restart anything.** Restart the stack to apply the change.
-- **Lint errors do not block saving.** You are asked to fix them first or Save anyway.
-  A file with errors can stop the stack from starting.
+- **Lint errors block saving.** The server refuses a compose file with errors, so fix
+  them first. Warnings still save.
 - **Unsaved edits are marked with a badge.** Save them before you leave the page.
 - **Raw Editor is hidden while values are locked,** because a masked file would look
   empty and invite an overwrite.

@@ -12,7 +12,7 @@ import { queryKeys } from '@/lib/query-keys'
 interface UseComposeSaveAndLintArgs {
   stackId: string
   viewRef: ReturnType<typeof useCodeMirrorEditor>['viewRef']
-  handleSaveRef: RefObject<(forceSave?: boolean) => void>
+  handleSaveRef: RefObject<() => void>
   setLastSaved: (content: string) => void
   /**
    * Set for a git stack: the save toast then offers "Commit and push", which
@@ -83,15 +83,9 @@ export function useComposeSaveAndLint({
   })
 
   const handleSave = useCallback(
-    async (forceSave = false) => {
+    async () => {
       if (!viewRef.current) return
       const currentContent = viewRef.current.state.doc.toString()
-
-      if (forceSave) {
-        saveMutation.mutate(currentContent)
-        setShowSaveConfirm(false)
-        return
-      }
 
       setIsLintingBeforeSave(true)
       try {

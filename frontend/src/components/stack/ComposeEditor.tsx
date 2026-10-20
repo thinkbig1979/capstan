@@ -19,7 +19,7 @@ interface ComposeEditorProps {
 
 export function ComposeEditor({ stackId }: ComposeEditorProps) {
   const editorRef = useRef<HTMLDivElement>(null)
-  const handleSaveRef = useRef<(forceSave?: boolean) => void>(() => {})
+  const handleSaveRef = useRef<() => void>(() => {})
   const [content, setContent] = useState('')
   const [lastSaved, setLastSaved] = useState('')
   // selectedText/selectedTextRef stay here (not in useExtractToEnv) because
@@ -150,7 +150,6 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
         onOpenChange={setShowSaveConfirm}
         errorCount={errorCount}
         lintResults={lintResults}
-        onSaveAnyway={() => handleSave(true)}
       />
 
       {commitOpen && (

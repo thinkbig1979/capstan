@@ -12,10 +12,9 @@
  * The Save button in the toolbar is unconditionally disabled by the
  * hasUnsavedChanges quirk (content and lastSaved are always written together,
  * so hasUnsavedChanges never becomes true) — see ComposeEditor.tsx. handleSave
- * is only reachable via the codemirror Ctrl+S hook (onSave) or the "Save
- * anyway" button in the confirm dialog, so these tests trigger it by invoking
- * the captured onSave callback directly, mirroring the withSelection pattern
- * already used in ComposeEditor.b4.test.tsx for onSelect.
+ * is only reachable via the codemirror Ctrl+S hook (onSave), so these tests
+ * trigger it by invoking the captured onSave callback directly, mirroring the
+ * withSelection pattern already used in ComposeEditor.b4.test.tsx for onSelect.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { act, screen, waitFor, within } from '@testing-library/react'
@@ -125,7 +124,7 @@ describe('ComposeEditor — save/lint decision logic', () => {
         'services:\n  web:\n    image: nginx\n',
       ),
     )
-    expect(screen.queryByText('Save with Lint Errors?')).not.toBeInTheDocument()
+    expect(screen.queryByText('Fix Lint Errors Before Saving')).not.toBeInTheDocument()
     expect(toast.success).toHaveBeenCalledWith('Compose file saved successfully')
   })
 
@@ -137,34 +136,64 @@ describe('ComposeEditor — save/lint decision logic', () => {
 
     await triggerCtrlSSave()
 
-    await waitFor(() => expect(screen.getByText('Save with Lint Errors?')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Fix Lint Errors Before Saving')).toBeInTheDocument())
     expect(
       within(screen.getByRole('dialog')).getByText('Invalid service config'),
     ).toBeInTheDocument()
     expect(mockUpdateCompose).not.toHaveBeenCalled()
   })
 
-  it('"Save anyway" saves despite lint errors and closes the confirm dialog', async () => {
+  it('offers no "Save anyway" for lint errors: the dialog says fix them first and nothing is saved', async () => {
+    // The server answers 422 and writes nothing for error-level lint
+    // (compose.go), so the dialog must not offer a save it cannot honour
+    // (agent-os-p9j8). updateCompose stays unmocked here, so any save attempt
+    // would fail the not.toHaveBeenCalled assertion below.
     mockLintCompose.mockResolvedValue({ lintResults: [{ level: 'error', message: 'Invalid service config', line: 2 }] })
-    mockUpdateCompose.mockResolvedValue({ lintResults: [] })
 
-    const user = userEvent.setup()
     renderWithProviders(<ComposeEditor stackId="test-stack" />)
     await waitFor(() => expect(capturedOnSave).toBeDefined())
     await triggerCtrlSSave()
-    await waitFor(() => expect(screen.getByText('Save with Lint Errors?')).toBeInTheDocument())
 
-    await user.click(screen.getByRole('button', { name: 'Save anyway' }))
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText('Fix Lint Errors Before Saving')).toBeInTheDocument()
+    expect(
+      within(dialog).getByText(/A compose file with errors cannot be saved\. Fix them, then save again\./),
+    ).toBeInTheDocument()
+    expect(within(dialog).getByText('1 error')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /save anyway/i })).not.toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'Fix errors first' })).toBeInTheDocument()
+    expect(mockUpdateCompose).not.toHaveBeenCalled()
+    expect(toast.success).not.toHaveBeenCalled()
+  })
 
-    await waitFor(() =>
-      expect(mockUpdateCompose).toHaveBeenCalledWith(
-        'test-stack',
-        'services:\n  web:\n    image: nginx\n',
-      ),
-    )
-    await waitFor(() =>
-      expect(screen.queryByText('Save with Lint Errors?')).not.toBeInTheDocument(),
-    )
+  it('pluralises the error count in the dialog', async () => {
+    mockLintCompose.mockResolvedValue({
+      lintResults: [
+        { level: 'error', message: 'First problem', line: 1 },
+        { level: 'error', message: 'Second problem', line: 2 },
+        { level: 'warning', message: 'Not counted' },
+      ],
+    })
+
+    renderWithProviders(<ComposeEditor stackId="test-stack" />)
+    await waitFor(() => expect(capturedOnSave).toBeDefined())
+    await triggerCtrlSSave()
+
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText('2 errors')).toBeInTheDocument()
+  })
+
+  it('saves a file with only lint warnings, with no dialog', async () => {
+    mockLintCompose.mockResolvedValue({ lintResults: [{ level: 'warning', message: 'Consider pinning image tag' }] })
+    mockUpdateCompose.mockResolvedValue({ saved: true, lintResults: [{ level: 'warning', message: 'Consider pinning image tag' }] })
+
+    renderWithProviders(<ComposeEditor stackId="test-stack" />)
+    await waitFor(() => expect(capturedOnSave).toBeDefined())
+    await triggerCtrlSSave()
+
+    await waitFor(() => expect(mockUpdateCompose).toHaveBeenCalledTimes(1))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1))
   })
 
   it('"Fix errors first" closes the confirm dialog without saving', async () => {
@@ -174,12 +203,12 @@ describe('ComposeEditor — save/lint decision logic', () => {
     renderWithProviders(<ComposeEditor stackId="test-stack" />)
     await waitFor(() => expect(capturedOnSave).toBeDefined())
     await triggerCtrlSSave()
-    await waitFor(() => expect(screen.getByText('Save with Lint Errors?')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Fix Lint Errors Before Saving')).toBeInTheDocument())
 
     await user.click(screen.getByRole('button', { name: 'Fix errors first' }))
 
     await waitFor(() =>
-      expect(screen.queryByText('Save with Lint Errors?')).not.toBeInTheDocument(),
+      expect(screen.queryByText('Fix Lint Errors Before Saving')).not.toBeInTheDocument(),
     )
     expect(mockUpdateCompose).not.toHaveBeenCalled()
   })
@@ -199,11 +228,14 @@ describe('ComposeEditor — save/lint decision logic', () => {
         'services:\n  web:\n    image: nginx\n',
       ),
     )
-    expect(screen.queryByText('Save with Lint Errors?')).not.toBeInTheDocument()
+    expect(screen.queryByText('Fix Lint Errors Before Saving')).not.toBeInTheDocument()
   })
 
-  it('shows the inline lint panel when the save itself is rejected with details-nested lintResults', async () => {
-    mockLintCompose.mockResolvedValue({ lintResults: [{ level: 'error', message: 'Invalid service config', line: 2 }] })
+  it('a 422 from the server leaves nothing claimed as saved and shows its lint results inline', async () => {
+    // The pre-save lint request fails, so the save goes straight to the
+    // server, which is the one route to a 422 now that the dialog has no
+    // save button.
+    mockLintCompose.mockRejectedValue(new Error('network error'))
     // Real backend body (compose.go:164-175) as the axios interceptor
     // flattens it (api.ts:116-119): lintResults live under `details`, and
     // there is no `.response` wrapper on the rejected value — not
@@ -218,16 +250,14 @@ describe('ComposeEditor — save/lint decision logic', () => {
       status: 422,
     })
 
-    const user = userEvent.setup()
     renderWithProviders(<ComposeEditor stackId="test-stack" />)
     await waitFor(() => expect(capturedOnSave).toBeDefined())
     await triggerCtrlSSave()
-    await waitFor(() => expect(screen.getByText('Save with Lint Errors?')).toBeInTheDocument())
-
-    await user.click(screen.getByRole('button', { name: 'Save anyway' }))
 
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Lint errors detected'))
     await waitFor(() => expect(screen.getByText('Service key must be a string')).toBeInTheDocument())
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(toast.success).not.toHaveBeenCalled()
   })
 
   it('clicking Lint runs the lint mutation and toasts success when clean', async () => {
