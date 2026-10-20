@@ -331,14 +331,51 @@ func (s *GitService) httpsCredentials(dirPath string, cred *models.Directory, er
 //     stat-dirty, so its filter runs on every status rather than once
 //     (OBSERVED: 3 runs over 3 statuses, against 1 without the flag); the
 //     dirty answer stays correct.
-//   - In a partial clone, a read that needs a missing blob (diff HEAD on a
-//     file never fetched) still lazy-fetches through the repo's upload-pack.
-//     noLazyFetchEnv cannot go here: pull's checkout needs lazy fetch.
+//
+// A partial clone's lazy fetch is closed by noLazyFetchEnv in gitCmdWithCreds
+// rather than here, because pull, commit and push still need it.
 var gitHardeningArgs = []string{
 	"-c", "core.fsmonitor=false",
 	"-c", "log.showSignature=false",
 	"-c", "log.follow=false",
 	"--no-optional-locks",
+}
+
+// lazyFetchSubcommands are the git children that may lazy-fetch in a partial
+// clone. Every other child runs with noLazyFetchEnv (gitCmdWithCreds).
+//   - pull checks out blobs it has not downloaded (TestLazyFetch_PullStillFetches
+//     fails without it).
+//   - commit: OBSERVED, git 2.47.3, `commit --only -- x` with HEAD:x missing
+//     exits 128 "could not fetch ... from promisor remote" under the variable.
+//   - push: not tested to need it; a push of a new branch passed under the
+//     variable. Kept so a push's object walk that reaches a missing object
+//     fetches rather than fails (INFERRED).
+var lazyFetchSubcommands = map[string]bool{"pull": true, "commit": true, "push": true}
+
+// lazyFetchRefusedText is what git prints when noLazyFetchEnv stops a fetch
+// (OBSERVED, git 2.47.3: "warning: lazy fetching disabled; some objects may
+// not be available"). LC_ALL=C is pinned on every child, so it is English.
+const lazyFetchRefusedText = "lazy fetching disabled"
+
+// objectMissingMessage fits every route that can refuse (reads, and the reads
+// inside pull and commit). Its remedy is the one that downloads the objects:
+// OBSERVED, git 2.47.3, `git fetch` and an up-to-date pull leave a missing
+// HEAD blob missing, `git status` fetches only what rename detection reads,
+// and `git diff HEAD` fetches what both status and the change diff need
+// (TestLazyFetch_* run it and then require the route to succeed).
+const objectMissingMessage = "This repository is a partial clone and an object git needs here was never downloaded. " +
+	"Capstan does not download missing objects. To download them, run `git diff HEAD` in this folder on the host " +
+	"(for a past commit's diff, `git show <commit>`), or re-clone the repository without --filter."
+
+// objectMissing turns a failure that noLazyFetchEnv caused into a 409 that
+// says why, instead of the bare 500 a plain error becomes. Any other error is
+// returned unchanged.
+func objectMissing(err error, stderr string) error {
+	if !strings.Contains(stderr, lazyFetchRefusedText) {
+		return err
+	}
+	return models.NewAppErrorWithCause(http.StatusConflict, models.ErrGitObjectMissing,
+		objectMissingMessage, err)
 }
 
 // gitCmdWithCreds builds the git child process for dirPath with the HTTPS
@@ -409,6 +446,16 @@ func (s *GitService) gitCmdWithCreds(ctx context.Context, dirPath string, c gitC
 	// forwarded from Capstan's own environment.
 	env := append(stripCapstanSecrets(os.Environ()), "GIT_TERMINAL_PROMPT=0",
 		"LC_ALL=C", "LANGUAGE=")
+
+	// In a partial clone, a read that needs an object never downloaded (status
+	// rename detection, diff HEAD) fetches it from the promisor remote, which
+	// runs the repository's own remote.<name>.uploadpack, core.sshCommand or
+	// remote helper (agent-os-taa7). Every child refuses that by default, so a
+	// new read cannot forget to; it then fails instead. Only the children in
+	// lazyFetchSubcommands keep it. git before 2.45 ignores the variable.
+	if !lazyFetchSubcommands[gitSubcommand(append(gitArgs, args...))] {
+		env = append(env, noLazyFetchEnv...)
+	}
 
 	switch {
 	case c.sshErr != nil:

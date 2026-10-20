@@ -147,6 +147,9 @@ const (
 	// ErrGitPushURLUnsupported: the push URL uses a transport Capstan does not
 	// push over (git://, a <transport>:: helper). 409.
 	ErrGitPushURLUnsupported = "GIT_PUSH_URL_UNSUPPORTED"
+	// ErrGitObjectMissing: a read in a partial clone needs an object that was
+	// never downloaded, and reads do not fetch it (agent-os-taa7). 409.
+	ErrGitObjectMissing = "GIT_OBJECT_MISSING"
 )
 
 type AppError struct {

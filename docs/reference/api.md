@@ -250,6 +250,15 @@ With a live token, all four behave exactly as they did before.
 
 ## Git
 
+The read routes (status, log, commit diff, `/changes`, `/changes/diff`) never
+download a missing object. In a partial clone (`git clone --filter=...`) a read
+that needs an object that was never fetched answers **409
+`GIT_OBJECT_MISSING`** instead of fetching it, because that fetch runs the
+repository's own transport programs (`remote.<name>.uploadpack`,
+`core.sshCommand`, a remote helper). Pull, commit and push still fetch.
+This needs git 2.45 or later, which the image ships; an older git ignores the
+setting and fetches (agent-os-taa7).
+
 - `GET /api/v1/git` — status; the web UI passes `?stackId=<id>`, but the
   route itself is a plain query-string GET
 - `POST /api/v1/git/pull` — pull changes. Takes `?stackId=<id>` only; a
@@ -298,7 +307,8 @@ With a live token, all four behave exactly as they did before.
   (the 64 upper bound is agent-os-tyl6; longer values answered 500). A
   well-formed hash that names no commit (unknown, or an object that is not a
   commit) answers **404 `NOT_FOUND` "Commit not found"**; it answered 500
-  before 2026-09-24 (agent-os-tyl6). Other git failures stay 500.
+  before 2026-09-24 (agent-os-tyl6). A missing object in a partial clone
+  answers 409 `GIT_OBJECT_MISSING`. Other git failures stay 500.
   Answers `{commit, diff, files, hiddenFiles}`. `files` lists every path the
   commit touched against every parent. Env files are never shown: an
   env-like name or folder, a stack's env file, a file a compose file names in
