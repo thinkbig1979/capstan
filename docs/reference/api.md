@@ -264,7 +264,10 @@ With a live token, all four behave exactly as they did before.
   `GIT_SSH_KEY_UNUSABLE` before pulling when the pull URL is SSH and that key
   is missing, unreadable, readable by other users, or a path ssh would misread
   (not absolute, or holding `"`, `\`, `${` or a control character); the
-  message names the path and the fix.
+  message names the path and the fix. A folder whose git auth is HTTPS has
+  no SSH key, so an SSH pull URL answers **409 `GIT_SSH_UNSUPPORTED`** before
+  any ssh runs, as push does; https and local remotes are unaffected
+  (agent-os-rde7).
   A pull moves the whole work tree,
   so it locks every stack of the repository, not only the requested stack's
   folder, and answers **409 `OPERATION_IN_PROGRESS`** naming the busy stack

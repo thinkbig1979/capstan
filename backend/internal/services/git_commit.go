@@ -1023,11 +1023,7 @@ func pushURLRefusal(remote, u string, cred gitCreds) error {
 		return unsupported
 	}
 	if isSSHRemoteURL(u) {
-		if cred.sshKey == "" && cred.sshErr == nil {
-			return models.NewAppError(http.StatusConflict, models.ErrGitSSHUnsupported,
-				"Remote "+remote+" pushes over SSH, but no SSH key applies to this directory; set its git auth to SSH with a key path, set the global SSH key in Settings > Git, or use an https remote")
-		}
-		return cred.sshReady()
+		return sshRemoteRefusal("Remote "+remote+" pushes", cred)
 	}
 	if m := urlSchemeRe.FindStringSubmatch(u); m != nil {
 		switch strings.ToLower(m[1]) {

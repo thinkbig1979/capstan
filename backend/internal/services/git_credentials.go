@@ -103,6 +103,11 @@ type gitCreds struct {
 	// the container's default identities, and the network pre-checks
 	// return it.
 	sshErr error
+	// httpsAuth is set when the directory's auth type is "https": no ssh key
+	// applies by choice, so an ssh remote has no credential to use and is
+	// refused (agent-os-rde7). Other directories without a key keep running
+	// ssh as they always did.
+	httpsAuth bool
 }
 
 // gitCredentials resolves dirPath's credentials from one read of its
@@ -475,6 +480,7 @@ func (s *GitService) sshCredentials(c *gitCreds, dir *models.Directory, dirErr e
 	default:
 		switch strings.ToLower(dir.GitAuthType) {
 		case "https":
+			c.httpsAuth = true
 			return
 		case "ssh":
 			if dir.GitSSHKeyPath == "" {
@@ -661,18 +667,39 @@ func isSSHRemoteURL(u string) bool {
 	return colon >= 0 && (slash < 0 || colon < slash)
 }
 
+// sshRemoteRefusal answers a network operation that would go over ssh: with
+// no key applying it is GIT_SSH_UNSUPPORTED, since ssh would use whatever
+// default identity the container has (and the repository's core.sshCommand);
+// a key that applies but cannot be used is GIT_SSH_KEY_UNUSABLE. lead names
+// the operation, "Remote origin pushes" or "The remote pulls", so push and
+// pull give one answer in one place (agent-os-rde7).
+func sshRemoteRefusal(lead string, c gitCreds) error {
+	if c.sshKey == "" && c.sshErr == nil {
+		return models.NewAppError(http.StatusConflict, models.ErrGitSSHUnsupported,
+			lead+" over SSH, but no SSH key applies to this directory; set its git auth to SSH with a key path, set the global SSH key in Settings > Git, or use an https remote")
+	}
+	return c.sshReady()
+}
+
 // sshPullPrecheck refuses a pull that would go over ssh with a key that
 // cannot be used, before the pull runs. `ls-remote --get-url` reads the URL
 // the pull would contact (default remote, insteadOf applied) without
 // contacting it. A pull over https is never refused for a bad ssh key; when
-// the URL cannot be read, the key is checked anyway.
+// the URL cannot be read, the key is checked anyway. A directory set to https
+// auth has no key by choice, so its ssh remote is refused too, as push
+// refuses it (agent-os-rde7); a directory merely without a key (inherit, no
+// global key) keeps running ssh as before.
 func (s *GitService) sshPullPrecheck(dirPath string, c gitCreds) error {
-	if c.sshKey == "" && c.sshErr == nil {
+	noKey := c.sshKey == "" && c.sshErr == nil
+	if noKey && !c.httpsAuth {
 		return nil
 	}
 	u, err := s.gitCommandWithCreds(dirPath, c, "ls-remote", "--get-url") //geterrors:ignore a failed read (no remote configured exits 128) means the URL is unknown, so the key is checked anyway: fail closed, and the pull reports its own failure
-	if err == nil && !isSSHRemoteURL(u) {
+	if err != nil {
+		return c.sshReady()
+	}
+	if !isSSHRemoteURL(u) {
 		return nil
 	}
-	return c.sshReady()
+	return sshRemoteRefusal("The remote pulls", c)
 }
