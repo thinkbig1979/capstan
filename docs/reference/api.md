@@ -278,7 +278,9 @@ setting and fetches (agent-os-taa7).
   any ssh runs, as push does; https and local remotes are unaffected
   (agent-os-rde7). A pull never fetches or updates submodules, even with
   `submodule.recurse` or `fetch.recurseSubmodules` set, so no submodule's
-  URL or `core.sshCommand` runs (agent-os-1vkh).
+  URL or `core.sshCommand` runs (agent-os-1vkh). The ssh-or-https check
+  reads the remote URL as configured, never the token-masked form
+  (agent-os-0j5h).
   A pull moves the whole work tree,
   so it locks every stack of the repository, not only the requested stack's
   folder, and answers **409 `OPERATION_IN_PROGRESS`** naming the busy stack

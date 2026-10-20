@@ -971,8 +971,10 @@ func (s *GitService) pushPreconditions(top, branch string, cred gitCreds) (pushT
 	}
 
 	// --push --all applies pushurl and pushInsteadOf, which can differ from
-	// the fetch URL. The URLs are never echoed: one can carry a token.
-	urls, err := s.gitCommandWithCreds(top, cred, "remote", "get-url", "--push", "--all", remote)
+	// the fetch URL. The URLs are never echoed: one can carry a token. Read
+	// unredacted, because a token masked to "***" inside a URL can change
+	// its shape either way (agent-os-0j5h); they are only classified.
+	urls, err := s.gitCommandUnredacted(top, cred, "remote", "get-url", "--push", "--all", remote)
 	if err != nil {
 		if gitExitCode(err) < 0 {
 			return pushTarget{}, fmt.Errorf("failed to read the push URL: %w", err)

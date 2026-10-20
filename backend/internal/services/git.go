@@ -468,6 +468,18 @@ func (s *GitService) gitCommand(dirPath string, args ...string) (string, error) 
 // stdout AND on stderr, so a credential can leak on either stream of a FAILING
 // command.
 func (s *GitService) gitCommandWithCreds(dirPath string, cred gitCreds, args ...string) (string, error) {
+	out, err := s.gitCommandUnredacted(dirPath, cred, args...)
+	return redactToken(out, cred.token), err
+}
+
+// gitCommandUnredacted is gitCommandWithCreds WITHOUT redacting the returned
+// stdout; the error and the debug log are still redacted. It exists for a
+// value that must be classified as git printed it: a remote URL's ssh-or-not
+// shape, which a short token masked to "***" can flip both ways
+// (agent-os-0j5h). The result can hold the token, so it never reaches a
+// message, a log or a response. TestGitCommandUnredactedCallers0j5h lists the
+// callers.
+func (s *GitService) gitCommandUnredacted(dirPath string, cred gitCreds, args ...string) (string, error) {
 	ctx, cancel := withCommandDeadline(context.Background(), s.gitTimeout())
 	defer cancel()
 	cmd, _ := s.gitCmdWithCreds(ctx, dirPath, cred, args...)
@@ -496,7 +508,7 @@ func (s *GitService) gitCommandWithCreds(dirPath string, cred gitCreds, args ...
 			"path", dirPath, "subcommand", args[0], "stderr", redactToken(diag, cred.token))
 	}
 
-	return redactToken(strings.TrimSpace(stdout.String()), cred.token), nil
+	return strings.TrimSpace(stdout.String()), nil
 }
 
 // gitDiagnostic reassembles both halves of a failed git child for an error
