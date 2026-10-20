@@ -4,6 +4,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { stacksApi } from '@/lib/api'
 import { classifyError, presentError, toastInvalid } from '@/lib/error-handler'
 import { toast } from 'sonner'
+import type { ExternalToast } from 'sonner'
 import type { LintResult } from '@/types'
 import type { useCodeMirrorEditor } from '@/hooks/useCodeMirrorEditor'
 import { queryKeys } from '@/lib/query-keys'
@@ -44,17 +45,23 @@ export function useComposeSaveAndLint({
     onSuccess: (data, variables) => {
       setLastSaved(variables)
       setLintResults(data.lintResults || [])
+      // One toast per save: a second lint toast stacked over this one and
+      // covered its "Commit and push" action (agent-os-s35c). The warning
+      // note rides in the description instead; the findings themselves are in
+      // the editor's lint panel (setLintResults above). A 200 never carries
+      // error-level results (the server answers 422 and saves nothing), so
+      // those land in onError, not here.
+      const options: ExternalToast = {}
+      if (data.lintResults?.some((r: LintResult) => r.level === 'warning')) {
+        options.description = 'Lint warnings detected'
+      }
       if (onOpenCommit) {
-        toast.success('Compose file saved successfully', {
-          action: { label: 'Commit and push', onClick: onOpenCommit },
-        })
+        options.action = { label: 'Commit and push', onClick: onOpenCommit }
+      }
+      if (Object.keys(options).length > 0) {
+        toast.success('Compose file saved successfully', options)
       } else {
         toast.success('Compose file saved successfully')
-      }
-      if (data.lintResults?.some((r: LintResult) => r.level === 'error')) {
-        toastInvalid('Lint errors detected')
-      } else if (data.lintResults?.some((r: LintResult) => r.level === 'warning')) {
-        toast.warning('Lint warnings detected')
       }
       queryClient.invalidateQueries({ queryKey: queryKeys.stack.detail(stackId) })
     },
