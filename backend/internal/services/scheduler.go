@@ -1157,6 +1157,25 @@ func (s *SchedulerService) runAutoUpdates(ctx context.Context, updates []models.
 	// Items whose stack the scan could not look up; see the loop.
 	lookupSkipped := 0
 
+	// Each policy's outcome across the whole pass. A stack policy covers every
+	// service of its stack, so counting per item paused it after one bad pass
+	// and let one service's success wipe another's failure (agent-os-g9qm).
+	type passResult struct {
+		failedUpdate *models.CachedUpdate // the first failing item, named by the paused row
+		succeeded    bool
+	}
+	var passPolicies []*models.AutoUpdatePolicy
+	passResults := make(map[*models.AutoUpdatePolicy]*passResult)
+	passResultFor := func(p *models.AutoUpdatePolicy) *passResult {
+		r, ok := passResults[p]
+		if !ok {
+			r = &passResult{}
+			passResults[p] = r
+			passPolicies = append(passPolicies, p)
+		}
+		return r
+	}
+
 	for _, update := range updates {
 		policy, hasPolicy := policyFor(update)
 		if !hasPolicy {
@@ -1267,11 +1286,7 @@ func (s *SchedulerService) runAutoUpdates(ctx context.Context, updates []models.
 				s.logger.Warn("Failed to evict cached update entry after auto-update",
 					"containerID", update.ContainerID, "error", evictErr)
 			}
-			policy.ConsecutiveFailures = 0
-			policy.UpdatedAt = time.Now().Format(time.RFC3339)
-			if err := s.db.UpsertAutoUpdatePolicy(policy); err != nil {
-				s.logger.Error("Failed to reset policy failures", "error", err)
-			}
+			passResultFor(policy).succeeded = true
 
 		case truth.OutcomeNoChange:
 			// Pull succeeded but image did not advance — it was already current.
@@ -1314,47 +1329,69 @@ func (s *SchedulerService) runAutoUpdates(ctx context.Context, updates []models.
 				s.logger.Error("Failed to update failure history", "error", err)
 			}
 
-			policy.ConsecutiveFailures++
-			if policy.ConsecutiveFailures >= 3 {
-				policy.Paused = true
-				policy.UpdatedAt = time.Now().Format(time.RFC3339)
-				if err := s.db.UpsertAutoUpdatePolicy(policy); err != nil {
-					s.logger.Error("Failed to update paused policy", "error", err)
-				}
-
-				// completed_at = started_at, as on a skipped row: retention
-				// and the manual clear both delete by completed_at, so a row
-				// without one would never go (agent-os-z91e.46).
-				pausedAt := time.Now().Format(time.RFC3339)
-				pausedHistory := &models.UpdateHistoryEntry{
-					ID:            uuid.New().String(),
-					ContainerID:   update.ContainerID,
-					ContainerName: update.ContainerName,
-					Image:         update.ImageRef,
-					Status:        "paused",
-					Trigger:       "auto",
-					StartedAt:     pausedAt,
-					CompletedAt:   &pausedAt,
-				}
-				if update.StackID != "" {
-					pausedHistory.StackID = &update.StackID
-				}
-				if err := s.db.InsertUpdateHistory(pausedHistory); err != nil {
-					s.logger.Error("Failed to insert paused history", "error", err)
-				}
-
-				s.logger.Warn("Auto-update paused after 3 consecutive failures",
-					"container", update.ContainerName,
-					"target_type", policy.TargetType,
-					"target_id", policy.TargetID)
-			} else {
-				policy.UpdatedAt = time.Now().Format(time.RFC3339)
-				if err := s.db.UpsertAutoUpdatePolicy(policy); err != nil {
-					s.logger.Error("Failed to update policy", "error", err)
-				}
+			if r := passResultFor(policy); r.failedUpdate == nil {
+				failedUpdate := update
+				r.failedUpdate = &failedUpdate
 			}
 		}
 		releaseLock()
+	}
+
+	// Applied once per policy, after every item has run: any failure counts
+	// one, otherwise any success resets. no_change items leave it alone.
+	for _, policy := range passPolicies {
+		r := passResults[policy]
+		if r.failedUpdate == nil {
+			if r.succeeded {
+				policy.ConsecutiveFailures = 0
+				policy.UpdatedAt = time.Now().Format(time.RFC3339)
+				if err := s.db.UpsertAutoUpdatePolicy(policy); err != nil {
+					s.logger.Error("Failed to reset policy failures", "error", err)
+				}
+			}
+			continue
+		}
+		update := *r.failedUpdate
+
+		policy.ConsecutiveFailures++
+		if policy.ConsecutiveFailures >= 3 {
+			policy.Paused = true
+			policy.UpdatedAt = time.Now().Format(time.RFC3339)
+			if err := s.db.UpsertAutoUpdatePolicy(policy); err != nil {
+				s.logger.Error("Failed to update paused policy", "error", err)
+			}
+
+			// completed_at = started_at, as on a skipped row: retention
+			// and the manual clear both delete by completed_at, so a row
+			// without one would never go (agent-os-z91e.46).
+			pausedAt := time.Now().Format(time.RFC3339)
+			pausedHistory := &models.UpdateHistoryEntry{
+				ID:            uuid.New().String(),
+				ContainerID:   update.ContainerID,
+				ContainerName: update.ContainerName,
+				Image:         update.ImageRef,
+				Status:        "paused",
+				Trigger:       "auto",
+				StartedAt:     pausedAt,
+				CompletedAt:   &pausedAt,
+			}
+			if update.StackID != "" {
+				pausedHistory.StackID = &update.StackID
+			}
+			if err := s.db.InsertUpdateHistory(pausedHistory); err != nil {
+				s.logger.Error("Failed to insert paused history", "error", err)
+			}
+
+			s.logger.Warn("Auto-update paused after 3 consecutive failures",
+				"container", update.ContainerName,
+				"target_type", policy.TargetType,
+				"target_id", policy.TargetID)
+		} else {
+			policy.UpdatedAt = time.Now().Format(time.RFC3339)
+			if err := s.db.UpsertAutoUpdatePolicy(policy); err != nil {
+				s.logger.Error("Failed to update policy", "error", err)
+			}
+		}
 	}
 
 	var applyNotes []string
