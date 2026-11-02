@@ -52,9 +52,10 @@ func TestTerminalPingsIdleConnection(t *testing.T) {
 	// Control frames are only processed while the client reads. A read error
 	// before any ping means the session never came up, which is a fixture
 	// failure, not the defect under test.
+	guard := hangGuardDeadline(t)
+	require.NoError(t, conn.SetReadDeadline(guard))
 	readErr := make(chan error, 1)
 	go func() {
-		_ = conn.SetReadDeadline(hangGuardDeadline(t))
 		for {
 			if _, _, err := conn.ReadMessage(); err != nil {
 				readErr <- err
@@ -63,12 +64,14 @@ func TestTerminalPingsIdleConnection(t *testing.T) {
 		}
 	}()
 
-	// The bound is the assertion: 40 ping intervals.
+	// A 50ms ping interval means a working server pings almost at once; the
+	// bound is the hang guard (an absolute deadline a passing run never
+	// consults), so a loaded runner cannot turn correct code red.
 	select {
 	case <-pinged:
 	case err := <-readErr:
 		t.Fatalf("connection ended before any ping: %v", err)
-	case <-time.After(2 * time.Second):
-		t.Fatal("no ping within 2s on an idle terminal; the server's 60s read deadline will close it")
+	case <-time.After(time.Until(guard)):
+		t.Fatal("no ping on an idle terminal before the hang guard; the server's 60s read deadline will close it")
 	}
 }
