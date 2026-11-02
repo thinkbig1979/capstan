@@ -66,16 +66,16 @@ type BackupSchedulerService struct {
 	nextFire time.Time
 	done     chan struct{}
 	running  bool // single-flight guard: true while a cycle is executing
-	// stopped is set under mu by Stop() before it ever calls s.wg.Wait(), and
+	// stopped is set under mu by stopLocked before Close ever calls s.wg.Wait(), and
 	// checked under the same mu by the tick handler before it calls
 	// s.wg.Add(1). Without this, Add (called from the ticker goroutine,
-	// outside of any lock Stop() also takes before its own Wait) is
+	// outside of any lock Close also takes before its own Wait) is
 	// unsynchronized with Stop's Wait from the race detector's point of view:
 	// sync.WaitGroup deliberately instruments Add's first-increment and
 	// Wait's first-waiter transitions as a modelled read/write on the same
 	// location specifically to catch "Add concurrent with Wait" (see
 	// sync/waitgroup.go), and that is exactly what could happen here — a tick
-	// landing while Stop() is unwinding. Routing both Add and the stopped
+	// landing while Close is unwinding. Routing both Add and the stopped
 	// check through mu gives them the real happens-before edge that was
 	// missing (agent-os-o26).
 	stopped bool
@@ -96,7 +96,9 @@ func NewBackupScheduler(runner backupRunner, db *database.DB, logger *slog.Logge
 	if logger == nil {
 		logger = slog.Default()
 	}
-	//nolint:gosec // stored on the struct as parentCancel; called by Stop() (see the parentCancel() call in this file's Stop method), same lifecycle pattern as SchedulerService
+	// Created once and cancelled only by Close: a schedule save restarts the
+	// ticker, and the cycle it may interrupt was started legitimately (agent-os-xjl4).
+	//nolint:gosec // stored on the struct as parentCancel; called by Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	return &BackupSchedulerService{
 		runner:       runner,
@@ -269,10 +271,11 @@ func armDurationFor(next, now time.Time) time.Duration {
 	return remaining
 }
 
-// resetLocked tears down any previous run and installs a fresh lifecycle. The
-// caller must hold mu. It returns the new done channel and parent context as
-// locals, because the goroutine that uses them must not read the struct fields
-// Stop() zeroes.
+// resetLocked tears down any previous ticker or timer and installs a fresh done
+// channel. The caller must hold mu. It returns the done channel and the parent
+// context as locals, because the goroutine that uses them must not read the
+// struct fields Stop() zeroes. The parent context is not replaced: in-flight
+// cycles outlive a restart (agent-os-xjl4).
 func (s *BackupSchedulerService) resetLocked() (chan struct{}, context.Context) {
 	if s.ticker != nil {
 		s.ticker.Stop()
@@ -287,13 +290,6 @@ func (s *BackupSchedulerService) resetLocked() (chan struct{}, context.Context) 
 		close(s.done)
 	}
 
-	// Re-initialise the lifecycle context so a fresh Stop() works correctly.
-	if s.parentCancel != nil {
-		s.parentCancel()
-	}
-	//nolint:gosec // stored on the struct as parentCancel; called by Stop() (or replaced by the next Start()/StartScheduled(), which cancels the old one before creating a new one, as above)
-	s.parentCtx, s.parentCancel = context.WithCancel(context.Background())
-
 	s.done = make(chan struct{})
 	s.stopped = false
 
@@ -306,9 +302,9 @@ func (s *BackupSchedulerService) resetLocked() (chan struct{}, context.Context) 
 func (s *BackupSchedulerService) beginCycle(parentCtx context.Context) bool {
 	s.mu.Lock()
 	if s.stopped {
-		// Stop() has already committed to shutting down (and is about to, or
+		// Stop or Close has already committed (and Close is about to, or
 		// already did, call s.wg.Wait()). Starting a new cycle now would call
-		// s.wg.Add outside of Stop's knowledge, racing Wait — see the stopped
+		// s.wg.Add outside of Close's knowledge, racing Wait — see the stopped
 		// field's doc comment. Skip the fire instead; the caller's <-done case
 		// will fire on the next loop iteration.
 		s.mu.Unlock()
@@ -330,7 +326,7 @@ func (s *BackupSchedulerService) beginCycle(parentCtx context.Context) bool {
 		return false
 	}
 	s.running = true
-	// Add while still holding mu, not after releasing it: Stop() also takes mu
+	// Add while still holding mu, not after releasing it: Close also takes mu
 	// (to set stopped) before it ever calls s.wg.Wait(), so this ordering gives
 	// Add and Wait a real happens-before edge through the mutex instead of
 	// racing (agent-os-o26).
@@ -349,32 +345,48 @@ func (s *BackupSchedulerService) beginCycle(parentCtx context.Context) bool {
 	return true
 }
 
-// Stop stops the scheduler and waits up to 10 seconds for any in-flight cycle
-// to finish. Mirrors SchedulerService.Stop exactly. Unlike Close it does not
-// latch: Start may arm the scheduler again.
+// Stop halts the ticker or timer. A cycle already running is left to finish:
+// a schedule save stops and restarts the scheduler, and must not cancel the
+// backup in progress (agent-os-xjl4). The single-flight guard keeps a restarted
+// ticker from overlapping it. Unlike Close it does not latch: Start may arm the
+// scheduler again.
 func (s *BackupSchedulerService) Stop() {
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()
 	s.stopLocked()
 }
 
-// Close stops the scheduler like Stop and latches it shut, so a settings save
-// that lands after shutdown began cannot re-arm it (agent-os-z91e.30). main.go
-// calls it at shutdown; nothing reopens it.
+// Close stops the scheduler like Stop, cancels any in-flight cycle and waits up
+// to 10 seconds for it, and latches the scheduler shut, so a settings save that
+// lands after shutdown began cannot re-arm it (agent-os-z91e.30). main.go calls
+// it at shutdown; nothing reopens it.
 func (s *BackupSchedulerService) Close() {
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()
 	s.closed = true
 	s.stopLocked()
+	s.parentCancel()
+
+	// Wait for in-flight backup cycle goroutines to finish. stopLocked set
+	// stopped under mu, so no beginCycle can Add concurrently with this Wait.
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		s.logger.Warn("Timed out waiting for in-flight backup cycle during shutdown")
+	}
 }
 
-// stopLocked halts the ticker or timer and waits (bounded) for an in-flight
-// cycle. The caller holds lifecycleMu.
+// stopLocked halts the ticker or timer. The caller holds lifecycleMu.
 func (s *BackupSchedulerService) stopLocked() {
 	s.mu.Lock()
 
-	// Commit to shutdown before releasing mu (and long before the s.wg.Wait()
-	// call below). Any tick handler that acquires mu after this point sees
+	// Commit to shutdown before releasing mu (and long before Close's
+	// s.wg.Wait()). Any tick handler that acquires mu after this point sees
 	// stopped and skips s.wg.Add entirely, so Add can never be invoked
 	// concurrently with Wait — see the stopped field's doc comment
 	// (agent-os-o26).
@@ -400,24 +412,7 @@ func (s *BackupSchedulerService) stopLocked() {
 		s.done = nil
 	}
 
-	// Cancel any in-flight backup cycle contexts.
-	if s.parentCancel != nil {
-		s.parentCancel()
-	}
-
 	s.mu.Unlock()
-
-	// Wait for in-flight backup cycle goroutines to finish.
-	done := make(chan struct{})
-	go func() {
-		s.wg.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(10 * time.Second):
-		s.logger.Warn("Timed out waiting for in-flight backup cycle during shutdown")
-	}
 }
 
 // Restart stops then starts the scheduler with a new interval, as one
