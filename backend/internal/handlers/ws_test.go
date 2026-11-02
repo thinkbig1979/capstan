@@ -920,6 +920,12 @@ func TestUpgraderCheckOrigin(t *testing.T) {
 		{"allowlisted origin permitted", "https://capstan.ctsvps.work", false, "https://capstan.ctsvps.work", "capstan.ctsvps.work", true},
 		{"non-allowlisted origin denied", "https://capstan.ctsvps.work", false, "https://evil.example.com", "capstan.ctsvps.work", false},
 		{"allowlist plus auth disabled still allows loopback", "https://capstan.ctsvps.work", true, "http://localhost:3001", "localhost:5001", true},
+		// agent-os-y4kv: an allowlist adds origins, it does not lock the UI
+		// out of its own host.
+		{"same-origin http allowed beside a foreign allowlist", "https://other.example.com", false, "http://capstan.local:5001", "capstan.local:5001", true},
+		{"same-origin https allowed beside a foreign allowlist", "https://other.example.com", false, "https://capstan.local", "capstan.local", true},
+		{"allowlisted origin still allowed from another host", "https://other.example.com", false, "https://other.example.com", "capstan.local", true},
+		{"third origin refused beside an allowlist", "https://other.example.com", false, "https://evil.example.com", "capstan.local", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
