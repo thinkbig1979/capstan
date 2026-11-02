@@ -4,12 +4,15 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/middleware"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
+	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
 
 // OperationStreamer is the operations handler's view of DockerService: stream a
@@ -158,6 +161,18 @@ func (h *OperationsHandler) handleOperation(jwtSecret string, authDisabled bool)
 			// cancel frame to honour: the UI's cancel only closes the socket.
 			opCtx := context.Background()
 
+			// One action-log row per run, on every return path, as the REST
+			// lifecycle routes write (agent-os-gld3). result is the terminal
+			// done frame the client was sent.
+			var output strings.Builder
+			var result services.StreamLine
+			defer func() { h.logRun(c, conn.UserID, stackID, action, result, output.String()) }()
+			collect := func(line services.StreamLine) {
+				if line.Line != "" {
+					output.WriteString(line.Line + "\n")
+				}
+			}
+
 			// The socket's own lifetime: ends the ping loop once the client
 			// is gone. It never reaches the process.
 			wsCtx, wsCancel := context.WithCancel(context.Background())
@@ -213,12 +228,14 @@ func (h *OperationsHandler) handleOperation(jwtSecret string, authDisabled bool)
 							// The stop phase failed: forward its done frame
 							// as the result and do not start.
 							send(line, "stop failure frame")
+							result = line
 							stopFailed = true
 						}
 						// Stop succeeded — do not forward the intermediate done frame;
 						// the client will see the phase announcement instead.
 						continue
 					}
+					collect(line)
 					send(line, "stop output")
 				}
 				if stopFailed {
@@ -236,6 +253,11 @@ func (h *OperationsHandler) handleOperation(jwtSecret string, authDisabled bool)
 			// Stream the main (or up-phase) command. The terminal done frame now
 			// carries outcome+reason from the verified end state (finding #5 + #18 fix).
 			for line := range h.docker.RunStreaming(opCtx, *stack, subcommand, extraArgs) {
+				if line.Type == "done" {
+					result = line
+				} else {
+					collect(line)
+				}
 				send(line, "operation output")
 			}
 
@@ -244,4 +266,19 @@ func (h *OperationsHandler) handleOperation(jwtSecret string, authDisabled bool)
 
 		releaseLock()
 	}
+}
+
+// logRun writes a streamed run's action-log row. The detail carries the same
+// output text the REST routes log, plus the outcome: a run that sent no done
+// frame never reported success, so it is logged as failed.
+func (h *OperationsHandler) logRun(c *gin.Context, userID, stackID, action string, done services.StreamLine, output string) {
+	outcome := done.Outcome
+	if outcome == "" {
+		outcome = truth.OutcomeFailed
+	}
+	detail := map[string]any{"outcome": outcome, "output": output}
+	if done.Reason != "" {
+		detail["reason"] = done.Reason
+	}
+	services.NewActionLogger(h.db).LogWithRequest(middleware.RequestIDFrom(c), userID, &stackID, action, detail)
 }
