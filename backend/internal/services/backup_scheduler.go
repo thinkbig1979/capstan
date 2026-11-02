@@ -133,6 +133,14 @@ func (s *BackupSchedulerService) refuseIfClosed(op string) bool {
 
 // startLocked arms the interval ticker. The caller holds lifecycleMu.
 func (s *BackupSchedulerService) startLocked(interval time.Duration) {
+	// The first fire waits for the instant NextRunAt reports, not one full
+	// interval from now: counting from process start meant restarting more
+	// often than the interval starved backups entirely (agent-os-dg04). A read
+	// or parse fault falls back to a full interval; NextRunAt reports it.
+	now := time.Now()
+	next, _, _, _ := nextIntervalRun(s.db, interval, now)
+	firstDelay := min(max(next.Sub(now), 0), interval)
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -143,13 +151,31 @@ func (s *BackupSchedulerService) startLocked(interval time.Duration) {
 	// Stop() zeroing struct fields.
 	ticker := s.ticker
 
+	// Only an earlier first fire needs its own timer. At a full interval the
+	// ticker's own first tick is the same instant, and arming both would fire
+	// twice. A nil channel is never selected.
+	var first *time.Timer
+	var firstC <-chan time.Time
+	if firstDelay < interval {
+		first = time.NewTimer(firstDelay)
+		firstC = first.C
+	}
+
 	go func() {
-		s.logger.Info("Backup scheduler started", "interval", interval)
+		s.logger.Info("Backup scheduler started", "interval", interval, "first_run_in", firstDelay)
 		for {
 			select {
+			case <-firstC:
+				s.beginCycle(parentCtx)
+				// Later ticks count from this fire.
+				ticker.Reset(interval)
+				firstC = nil
 			case <-ticker.C:
 				s.beginCycle(parentCtx)
 			case <-done:
+				if first != nil {
+					first.Stop()
+				}
 				s.logger.Info("Backup scheduler stopped")
 				return
 			}
