@@ -65,18 +65,18 @@ func InitUpgrader(corsOrigins string, authDisabled bool) {
 				return true
 			}
 
+			// Same-origin (the frontend served by the backend itself) is
+			// always accepted. CORS_ORIGINS adds origins on top of it; it
+			// never locks the UI out of its own host (agent-os-y4kv).
+			if origin == "http://"+r.Host || origin == "https://"+r.Host {
+				return true
+			}
 			if corsOrigins != "" {
-				// Explicit allowlist (production behind a reverse proxy that sets
-				// CORS_ORIGINS) is authoritative.
 				for _, allowed := range strings.Split(corsOrigins, ",") {
 					if strings.TrimSpace(allowed) == origin {
 						return true
 					}
 				}
-			} else if origin == "http://"+r.Host || origin == "https://"+r.Host {
-				// No allowlist configured: only same-origin (frontend served by the
-				// backend itself) is accepted.
-				return true
 			}
 
 			// Dev convenience: AUTH_DISABLED is the documented trusted-network/dev

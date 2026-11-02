@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -30,6 +31,10 @@ import (
 // tracked as a follow-up, not a design decision (orchestrator bud4,
 // 2026-09-05).
 const CloseCodeNotFound = 4404
+
+// terminalPingInterval is a var only so a test can observe a ping without
+// waiting the full DefaultPingInterval.
+var terminalPingInterval = DefaultPingInterval
 
 // ContainerLister resolves the containers belonging to a compose project. It is
 // the terminal handler's view of DockerService, narrow enough to fake in tests
@@ -159,6 +164,14 @@ func (h *TerminalHandler) handleTerminalWS(jwtSecret string, authDisabled bool) 
 			return
 		}
 		defer h.terminal.CloseSession(session.ID)
+
+		// Started only now: the refusal paths above write their close frame
+		// with writeCloseMessage, outside WriteMutex, so a ping running then
+		// would be a concurrent write. From here every data write goes
+		// through WriteMutex (safeWriteMessage), as safePingLoop does.
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go safePingLoop(ctx, conn, terminalPingInterval)
 
 		done := make(chan struct{})
 		readDone := make(chan struct{})

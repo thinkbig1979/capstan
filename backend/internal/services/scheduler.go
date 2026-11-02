@@ -463,14 +463,7 @@ func (s *SchedulerService) recordApplyError(key, msg string) {
 func (s *SchedulerService) performScan(ctx context.Context) ([]models.CachedUpdate, error) {
 	results, err := s.docker.CheckForUpdates(ctx, s.db)
 	if err != nil {
-		if dbErr := s.db.SetSetting("update_scan_last_error", err.Error()); dbErr != nil {
-			s.logger.Error("Failed to record scan error", "error", dbErr)
-		}
-		s.logger.Error("Scan failed", "error", err)
-		if s.broadcastFn != nil {
-			s.broadcastFn(models.StackEvent{Type: "update_scan_failed", Timestamp: time.Now()})
-		}
-		return nil, err
+		return nil, s.failScan(err)
 	}
 
 	var cachedUpdates []models.CachedUpdate
@@ -500,8 +493,11 @@ func (s *SchedulerService) performScan(ctx context.Context) ([]models.CachedUpda
 		})
 	}
 
+	// Uncached results are a failed scan: marking it fresh would show the
+	// previous scan's list as current, and scheduled apply acts on that
+	// cache (agent-os-bog2).
 	if err := s.db.SetCachedUpdates(cachedUpdates); err != nil {
-		s.logger.Error("Failed to cache updates", "error", err)
+		return nil, s.failScan(fmt.Errorf("cache scan results: %w", err))
 	}
 
 	// One write: the scan time and the cleared error describe the same scan,
@@ -521,6 +517,19 @@ func (s *SchedulerService) performScan(ctx context.Context) ([]models.CachedUpda
 	}
 
 	return cachedUpdates, nil
+}
+
+// failScan records err as the scan's outcome, leaving update_scan_last_run
+// untouched, and returns it.
+func (s *SchedulerService) failScan(err error) error {
+	if dbErr := s.db.SetSetting("update_scan_last_error", err.Error()); dbErr != nil {
+		s.logger.Error("Failed to record scan error", "error", dbErr)
+	}
+	s.logger.Error("Scan failed", "error", err)
+	if s.broadcastFn != nil {
+		s.broadcastFn(models.StackEvent{Type: "update_scan_failed", Timestamp: time.Now()})
+	}
+	return err
 }
 
 func (s *SchedulerService) RunScan(ctx context.Context) ([]models.CachedUpdate, error) {
