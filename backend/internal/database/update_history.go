@@ -342,6 +342,38 @@ func (d *DB) UpdateUpdateHistory(id string, updates map[string]interface{}) erro
 	return err
 }
 
+// interruptedUpdateErrorMessage is what an operator reads on an update that was
+// cut off by a restart.
+const interruptedUpdateErrorMessage = "interrupted by a restart"
+
+// SweepInterruptedUpdateHistory marks every update_history row still 'pending'
+// as 'failed'. Nothing can be mid-update in a freshly started process (update
+// jobs live in memory, UpdateJobManager), so a 'pending' row at boot is one a
+// restart cut off. Left alone it never gets a completed_at, and retention and
+// the manual clear both delete by completed_at (agent-os-2zv2). 'failed' rather
+// than a new status: the outcome is unknown but the update did not report
+// success, and the CHECK list stays as it is.
+//
+// completed_at is bound as canonicalTimestamp's whole-second UTC spelling, the
+// column's canonical form, not storedInstant's millisecond one: retention
+// compares completed_at as text against that spelling.
+func (d *DB) SweepInterruptedUpdateHistory() (int, error) {
+	now := canonicalTimestamp(time.Now().UTC().Format(time.RFC3339))
+	result, err := d.db.Exec(
+		`UPDATE update_history SET status = 'failed', completed_at = ?, error_message = ?
+		 WHERE status = 'pending'`,
+		now, interruptedUpdateErrorMessage,
+	)
+	if err != nil {
+		return 0, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("count interrupted update history rows swept: %w", err)
+	}
+	return int(affected), nil
+}
+
 func (d *DB) DeleteUpdateHistoryOlderThan(before time.Time) (int, error) {
 	// .UTC() is load-bearing here, not cosmetic: completed_at is compared as
 	// text, so an unnormalised bound deletes by spelling rather than by
