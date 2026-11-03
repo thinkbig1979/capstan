@@ -251,6 +251,27 @@ func runDrained(ctx context.Context, runner commandRunner, name string, args, en
 // is 11 if the repository is already locked.").
 const resticExitRepoLocked = 11
 
+// resticExitSourceUnreadable is `restic backup`'s exit code for "snapshot
+// written, but some source data could not be read" (`restic help backup`,
+// restic 0.18.0: "Exit status is 3 if some source data could not be read
+// (incomplete snapshot created)."). OBSERVED with restic 0.18.0: the summary
+// line, snapshot_id included, is still printed, and each unreadable file gets
+// an "error" message naming it in "item" (agent-os-sufn). Only backup has this
+// meaning.
+const resticExitSourceUnreadable = 3
+
+// maxUnreadableListed caps how many unreadable paths a backup keeps by name.
+// They are file names from the stack's directory and land in the run item and
+// the log; the rest are only counted.
+const maxUnreadableListed = 20
+
+// isPartialBackup reports whether a failed `restic backup` still wrote a
+// snapshot: exit 3 AND a snapshot id in the summary restic printed. Anything
+// else, including exit 3 without an id, is a failed backup.
+func isPartialBackup(err error, summary *ResticBackupSummary) bool {
+	return isExitCode(err, resticExitSourceUnreadable) && summary != nil && summary.SnapshotID != ""
+}
+
 // unlockTimeout bounds one `restic unlock`, which only lists and deletes small
 // lock files.
 const unlockTimeout = 2 * time.Minute
@@ -462,6 +483,27 @@ type ResticBackupSummary struct {
 	BytesStored  int64 // data_added_packed: bytes actually stored after dedup/compression
 	FilesNew     int
 	FilesChanged int
+	// Unreadable names the first maxUnreadableListed files restic reported it
+	// could not read; UnreadableCount counts all of them, each path once.
+	Unreadable      []string
+	UnreadableCount int
+	unreadableSeen  map[string]bool
+}
+
+// noteUnreadable records one path restic could not read. A nil summary is a
+// caller that only wants the translated line (TestResticJSONToLine passes one).
+func (s *ResticBackupSummary) noteUnreadable(path string) {
+	if s == nil || s.unreadableSeen[path] {
+		return
+	}
+	if s.unreadableSeen == nil {
+		s.unreadableSeen = map[string]bool{}
+	}
+	s.unreadableSeen[path] = true
+	s.UnreadableCount++
+	if len(s.Unreadable) < maxUnreadableListed {
+		s.Unreadable = append(s.Unreadable, path)
+	}
 }
 
 // resticJSONMessage is the subset of restic's `backup --json` message schema we
@@ -581,6 +623,7 @@ func resticJSONToLine(raw string, summary *ResticBackupSummary) (line string, ha
 	case "error":
 		m := msg.Error.Message
 		if msg.Item != "" {
+			summary.noteUnreadable(msg.Item)
 			m = msg.Item + ": " + m
 		}
 		return "Error: " + m, true
