@@ -138,7 +138,10 @@ func (s *BackupSchedulerService) startLocked(interval time.Duration) {
 	// often than the interval starved backups entirely (agent-os-dg04). A read
 	// or parse fault falls back to a full interval; NextRunAt reports it.
 	now := time.Now()
-	next, _, _, _ := nextIntervalRun(s.db, interval, now)
+	next, _, _, nextErr := nextIntervalRun(s.db, interval, now)
+	if nextErr != nil {
+		s.logger.Warn("Could not read the last backup run; the first backup waits a full interval", "error", nextErr)
+	}
 	firstDelay := min(max(next.Sub(now), 0), interval)
 
 	s.mu.Lock()
