@@ -410,12 +410,18 @@ func (h *EnvHandler) Create(c *gin.Context) {
 	))
 }
 
-// validateEnvEntries returns an error when any non-comment, non-blank entry
-// has an empty key. Such entries would produce a corrupt "=value" line when
-// serialised (finding #15).
+// validateEnvEntries returns an error when an entry would not serialise back
+// as the one line it stands for: a non-blank entry with an empty key would
+// produce a corrupt "=value" line (finding #15), and a comment row must be one
+// parseEnvFile itself would produce (validateEnvCommentRow). Errors name the
+// index or key, never a value, which
+// may be a secret: a failure here is a logged 500 on the stack env routes.
 func validateEnvEntries(entries []EnvEntry) error {
 	for i, e := range entries {
 		if e.Comment {
+			if err := validateEnvCommentRow(e); err != nil {
+				return fmt.Errorf("entry at index %d %w", i, err)
+			}
 			continue
 		}
 		// A blank entry (key=="", value=="") is a blank line — allowed.
@@ -424,7 +430,7 @@ func validateEnvEntries(entries []EnvEntry) error {
 		}
 		// A non-blank value with an empty key would produce "=value".
 		if e.Key == "" && e.Value != "" {
-			return fmt.Errorf("entry at index %d has an empty key and non-empty value %q; this would produce a corrupt env line", i, e.Value)
+			return fmt.Errorf("entry at index %d has an empty key and a non-empty value; this would produce a corrupt env line", i)
 		}
 		// A literal newline (or carriage return) in a key or value would split
 		// the entry across multiple lines on serialisation, silently corrupting
@@ -439,6 +445,37 @@ func validateEnvEntries(entries []EnvEntry) error {
 		if err := validateEnvQuoting(e); err != nil {
 			return fmt.Errorf("entry at index %d (key %q) %w", i, e.Key, err)
 		}
+	}
+	return nil
+}
+
+// validateEnvCommentRow accepts exactly the comment rows parseEnvFile produces
+// (agent-os-2jq6). serializeEnvFile writes a comment row's value verbatim and
+// drops its key, so unchecked a row valued "EVIL=1" or "# x\nEVIL=1" added a
+// variable compose reads. The parser also labels no-"=" lines comments, such
+// as a bare KEY and "KEY: value", which compose reads as variables (compose-go
+// dotenv ends a key at '=' or ':', and inherits a bare one). They pass by
+// design so real files keep saving; the parser fix is agent-os-n43b.
+func validateEnvCommentRow(e EnvEntry) error {
+	if e.Key != "" {
+		return errors.New("is a comment with a key; a comment row has none")
+	}
+	if e.Value == "" {
+		return nil // serialised as a blank line
+	}
+	// Keeps a comment row one clean line, the rule validateEnvEntries applies
+	// to values. The round trip
+	// alone would pass a mid-line "\r" (bufio's ScanLines drops only a trailing
+	// one), and compose reads it as a space, so it was never an injection.
+	// An unedited file with a mid-line CR in a comment can no longer be saved
+	// from the table.
+	if strings.ContainsAny(e.Value, "\r\n") {
+		return errors.New("is a comment containing a newline; this would corrupt the env file")
+	}
+	// Ask the parser GET uses, so this accepts exactly the rows it produces.
+	back := (&EnvHandler{}).parseEnvFile(serializeEnvFile([]EnvEntry{e}))
+	if len(back) != 1 || !back[0].Comment || back[0].Value != e.Value {
+		return errors.New("is a comment that would not be written back as the same comment line")
 	}
 	return nil
 }
