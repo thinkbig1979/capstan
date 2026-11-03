@@ -35,6 +35,9 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   const [entries, setEntries] = useState<EnvEntryRow[]>([])
   const [rawContent, setRawContent] = useState('')
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
+  // The rows and raw text as last loaded. Table and raw are edited
+  // independently, so this is what tells which of them the user changed.
+  const [loadedEnv, setLoadedEnv] = useState<{ rows: EnvEntryDraft[]; raw: string }>({ rows: [], raw: '' })
   const [showEnvSection, setShowEnvSection] = useState(false)
   const nextRowId = useNextRowId()
 
@@ -94,6 +97,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
         _rowId: nextRowId(),
       }))
       setEntries(rows)
+      setLoadedEnv({ rows, raw: next.raw ?? '' })
       // `raw` is absent while locked — the backend withholds it rather than
       // sending an empty file, so default it instead of writing `undefined` into
       // a textarea (agent-os-7o5s).
@@ -117,7 +121,11 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
     canHydrateWhileDirty: (next, prev) => {
       if (!next.hasEnvFile || !prev?.hasEnvFile) return true
       if (Boolean(next.locked) !== Boolean(prev.locked)) return true
-      return (next.raw !== undefined && next.raw === rawContent) || sameEntries(next.entries, entries)
+      // Every representation the user edited must already equal the new
+      // file. Matching only one of them hydrates over edits in the other.
+      const rawEdited = rawContent !== loadedEnv.raw
+      const rowsEdited = !sameEntries(entries, loadedEnv.rows)
+      return (!rawEdited || next.raw === rawContent) && (!rowsEdited || sameEntries(next.entries, entries))
     },
   })
 
@@ -252,10 +260,21 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   )
 }
 
-/** The editor's rows already say what `next` says, field for field. */
-function sameEntries(next: EnvEntryDraft[], rows: EnvEntryRow[]) {
+/**
+ * Two row lists say the same file, field for field. Quote and inline comment
+ * count: a table save writes them back (agent-os-wcrq). `sensitive` does not,
+ * it is display state.
+ */
+function sameEntries(a: EnvEntryDraft[], b: EnvEntryDraft[]) {
   return (
-    next.length === rows.length &&
-    next.every((e, i) => e.key === rows[i].key && e.value === rows[i].value && !!e.comment === !!rows[i].comment)
+    a.length === b.length &&
+    a.every(
+      (e, i) =>
+        e.key === b[i].key &&
+        e.value === b[i].value &&
+        !!e.comment === !!b[i].comment &&
+        (e.quote ?? '') === (b[i].quote ?? '') &&
+        (e.inlineComment ?? '') === (b[i].inlineComment ?? ''),
+    )
   )
 }

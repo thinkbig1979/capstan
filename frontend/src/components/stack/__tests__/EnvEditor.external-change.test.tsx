@@ -8,12 +8,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { screen, waitFor, fireEvent } from '@testing-library/react'
 import { QueryClient } from '@tanstack/react-query'
+import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '../../../test/utils'
 
 type Payload = {
   hasEnvFile: true
   filename: string
-  entries: Array<{ key: string; value: string; sensitive: boolean; comment: boolean; line: number }>
+  entries: Array<{
+    key: string
+    value: string
+    sensitive: boolean
+    comment: boolean
+    line: number
+    quote?: string
+    inlineComment?: string
+  }>
   raw?: string
   locked?: boolean
 }
@@ -196,6 +205,41 @@ describe('EnvEditor after a git pull (agent-os-umig)', () => {
     await waitFor(() => expect(screen.getByText('Save')).not.toBeDisabled())
     expect(screen.getByText(NOTICE)).toBeInTheDocument()
     expect(portInput().value).toBe('9090')
+  })
+
+  // Table and raw are edited independently and switching view does not
+  // convert, so a pulled file whose rows still match the untouched table must
+  // not count as "the editor already shows it" while the raw text was edited.
+  it('raw edits stay when the pull changes only the raw text, not the rows', async () => {
+    renderEditor()
+    await loaded()
+    // Radix tabs switch on pointer down, which fireEvent.click never sends
+    // (observed: the textarea never appeared); EnvEditor.history.test.tsx
+    // uses userEvent for the same reason.
+    await userEvent.setup().click(screen.getByText('Raw Editor'))
+    const textarea = await screen.findByPlaceholderText('KEY=value')
+    fireEvent.change(textarea, { target: { value: 'PORT=9090\n' } })
+
+    // Same rows, plus a blank line: nothing the rows reflect.
+    await pullTo(envFile('8080', { raw: 'PORT=8080\n\n' }))
+
+    expect(await screen.findByText(NOTICE)).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('KEY=value')).toHaveValue('PORT=9090\n')
+  })
+
+  // A table save keeps each row's quote and inline comment (#700), so rows
+  // that differ from the file only there still overwrite it.
+  it('a quote-only difference from the edited rows still raises the notice', async () => {
+    renderEditor()
+    await loaded()
+    edit('7070')
+
+    const quoted = envFile('7070', { raw: 'PORT="7070"\n' })
+    quoted.entries[0].quote = '"'
+    await pullTo(quoted)
+
+    expect(await screen.findByText(NOTICE)).toBeInTheDocument()
+    expect(portInput().value).toBe('7070')
   })
 
   it('a lock-state change keeps the plain reload (no notice; agent-os-vqf5)', async () => {
