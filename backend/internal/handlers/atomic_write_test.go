@@ -36,11 +36,13 @@ func TestWriteFileAtomic_ModeIsExactlyTheArgument(t *testing.T) {
 func TestWriteFileAtomic_RenameFailureRemovesTemp(t *testing.T) {
 	dir := t.TempDir()
 	// A non-empty directory at path makes os.Rename fail after the temp file
-	// was fully written, the last step that can fail.
+	// was fully written, the last step that can fail. writeFileAtomic refuses a
+	// directory before it gets that far (agent-os-dwmz), so this calls the
+	// rename step directly.
 	target := filepath.Join(dir, "compose.yaml")
 	require.NoError(t, os.MkdirAll(filepath.Join(target, "child"), 0755))
 
-	err := writeFileAtomic(target, []byte("new"), 0644)
+	err := renameIntoPlace(target, []byte("new"), 0644)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "rename temp file into place")
 	assert.Empty(t, leftoverTemps(t, dir), "temp file survived a failed rename")
