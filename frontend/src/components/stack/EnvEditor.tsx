@@ -18,6 +18,9 @@ import type { EnvEntryRow } from './env-editor/types'
 import { queryKeys } from '@/lib/query-keys'
 import { classifyError } from '@/lib/error-handler'
 import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
+import { FileChangedNotice } from '@/components/FileChangedNotice'
+import { useExternalFileChange } from '@/hooks/useExternalFileChange'
+import type { EnvEntryDraft, EnvFileResponse } from '@/types'
 
 interface EnvEditorProps {
   stackId: string
@@ -75,14 +78,8 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
     queryFn: () => stacksApi.getEnv(stackId),
   })
 
-  // Hydrate local editable state whenever a new envData query result arrives.
-  // Adjusted during render (rather than in an effect) by comparing against the
-  // envData reference from the previous render — see
-  // https://react.dev/learn/you-might-not-need-an-effect.
-  const [prevEnvData, setPrevEnvData] = useState(envData)
-  if (envData !== prevEnvData) {
-    setPrevEnvData(envData)
-    if (envData?.hasEnvFile) {
+  const hydrate = (next: EnvFileResponse) => {
+    if (next.hasEnvFile) {
       // A reveal is stored as `sensitive: false` on the row itself, so a refetch
       // would silently re-mask whatever the user had uncovered. That refetch is
       // now routine: unlocking invalidates this query to swap the blanked values
@@ -91,7 +88,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
       const revealedKeys = new Set(
         entries.filter((e) => !e.sensitive && isSensitiveKey(e.key)).map((e) => e.key),
       )
-      const rows = envData.entries.map((e) => ({
+      const rows = next.entries.map((e) => ({
         ...e,
         sensitive: e.sensitive && !revealedKeys.has(e.key),
         _rowId: nextRowId(),
@@ -100,13 +97,35 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
       // `raw` is absent while locked — the backend withholds it rather than
       // sending an empty file, so default it instead of writing `undefined` into
       // a textarea (agent-os-7o5s).
-      setRawContent(envData.raw ?? '')
+      setRawContent(next.raw ?? '')
       setHasUnsavedChanges(false)
       setShowEnvSection(true)
-      resetHistory(rows, envData.raw ?? '')
+      resetHistory(rows, next.raw ?? '')
     } else {
       setShowEnvSection(false)
     }
+  }
+
+  // Unsaved edits survive a new payload (agent-os-umig), except across a lock
+  // change or the file appearing or going away, which keep the plain hydrate:
+  // rows edited while locked hold blanked secrets (Save is only disabled,
+  // EnvTableView.tsx), and carrying them over an unlock would let a save write
+  // the blanks. The edits a lock change still discards are agent-os-vqf5.
+  const { changedOnDisk, reload, dismiss } = useExternalFileChange(envData, {
+    isDirty: hasUnsavedChanges,
+    hydrate,
+    canHydrateWhileDirty: (next, prev) => {
+      if (!next.hasEnvFile || !prev?.hasEnvFile) return true
+      if (Boolean(next.locked) !== Boolean(prev.locked)) return true
+      return (next.raw !== undefined && next.raw === rawContent) || sameEntries(next.entries, entries)
+    },
+  })
+
+  // A successful save (or a created file) makes the editor's content the
+  // version on disk, so a pending newer version no longer is.
+  const setSavedState: typeof setHasUnsavedChanges = (value) => {
+    setHasUnsavedChanges(value)
+    if (value === false) dismiss()
   }
 
   const { saveMutation, createEnvMutation, handleSaveTable, handleSaveRaw } = useEnvMutations({
@@ -115,7 +134,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
     rawContent,
     setEntries,
     setRawContent,
-    setHasUnsavedChanges,
+    setHasUnsavedChanges: setSavedState,
     setShowEnvSection,
     resetHistory,
   })
@@ -205,6 +224,8 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
         />
       )}
 
+      {changedOnDisk && <FileChangedNotice onReload={reload} />}
+
       <EnvTableView
         visible={view === 'table'}
         entries={entries}
@@ -228,5 +249,13 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
         />
       )}
     </div>
+  )
+}
+
+/** The editor's rows already say what `next` says, field for field. */
+function sameEntries(next: EnvEntryDraft[], rows: EnvEntryRow[]) {
+  return (
+    next.length === rows.length &&
+    next.every((e, i) => e.key === rows[i].key && e.value === rows[i].value && !!e.comment === !!rows[i].comment)
   )
 }

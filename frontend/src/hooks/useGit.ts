@@ -128,7 +128,8 @@ export function useGitPush() {
  * - failed    → toast.error
  * - siblingStacksChanged non-empty → toast.info naming them (agent-os-88xz)
  *
- * Always invalidates queryKeys.git.all(stackId) and queryKeys.stacks().
+ * Always invalidates queryKeys.git.all(stackId), queryKeys.stack.detail(stackId)
+ * and queryKeys.stacks().
  */
 export function useGitPull() {
   const queryClient = useQueryClient()
@@ -144,6 +145,10 @@ export function useGitPull() {
       const stackId = (result as ActionResult & { _stackId?: string })._stackId
       if (stackId) {
         queryClient.invalidateQueries({ queryKey: queryKeys.git.all(stackId) })
+        // The pull rewrote files on disk: an open compose or env editor must
+        // see them, or its next save writes the old text back (agent-os-umig).
+        // The prefix covers compose, env and the stack row.
+        queryClient.invalidateQueries({ queryKey: queryKeys.stack.detail(stackId) })
       }
 
       // On partial outcome, toastForResult already fired a warning.

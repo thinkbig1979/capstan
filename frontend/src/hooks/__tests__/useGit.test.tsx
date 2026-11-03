@@ -194,6 +194,34 @@ describe('useGitPull — ActionResult outcomes', () => {
   })
 })
 
+// ─── agent-os-umig: a pull refreshes the stack's files ───────────────────────
+
+describe('useGitPull — refreshes the editors of the pulled stack', () => {
+  it("invalidates the stack's compose and env queries, and no other stack's", async () => {
+    mockGitPull.mockResolvedValue({ outcome: 'success', reason: 'Pulled' })
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    })
+    const compose = ['stack', 'my-stack', 'compose']
+    const env = ['stack', 'my-stack', 'env']
+    const other = ['stack', 'other-stack', 'compose']
+    for (const key of [compose, env, other]) queryClient.setQueryData(key, 'cached')
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    )
+    const { result } = renderHook(() => useGitPull(), { wrapper })
+
+    act(() => {
+      result.current.mutate({ stackId: 'my-stack' })
+    })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+    expect(queryClient.getQueryState(compose)?.isInvalidated).toBe(true)
+    expect(queryClient.getQueryState(env)?.isInvalidated).toBe(true)
+    expect(queryClient.getQueryState(other)?.isInvalidated).toBe(false)
+  })
+})
+
 // ─── agent-os-06c1: unchecked-cast narrowing ─────────────────────────────────
 
 describe('useGitPull — failed-redeploy names are asserted, not validated', () => {
