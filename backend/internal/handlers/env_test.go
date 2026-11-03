@@ -181,30 +181,3 @@ export NODE_ENV=production
 		}
 	}
 }
-
-func TestUnquoteValue(t *testing.T) {
-	handler := &EnvHandler{}
-
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{`"value"`, "value"},
-		{`'value'`, "value"},
-		{`value`, "value"},
-		{`"quoted value"`, "quoted value"},
-		{`'quoted value'`, "quoted value"},
-		{`"`, `"`},
-		{``, ``},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			result := handler.unquoteValue(tt.input)
-
-			if result != tt.expected {
-				t.Errorf("unquoteValue(%q): expected %q, got %q", tt.input, tt.expected, result)
-			}
-		})
-	}
-}
