@@ -162,7 +162,11 @@ func redactEnvResponse(resp *EnvResponse) {
 	resp.Raw = ""
 	for i := range resp.Entries {
 		if resp.Entries[i].Sensitive {
+			// The quote fields can hold part of the value: a line that falls
+			// back to the unquoted cut leaves its tail in InlineComment.
 			resp.Entries[i].Value = ""
+			resp.Entries[i].Quote = ""
+			resp.Entries[i].InlineComment = ""
 		}
 	}
 }
@@ -467,9 +471,11 @@ func validateEnvQuoting(e EnvEntry) error {
 	if strings.ContainsAny(c, "\r\n") {
 		return errors.New("has an inline comment containing a newline; this would corrupt the env file")
 	}
-	body := strings.TrimLeft(c, " \t")
+	// Same whitespace set as splitEnvValue, or an unedited line the parser
+	// accepted (a no-break space before "#") would be refused on save.
+	body := strings.TrimLeftFunc(c, unicode.IsSpace)
 	// After a closing quote any "#" starts a comment; after an unquoted value
-	// compose only cuts at " #", so the "#" must follow a space.
+	// compose only cuts at " #" (ASCII space), so the "#" must follow one.
 	if body == "" || body[0] != '#' || (e.Quote == "" && !strings.HasSuffix(c[:len(c)-len(body)], " ")) {
 		return errors.New("has an inline comment that is not a # comment")
 	}

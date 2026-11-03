@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -249,8 +250,9 @@ func TestEnvQuote_HTTP_RejectsUnsafeQuoteFields(t *testing.T) {
 			onDisk := readEnvQuoteFile(t, envPath)
 			assert.Equal(t, content, onDisk, "a refused save must not touch the file")
 			assert.NotContains(t, onDisk, "EVIL")
-			// Errors name the key, never the value.
-			assert.NotContains(t, w.Body.String(), "ab$cd")
+			// Errors name the key, never the value this case submitted.
+			assertBodyOmits(t, w.Body.String(), entryByKey(t, entries, tc.key)["value"].(string))
+			assertBodyOmits(t, w.Body.String(), "EVIL")
 		})
 	}
 }
@@ -268,4 +270,64 @@ func TestEnvQuote_HTTP_AcceptsEscapedQuotes(t *testing.T) {
 	w := putEntries(t, router, stackID, token, entries)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	assert.Equal(t, "PW='it\\'s'\t# note\n", readEnvQuoteFile(t, envPath))
+}
+
+// assertBodyOmits checks s is absent from a JSON body in every form an error
+// could carry it: as written or Go-quoted (%s, %q), each then JSON-escaped.
+// Checking the raw form alone misses a value with a quote or backslash, which
+// reaches the body escaped twice.
+func assertBodyOmits(t *testing.T, body, s string) {
+	t.Helper()
+	goQuoted := strconv.Quote(s)
+	for _, form := range []string{s, goQuoted[1 : len(goQuoted)-1]} {
+		assert.NotContains(t, body, form)
+		enc, err := json.Marshal(form)
+		require.NoError(t, err)
+		assert.NotContains(t, body, string(enc[1:len(enc)-1]))
+	}
+}
+
+// compose skips any Unicode space before a "#" after a closing quote, and cuts
+// an unquoted value at " #" then trims Unicode space to its right, so a
+// no-break space in either place is valid compose and must not make an
+// unedited save fail validation.
+func TestEnvQuote_HTTP_UnicodeSpaceBeforeCommentSavesUnchanged(t *testing.T) {
+	const content = "PW='x'\u00a0# note\nNOTE=plain\u00a0 # note\n"
+	router, stackID, token, envPath := envQuoteFixture(t, content)
+
+	entries := getEntriesAsJSON(t, router, stackID, token)
+	w := putEntries(t, router, stackID, token, entries)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.Equal(t, content, readEnvQuoteFile(t, envPath))
+}
+
+// A locked response blanks a sensitive row's value; the quote fields can hold
+// part of it too. Here the closing quote is followed by junk, so the line falls
+// back to the unquoted cut and the inline comment carries the secret's tail.
+func TestEnvQuote_HTTP_LockedGetHidesSensitiveQuoteFields(t *testing.T) {
+	const content = "DB_PASSWORD=\"hunter #twotwo\" tailpart\nTZ=UTC # zonenote\n"
+	router, stackID, token, _ := envQuoteFixture(t, content)
+
+	get := func(withToken bool) string {
+		req := httptest.NewRequest(http.MethodGet, "/stacks/"+stackID+"/env", nil)
+		if withToken {
+			req.Header.Set(middleware.EnvUnlockHeader, token)
+		}
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code)
+		return w.Body.String()
+	}
+
+	// Positive side: unlocked, the fixture really carries the secret parts.
+	unlocked := get(true)
+	for _, part := range []string{"hunter", "twotwo", "tailpart"} {
+		require.Contains(t, unlocked, part)
+	}
+
+	locked := get(false)
+	for _, part := range []string{"hunter", "twotwo", "tailpart"} {
+		assert.NotContains(t, locked, part, "a locked response leaked part of a sensitive value")
+	}
+	assert.Contains(t, locked, "zonenote", "a non-sensitive row keeps its inline comment")
 }
