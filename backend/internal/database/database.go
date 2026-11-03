@@ -177,6 +177,15 @@ func NewWithMigrationsAndEncryptor(dataDir string, encryptor TokenEncryptor) (*D
 		slog.Warn("Marked interrupted backup runs as failed on startup", "count", n)
 	}
 
+	// Same reasoning for update_history: a 'pending' row at boot is an update a
+	// restart cut off, and without a completed_at retention can never delete it
+	// (agent-os-2zv2). Not fatal, for the same reason as the sweep above.
+	if n, err := db.SweepInterruptedUpdateHistory(); err != nil {
+		slog.Warn("Failed to sweep interrupted update history", "error", err)
+	} else if n > 0 {
+		slog.Warn("Marked interrupted updates as failed on startup", "count", n)
+	}
+
 	// Every boot, not once: a value can arrive in an old format after the
 	// upgrade too (a repository stored in clear while no key was configured,
 	// a restored pre-upgrade snapshot). Not fatal, for the same reason as the
