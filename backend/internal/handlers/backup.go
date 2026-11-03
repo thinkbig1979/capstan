@@ -266,50 +266,22 @@ func (h *BackupHandler) getSettings(c *gin.Context) {
 	//   here would build the second detector this comparison exists to avoid.
 	hasEmbeddedCredential := repository != bc.ResticRepository
 
-	// Read together and refused as one (agent-os-1gqn), for the same reason the
-	// two ResolveBackupConfig* calls above already refuse: this response IS the
-	// backup settings form, and the settingIntOrDefault/settingBoolOrDefault
-	// fallbacks below are applied to whatever comes back. Discarding the errors
-	// rendered a complete, plausible page — retention 7/4/6/0, auto-prune on,
-	// no rclone remote — out of a database that answered nothing, and the
-	// operator's next Save wrote that page over their real configuration.
+	// Every field below comes from bc, the config the engine itself acts on
+	// (agent-os-p7hf). The form used to read the rows itself with hardcoded
+	// defaults, skipping the BACKUP_KEEP_* and other env fallbacks: with
+	// BACKUP_KEEP_DAILY=30 and no saved row it showed 7, and an operator who
+	// raised that "7" to 10 cut retention from 30 to 10 for the next
+	// `forget --prune`. A second resolution here is a second source of truth.
 	//
-	// One call rather than twelve guards is deliberate: twelve fault-capable
-	// reads cannot be pinned individually by a fixture that faults all of them
-	// (agent-os-a6bc), and one can.
-	bs, err := readSettings(db,
-		"backup_keep_daily",
-		"backup_keep_weekly",
-		"backup_keep_monthly",
-		"backup_keep_yearly",
-		"backup_auto_prune",
-		"backup_schedule_interval",
-		"backup_sync_after",
-		services.SettingBackupVerifyWeekly,
-		"rclone_remote",
-		"rclone_path",
-		"rclone_transfers",
-		"backup_hostname",
-	)
+	// Fail-closed as before (agent-os-1gqn): bc and RepoSettingSources above,
+	// and VerifyWeeklyEnabled here, all return an error on an unreadable
+	// setting, so a fault is a 500, never a page of defaults the next Save
+	// would write over the real configuration.
+	verifyWeekly, err := services.VerifyWeeklyEnabled(db)
 	if err != nil {
-		// A message distinct from the two above, deliberately: all three refuse
-		// the same request, and an operator reading the log needs to know WHICH
-		// read failed.
-		h.internalError(c, "Failed to read the backup retention and schedule settings", err)
+		h.internalError(c, "Failed to read the weekly verify setting", err)
 		return
 	}
-	keepDaily := bs["backup_keep_daily"]
-	keepWeekly := bs["backup_keep_weekly"]
-	keepMonthly := bs["backup_keep_monthly"]
-	keepYearly := bs["backup_keep_yearly"]
-	autoPrune := bs["backup_auto_prune"]
-	scheduleInterval := bs["backup_schedule_interval"]
-	syncAfterBackup := bs["backup_sync_after"]
-	verifyWeekly := bs[services.SettingBackupVerifyWeekly]
-	rcloneRemote := bs["rclone_remote"]
-	rclonePath := bs["rclone_path"]
-	rcloneTransfers := bs["rclone_transfers"]
-	hostname := bs["backup_hostname"]
 
 	// scheduleDays is always an array, never null: the UI iterates it directly
 	// and a JSON null would break that. An unparseable stored value degrades to
@@ -343,23 +315,23 @@ func (h *BackupHandler) getSettings(c *gin.Context) {
 		"repositorySource":        repoSrc,
 		"hasPassword":             hasPassword,
 		"passwordSource":          pwSrc,
-		"keepDaily":               settingIntOrDefault(keepDaily, 7),
-		"keepWeekly":              settingIntOrDefault(keepWeekly, 4),
-		"keepMonthly":             settingIntOrDefault(keepMonthly, 6),
-		"keepYearly":              settingIntOrDefault(keepYearly, 0),
-		"autoPrune":               settingBoolOrDefault(autoPrune, true),
-		"scheduleIntervalMinutes": settingIntOrDefault(scheduleInterval, 0),
+		"keepDaily":               bc.KeepDaily,
+		"keepWeekly":              bc.KeepWeekly,
+		"keepMonthly":             bc.KeepMonthly,
+		"keepYearly":              bc.KeepYearly,
+		"autoPrune":               bc.AutoPrune,
+		"scheduleIntervalMinutes": bc.ScheduleInterval,
 		"scheduleMode":            bc.ScheduleMode,
 		"scheduleTime":            bc.ScheduleTime,
 		"scheduleDays":            scheduleDays,
 		"serverTimezone":          tzName,
 		"serverTimeOffset":        tzOffset,
-		"syncAfterBackup":         settingBoolOrDefault(syncAfterBackup, false),
-		"verifyWeekly":            settingBoolOrDefault(verifyWeekly, services.DefaultVerifyWeekly),
-		"rcloneRemote":            rcloneRemote,
-		"rclonePath":              rclonePath,
-		"rcloneTransfers":         settingIntOrDefault(rcloneTransfers, 4),
-		"hostname":                hostname,
+		"syncAfterBackup":         bc.SyncAfter,
+		"verifyWeekly":            verifyWeekly,
+		"rcloneRemote":            bc.RcloneRemote,
+		"rclonePath":              bc.RclonePath,
+		"rcloneTransfers":         bc.RcloneTransfers,
+		"hostname":                bc.BackupHostname,
 		"resticAvailable":         av.ResticPresent,
 		"rcloneAvailable":         av.RclonePresent,
 		"repoState":               repoStatus.RepoState,
@@ -1977,28 +1949,6 @@ func (h *BackupHandler) previewSnapshotViaRestic(ctx context.Context, snapshotID
 		return nil, err
 	}
 	return entries, nil
-}
-
-// settingIntOrDefault parses a DB setting string, returning defaultVal on
-// empty or parse error.
-func settingIntOrDefault(s string, defaultVal int) int {
-	if s == "" {
-		return defaultVal
-	}
-	v, err := strconv.Atoi(s)
-	if err != nil {
-		return defaultVal
-	}
-	return v
-}
-
-// settingBoolOrDefault returns the bool value of a DB setting string, falling
-// back to defaultVal when the string is empty.
-func settingBoolOrDefault(s string, defaultVal bool) bool {
-	if s == "" {
-		return defaultVal
-	}
-	return s == "true"
 }
 
 // generateID returns a new UUID string.

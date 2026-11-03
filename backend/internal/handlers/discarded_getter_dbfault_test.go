@@ -913,16 +913,14 @@ func TestBackupGetStatus_GenuinelyNoRunsStillReturns200(t *testing.T) {
 	requireNoOwnErrorLines(t, buf.String(), sentinel, "GET /api/backup/status with no runs recorded")
 }
 
-// CONTROL for the eleven-key settings read: a healthy database with none of
-// the eleven rows set still renders the documented defaults, so the collapse
-// into readSettings did not turn "absent" into "refuse".
+// CONTROL for the settings form: a healthy database with none of the rows set
+// still renders the documented defaults, so "absent" did not become "refuse".
 //
-// There is deliberately NO whole-table fault arm for this handler here, and the
-// report says why: ResolveBackupConfigWithCfg and RepoSettingSources run first
-// (backup.go:154-163, agent-os-l42o) and already refuse on a settings fault, so
-// a hidden settings table never reaches the eleven reads. The fault arm for the
-// converted expression is TestReadSettings_ReportsTheFaultingKey, at the helper
-// where the single remaining fault-capable read now lives.
+// There is deliberately NO whole-table fault arm for this handler here:
+// ResolveBackupConfigWithCfg and RepoSettingSources run first (agent-os-l42o)
+// and already refuse on a settings fault. Since agent-os-p7hf the form renders
+// from that resolved config plus VerifyWeeklyEnabled, which refuses too; the
+// handler's own readSettings call is gone.
 func TestBackupGetSettings_AbsentRowsStillRenderTheDefaults(t *testing.T) {
 	buf := captureHandlerLogs(t)
 	plant := plantStrayServerFaultLine(t)
