@@ -224,9 +224,31 @@ func TestBackupScheduler_StopDoesNotWaitOutARunningWeeklyVerify(t *testing.T) {
 		time.Sleep(interval + interval/2)
 		require.Equal(t, 1, v.launches(), "the check must be running before Stop")
 
+		// Stop leaves the cycle waiting on the check (agent-os-xjl4); Close ends it.
+		defer svc.Close()
 		start := time.Now()
 		svc.Stop()
 		assert.Less(t, time.Since(start), time.Second, "Stop waited for the check instead of ending the cycle's wait")
+	})
+}
+
+// TestBackupScheduler_CloseDoesNotWaitOutARunningWeeklyVerify: the 10s wait
+// for an in-flight cycle lives in Close (agent-os-xjl4). Close cancels the
+// cycle's wait on a check that never ends, so it returns well inside that bound.
+func TestBackupScheduler_CloseDoesNotWaitOutARunningWeeklyVerify(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		svc := newTestBackupScheduler(t, &fakeBackupRunner{})
+		v := &fakeVerifier{done: make(chan struct{})} // never finishes
+		svc.SetVerifier(v)
+
+		const interval = 20 * time.Millisecond
+		svc.Start(interval)
+		time.Sleep(interval + interval/2)
+		require.Equal(t, 1, v.launches(), "the check must be running before Close")
+
+		start := time.Now()
+		svc.Close()
+		assert.Less(t, time.Since(start), time.Second, "Close waited for the check instead of cancelling the cycle's wait")
 	})
 }
 

@@ -474,11 +474,11 @@ func (s *BackupService) SchedulerRunning() bool {
 // is not consulted at all (a scheduled-mode install may legitimately have a
 // zero interval).
 //
-// In interval mode it is only an estimate. The scheduler uses a plain
-// time.Ticker whose start time is not persisted, so the estimate is derived
-// from the most recent backup run's FinishedAt timestamp plus the configured
-// interval. When no run exists yet (scheduler just started) the estimate is
-// time.Now plus the interval.
+// In interval mode it is the most recent backup run's FinishedAt plus the
+// configured interval, or time.Now plus the interval when no run has finished
+// (nextIntervalRun). The scheduler's first fire after a start waits for the same
+// instant; later ticks count from that fire, so they can drift from this by the
+// length of a backup.
 func (s *BackupService) NextRunAt() *time.Time {
 	if !s.schedulerActive.Load() {
 		return nil
@@ -519,34 +519,47 @@ func (s *BackupService) NextRunAt() *time.Time {
 	// finished run yet. Only the third is normal, and it is the one that made the
 	// other two invisible. All three still fall back to time.Now(): NextRunAt is a
 	// read-only estimator for one JSON field, so a fault is reported, not acted on.
-	var base time.Time
-	runs, err := s.db.GetBackupRuns(1)
-	switch {
-	case err != nil:
+	next, fault, run, err := nextIntervalRun(s.db, interval, time.Now())
+	switch fault {
+	case nextRunAtFaultRead:
 		s.noteNextRunAtFault(nextRunAtFaultRead,
 			"Could not read the last backup run; the next-backup estimate falls back to now",
 			"error", err)
+	case nextRunAtFaultParse:
+		s.noteNextRunAtFault(nextRunAtFaultParse,
+			"The last backup run's finish time is unparseable; the next-backup estimate falls back to now",
+			"run_id", run.ID, "finished_at", *run.FinishedAt, "error", err)
+	default:
+		s.nextRunAtFault.Store(nextRunAtFaultNone)
+	}
+	return &next
+}
+
+// nextIntervalRun is the interval-mode next-run instant: the newest backup run's
+// finish time plus interval, or now plus interval when there is no usable finish
+// time. NextRunAt reports it and the scheduler's first fire waits for it, so the
+// two cannot disagree (agent-os-dg04). fault names a read or parse failure,
+// with the run and error that caused it, for the caller to report.
+func nextIntervalRun(db *database.DB, interval time.Duration, now time.Time) (next time.Time, fault int32, run *models.BackupRun, err error) {
+	base := now.UTC()
+	runs, err := db.GetBackupRuns(1)
+	switch {
+	case err != nil:
+		fault = nextRunAtFaultRead
 	case len(runs) > 0 && runs[0].FinishedAt != nil:
 		parsed, parseErr := time.Parse(time.RFC3339, *runs[0].FinishedAt)
 		if parseErr != nil {
-			s.noteNextRunAtFault(nextRunAtFaultParse,
-				"The last backup run's finish time is unparseable; the next-backup estimate falls back to now",
-				"run_id", runs[0].ID, "finished_at", *runs[0].FinishedAt, "error", parseErr)
+			fault, run, err = nextRunAtFaultParse, &runs[0], parseErr
 			break
 		}
-		s.nextRunAtFault.Store(nextRunAtFaultNone)
-		base = parsed
+		if !parsed.IsZero() {
+			base = parsed
+		}
 	default:
 		// No run yet, or the newest has not finished. Normal, and silent: this
 		// is the ordinary state of a freshly started scheduler.
-		s.nextRunAtFault.Store(nextRunAtFaultNone)
 	}
-	if base.IsZero() {
-		base = time.Now().UTC()
-	}
-
-	next := base.Add(interval)
-	return &next
+	return base.Add(interval), fault, run, err
 }
 
 // Fault kinds recorded in BackupService.nextRunAtFault.
