@@ -47,6 +47,12 @@ type durableRun struct {
 	mu  sync.Mutex
 	log []StreamLine // replay buffer, bounded to replayBufMax
 
+	// dropped counts lines slid out of the front of log, so dropped+i is the
+	// run-wide number of log[i]. Forwarder cursors are run-wide numbers: an
+	// index into log stops meaning the same line once log slides
+	// (agent-os-7ifk).
+	dropped int
+
 	// done is closed exactly once when the op goroutine finishes.
 	done chan struct{}
 
@@ -88,16 +94,19 @@ func (r *durableRun) appendLog(line StreamLine) {
 	if len(r.log) >= replayBufMax {
 		copy(r.log, r.log[1:])
 		r.log = r.log[:replayBufMax-1]
+		r.dropped++
 	}
 	r.log = append(r.log, line)
 }
 
-// snapshot returns a copy of the current replay buffer and whether the run
-// has already finished.
-func (r *durableRun) snapshot() (lines []StreamLine, isDone bool) {
+// snapshot returns a copy of the current replay buffer, the run-wide number
+// of the line after its last one (the cursor a forwarder starts from), and
+// whether the run has already finished.
+func (r *durableRun) snapshot() (lines []StreamLine, end int, isDone bool) {
 	r.mu.Lock()
 	lines = make([]StreamLine, len(r.log))
 	copy(lines, r.log)
+	end = r.dropped + len(r.log)
 	r.mu.Unlock()
 
 	select {
@@ -105,7 +114,17 @@ func (r *durableRun) snapshot() (lines []StreamLine, isDone bool) {
 		isDone = true
 	default:
 	}
-	return lines, isDone
+	return lines, end, isDone
+}
+
+// linesFrom copies the lines from run-wide number cursor onward and returns
+// the cursor after them. A cursor already slid out of the buffer resumes at
+// the oldest retained line: dropped lines are gone. Caller holds r.mu.
+func (r *durableRun) linesFrom(cursor int) ([]StreamLine, int) {
+	start := max(cursor-r.dropped, 0)
+	out := make([]StreamLine, len(r.log)-start)
+	copy(out, r.log[start:])
+	return out, r.dropped + len(r.log)
 }
 
 // backupRunStore is the subset of *database.DB that BackupRunnerRegistry uses
@@ -832,7 +851,7 @@ func (reg *BackupRunnerRegistry) Attach(runID string, clientGone <-chan struct{}
 	reg.mu.Unlock()
 
 	if inReg {
-		lines, isDone := dr.snapshot()
+		lines, end, isDone := dr.snapshot()
 		if isDone {
 			return &AttachResult{
 				ReplayLines: lines,
@@ -877,7 +896,7 @@ func (reg *BackupRunnerRegistry) Attach(runID string, clientGone <-chan struct{}
 			}, nil
 		}
 		live := make(chan StreamLine, 256)
-		go reg.forwardLive(dr, len(lines), clientGone, live)
+		go reg.forwardLive(dr, end, clientGone, live)
 
 		return &AttachResult{
 			ReplayLines: lines,
@@ -928,7 +947,8 @@ func (reg *BackupRunnerRegistry) Attach(runID string, clientGone <-chan struct{}
 // forwardLive polls the durableRun's replay buffer for new entries and
 // forwards them to live until the run finishes or clientGone is closed.
 //
-// cursor is the index of the first unseen line in dr.log.
+// cursor is the run-wide number of the first unseen line (see
+// durableRun.dropped), not an index into dr.log.
 // clientGone should be the WS handler's wsCtx.Done() channel; when it fires
 // the forwarder stops immediately instead of blocking on a full buffer.
 // This prevents the goroutine+buffer leak that occurs when a disconnected
@@ -964,8 +984,7 @@ func (reg *BackupRunnerRegistry) forwardLive(dr *durableRun, cursor int, clientG
 		case <-dr.done:
 			// Flush any lines written between the last poll and done.
 			dr.mu.Lock()
-			tail := make([]StreamLine, len(dr.log[cursor:]))
-			copy(tail, dr.log[cursor:])
+			tail, _ := dr.linesFrom(cursor)
 			dr.mu.Unlock()
 			for _, l := range tail {
 				if !trySend(l) {
@@ -976,10 +995,8 @@ func (reg *BackupRunnerRegistry) forwardLive(dr *durableRun, cursor int, clientG
 
 		case <-time.After(pollInterval):
 			dr.mu.Lock()
-			newLines := dr.log[cursor:]
-			batch := make([]StreamLine, len(newLines))
-			copy(batch, newLines)
-			cursor += len(batch)
+			var batch []StreamLine
+			batch, cursor = dr.linesFrom(cursor)
 			dr.mu.Unlock()
 			for _, l := range batch {
 				if !trySend(l) {
