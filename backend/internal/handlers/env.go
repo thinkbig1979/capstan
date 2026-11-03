@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
@@ -431,6 +432,46 @@ func validateEnvEntries(entries []EnvEntry) error {
 		if strings.ContainsAny(e.Value, "\r\n") {
 			return fmt.Errorf("entry at index %d (key %q) has a value containing a newline; this would corrupt the env file", i, e.Key)
 		}
+		if err := validateEnvQuoting(e); err != nil {
+			return fmt.Errorf("entry at index %d (key %q) %w", i, e.Key, err)
+		}
+	}
+	return nil
+}
+
+// validateEnvQuoting checks the quote fields a client sends back (agent-os-wcrq).
+// They are written into the file around and after the value, so unchecked they
+// could end the quotes early or add a line. Errors never carry the value.
+func validateEnvQuoting(e EnvEntry) error {
+	switch e.Quote {
+	case "":
+	case "'", `"`:
+		idx, trailingEscape := closingQuote(e.Value, e.Quote[0])
+		if idx != -1 {
+			// compose reads \' and \" as the quote itself (compose-go v2
+			// dotenv/parser.go extractVarValue; pinned by
+			// TestEnvQuote_ComposeReadsEscapedQuoteWithoutBackslash).
+			return fmt.Errorf("has an unescaped %s inside its %s-quoted value, which would end the quotes early; write it as \\%s or use the raw view", e.Quote, e.Quote, e.Quote)
+		}
+		if trailingEscape {
+			return fmt.Errorf("has a value ending in a backslash, which would escape its closing quote; use the raw view")
+		}
+	default:
+		return errors.New("has an unsupported quote; use ', \" or none")
+	}
+
+	c := e.InlineComment
+	if c == "" {
+		return nil
+	}
+	if strings.ContainsAny(c, "\r\n") {
+		return errors.New("has an inline comment containing a newline; this would corrupt the env file")
+	}
+	body := strings.TrimLeft(c, " \t")
+	// After a closing quote any "#" starts a comment; after an unquoted value
+	// compose only cuts at " #", so the "#" must follow a space.
+	if body == "" || body[0] != '#' || (e.Quote == "" && !strings.HasSuffix(c[:len(c)-len(body)], " ")) {
+		return errors.New("has an inline comment that is not a # comment")
 	}
 	return nil
 }
@@ -504,39 +545,63 @@ func (h *EnvHandler) parseEnvFile(content string) []EnvEntry {
 		}
 
 		key := strings.TrimSpace(trimmedLine[:eqIndex])
-		value := strings.TrimSpace(trimmedLine[eqIndex+1:])
-
-		value = h.unquoteValue(value)
-
-		if inlineCommentIndex := strings.Index(value, " #"); inlineCommentIndex != -1 {
-			value = strings.TrimSpace(value[:inlineCommentIndex])
-		}
+		value, quote, inlineComment := splitEnvValue(strings.TrimSpace(trimmedLine[eqIndex+1:]))
 
 		entries = append(entries, EnvEntry{
-			Key:       key,
-			Value:     value,
-			Line:      lineNum,
-			Sensitive: services.IsSensitiveEnvKey(key),
-			Comment:   false,
+			Key:           key,
+			Value:         value,
+			Line:          lineNum,
+			Sensitive:     services.IsSensitiveEnvKey(key),
+			Comment:       false,
+			Quote:         quote,
+			InlineComment: inlineComment,
 		})
 	}
 
 	return entries
 }
 
-func (h *EnvHandler) unquoteValue(value string) string {
-	value = strings.TrimSpace(value)
-
-	if len(value) >= 2 {
-		if strings.HasPrefix(value, `"`) && strings.HasSuffix(value, `"`) {
-			return value[1 : len(value)-1]
+// splitEnvValue splits the text after "=" the way compose's dotenv parser
+// reads it (compose-go v2 dotenv/parser.go, extractVarValue): a quoted value
+// runs to its first unescaped closing quote and may be followed by a "#"
+// comment; an unquoted value ends at the first " #". The pieces concatenate
+// back to raw, which is what keeps an unedited save byte-identical.
+func splitEnvValue(raw string) (value, quote, inlineComment string) {
+	if raw != "" && (raw[0] == '\'' || raw[0] == '"') {
+		q := raw[0]
+		if end, _ := closingQuote(raw[1:], q); end != -1 {
+			rest := raw[1+end+1:]
+			if trimmed := strings.TrimLeftFunc(rest, unicode.IsSpace); trimmed == "" || trimmed[0] == '#' {
+				return raw[1 : 1+end], string(q), rest
+			}
 		}
-		if strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'") {
-			return value[1 : len(value)-1]
+		// Unterminated, or followed by something other than a comment: not a
+		// shape compose accepts on one line, so it is kept as unquoted text.
+	}
+	if i := strings.Index(raw, " #"); i != -1 {
+		value = strings.TrimRightFunc(raw[:i], unicode.IsSpace)
+		return value, "", raw[len(value):]
+	}
+	return raw, "", ""
+}
+
+// closingQuote returns the index in s of the first quote q not escaped by a
+// backslash, or -1. Like compose, a backslash escapes whatever follows it.
+// trailingEscape reports an unpaired backslash at the end of s, which would
+// escape a closing quote written after it.
+func closingQuote(s string, q byte) (idx int, trailingEscape bool) {
+	escaped := false
+	for i := 0; i < len(s); i++ {
+		switch {
+		case escaped:
+			escaped = false
+		case s[i] == '\\':
+			escaped = true
+		case s[i] == q:
+			return i, false
 		}
 	}
-
-	return value
+	return -1, escaped
 }
 
 func serializeEnvFile(entries []EnvEntry) string {
@@ -555,7 +620,14 @@ func serializeEnvFile(entries []EnvEntry) string {
 		} else {
 			buf.WriteString(entry.Key)
 			buf.WriteString("=")
+			buf.WriteString(entry.Quote)
 			buf.WriteString(entry.Value)
+			buf.WriteString(entry.Quote)
+			// Compose reads "KEY= # note" as the value "# note", so an emptied
+			// unquoted value loses its comment instead.
+			if entry.Quote != "" || entry.Value != "" {
+				buf.WriteString(entry.InlineComment)
+			}
 			buf.WriteString("\n")
 		}
 	}

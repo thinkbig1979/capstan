@@ -33,6 +33,13 @@ import type * as models from './generated'
  * in frontend/src/types/index.ts (the editor's draft row, which has no line
  * until the file is saved and re-parsed); an absent line decodes here as 0
  * and nothing on the request path reads it (agent-os-tuxp).
+ * Quote and InlineComment carry what the parser took off the value, so a row
+ * the user did not edit is written back byte-identical (agent-os-wcrq):
+ * stripping them turned PW='ab$cd' into PW=ab$cd, which compose interpolates.
+ * Value is the text between the quotes, verbatim (escapes not expanded).
+ * Quote is "", "'" or `"`; InlineComment is the text after the value or
+ * closing quote, such as "  # note". Both come back from the client on PUT,
+ * so validateEnvEntries checks them before they reach the file.
  */
 export interface EnvEntry {
   key: string;
@@ -40,6 +47,8 @@ export interface EnvEntry {
   line: number /* int */;
   sensitive: boolean;
   comment?: boolean;
+  quote?: string;
+  inlineComment?: string;
 }
 /**
  * EnvResponse is the wire shape of GET /:id/env when the stack HAS an env file.
