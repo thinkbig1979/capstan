@@ -388,8 +388,16 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 	var originalEnv []byte
 	var envPath string
 
-	if hasEnvUpdate && stack.EnvFile != "" {
-		envPath = filepath.Join(stack.Directory, stack.EnvFile)
+	// A stack with no env file recorded gets a new ".env" (agent-os-4p86): the
+	// request is "Extract to .env", and skipping its env half while saving the
+	// compose half that now references ${VAR} lost the value.
+	envFileName := stack.EnvFile
+	if hasEnvUpdate && envFileName == "" {
+		envFileName = ".env"
+	}
+
+	if hasEnvUpdate {
+		envPath = filepath.Join(stack.Directory, envFileName)
 		if err := validateStackPath(envPath, h.config); err != nil {
 			c.JSON(http.StatusBadRequest, models.NewAppError(
 				http.StatusBadRequest,
@@ -397,6 +405,27 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 				"Invalid env file path",
 			))
 			return
+		}
+
+		// Only a .env that is truly absent is created. With none recorded, the
+		// frontend sends just the one new VAR=value line (useExtractToEnv.ts),
+		// so writing it over a .env the scan has not seen yet would replace
+		// that file's other values. Any entry counts (file, symlink, dir), and
+		// an unreadable answer refuses too: fail closed.
+		if stack.EnvFile == "" {
+			_, lerr := os.Lstat(envPath)
+			switch {
+			case lerr == nil:
+				c.JSON(http.StatusConflict, models.NewAppError(
+					http.StatusConflict,
+					models.ErrValidation,
+					"A .env file exists but is not linked to this stack; rescan the stack, then try again",
+				))
+				return
+			case !os.IsNotExist(lerr):
+				renderResult(c, truth.Failed("failed to check for an existing env file; nothing written", lerr))
+				return
+			}
 		}
 
 		// Snapshot original .env content so we can restore it on rollback.
@@ -460,13 +489,27 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 		return
 	}
 
+	// Record a .env this request created, so compose is handed it as
+	// --env-file (services/docker.go passes it only when the stack row names
+	// one). One column, as EnvHandler.Create does: the scanner does not take
+	// this lock, so a whole-row write could undo its changes.
+	if hasEnvUpdate && stack.EnvFile == "" {
+		if _, err := h.db.SetStackEnvFileIfUnset(id, envFileName); err != nil {
+			renderResult(c, truth.Partial("compose and env files saved but the stack was not updated to use the new env file",
+				truth.KV("filename", envFileName),
+				truth.KV("dbError", err.Error()),
+			))
+			return
+		}
+	}
+
 	h.logAction(c, id, "update_compose_env", "Updated compose and env")
 
 	details := map[string]any{
 		"compose": stack.ComposeFile,
 	}
 	if hasEnvUpdate {
-		details["env"] = stack.EnvFile
+		details["env"] = envFileName
 	}
 	if len(lintResults) > 0 {
 		details["lintResults"] = lintResults
