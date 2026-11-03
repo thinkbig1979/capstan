@@ -251,6 +251,32 @@ func runDrained(ctx context.Context, runner commandRunner, name string, args, en
 // is 11 if the repository is already locked.").
 const resticExitRepoLocked = 11
 
+// resticExitSourceUnreadable is `restic backup`'s exit code for "snapshot
+// written, but some source data could not be read" (`restic help backup`,
+// restic 0.18.0: "Exit status is 3 if some source data could not be read
+// (incomplete snapshot created)."). OBSERVED with restic 0.18.0: the summary
+// line, snapshot_id included, is still printed, and each unreadable file gets
+// an "error" message naming it in "item" (agent-os-sufn). Only backup has this
+// meaning.
+const resticExitSourceUnreadable = 3
+
+// maxUnreadableListed caps how many unreadable paths a backup keeps by name.
+// They are file names from the stack's directory and land in the run item and
+// the log; the rest are only counted.
+const maxUnreadableListed = 20
+
+// isPartialBackup reports whether a failed `restic backup` still saved a
+// usable snapshot: exit 3, a snapshot id in the summary restic printed, at
+// least one file read, and the source directory itself not among the
+// unreadable items. Anything else is a failed backup. OBSERVED with restic
+// 0.18.0: a chmod-000 source directory (passed as an absolute path, as
+// Capstan does) exits 3 with a snapshot id and total_files_processed 0, a
+// snapshot that holds nothing (agent-os-sufn review).
+func isPartialBackup(err error, summary *ResticBackupSummary) bool {
+	return isExitCode(err, resticExitSourceUnreadable) && summary != nil &&
+		summary.SnapshotID != "" && summary.FilesProcessed > 0 && !summary.SourceUnreadable
+}
+
 // unlockTimeout bounds one `restic unlock`, which only lists and deletes small
 // lock files.
 const unlockTimeout = 2 * time.Minute
@@ -462,6 +488,38 @@ type ResticBackupSummary struct {
 	BytesStored  int64 // data_added_packed: bytes actually stored after dedup/compression
 	FilesNew     int
 	FilesChanged int
+	// FilesProcessed is total_files_processed: files read, changed or not.
+	FilesProcessed int
+	// Unreadable names the first maxUnreadableListed paths restic reported it
+	// could not read; UnreadableCount counts all of them. SourceUnreadable is
+	// set when one of them is the backed-up directory itself.
+	Unreadable       []string
+	UnreadableCount  int
+	SourceUnreadable bool
+	// source is the directory being backed up, for SourceUnreadable.
+	source string
+}
+
+// noteUnreadable records one item restic could not read. A nil summary is a
+// caller that only wants the translated line (TestResticJSONToLine passes one).
+//
+// Errors from the "scan" phase are skipped: restic 0.18.0 reports an
+// unreadable directory once during scan and again, with the same item, during
+// archival, and an unreadable file during archival only (OBSERVED). Counting
+// archival errors alone counts each item once without keeping a set, which
+// would grow with the number of unreadable files. An error with no "during"
+// (an older restic) is counted.
+func (s *ResticBackupSummary) noteUnreadable(item, during string) {
+	if s == nil || during == "scan" {
+		return
+	}
+	s.UnreadableCount++
+	if s.source != "" && filepath.Clean(item) == s.source {
+		s.SourceUnreadable = true
+	}
+	if len(s.Unreadable) < maxUnreadableListed {
+		s.Unreadable = append(s.Unreadable, item)
+	}
 }
 
 // resticJSONMessage is the subset of restic's `backup --json` message schema we
@@ -473,6 +531,8 @@ type resticJSONMessage struct {
 	DataAdded       int64  `json:"data_added"`
 	DataAddedPacked int64  `json:"data_added_packed"`
 	SnapshotID      string `json:"snapshot_id"`
+	FilesProcessed  int    `json:"total_files_processed"`
+	During          string `json:"during"`
 	Error           struct {
 		Message string `json:"message"`
 	} `json:"error"`
@@ -517,7 +577,7 @@ func (m *ResticManager) Backup(ctx context.Context, stackDir string, tags []stri
 	// Translate restic's --json stream into friendly lines while capturing the
 	// summary. The runner writes raw lines to an intermediate channel; this
 	// goroutine forwards human-readable lines to out and records the summary.
-	summary := &ResticBackupSummary{}
+	summary := &ResticBackupSummary{source: filepath.Clean(stackDir)}
 	raw := make(chan StreamLine, 32)
 	translateDone := make(chan struct{})
 	go func() {
@@ -570,6 +630,7 @@ func resticJSONToLine(raw string, summary *ResticBackupSummary) (line string, ha
 		summary.BytesStored = msg.DataAddedPacked
 		summary.FilesNew = msg.FilesNew
 		summary.FilesChanged = msg.FilesChanged
+		summary.FilesProcessed = msg.FilesProcessed
 
 		short := shortSnapshotID(msg.SnapshotID)
 		if msg.DataAdded == 0 {
@@ -581,6 +642,7 @@ func resticJSONToLine(raw string, summary *ResticBackupSummary) (line string, ha
 	case "error":
 		m := msg.Error.Message
 		if msg.Item != "" {
+			summary.noteUnreadable(msg.Item, msg.During)
 			m = msg.Item + ": " + m
 		}
 		return "Error: " + m, true

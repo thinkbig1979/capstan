@@ -912,6 +912,8 @@ func (s *BackupService) executeBackupRun(
 	var retentionFailed []string
 	// Stacks whose snapshot succeeded but was not verified.
 	var verifyFailed []string
+	// Stacks whose snapshot was saved without some unreadable files.
+	var partialStacks []string
 
 	// The database goes first, deliberately. It is the artifact without which a
 	// restore produces an empty Capstan, and capturing it before the per-stack
@@ -974,6 +976,9 @@ func (s *BackupService) executeBackupRun(
 		}
 		if res.verifyFailed {
 			verifyFailed = append(verifyFailed, stackID)
+		}
+		if res.partial {
+			partialStacks = append(partialStacks, fmt.Sprintf("%s (%d)", stackID, res.unreadable))
 		}
 	}
 
@@ -1084,6 +1089,18 @@ func (s *BackupService) executeBackupRun(
 	if len(verifyFailed) > 0 {
 		msg := fmt.Sprintf("snapshot not verified for stack(s) %s: verify failed (see per-stack details)",
 			strings.Join(verifyFailed, ", "))
+		stream(out, "error", msg)
+		if run.Status == "success" {
+			run.Status = "partial"
+		}
+		runReasons = append(runReasons, msg)
+	}
+
+	// A snapshot saved without some files is not a full backup, even though
+	// its item keeps "success" (agent-os-sufn).
+	if len(partialStacks) > 0 {
+		msg := fmt.Sprintf("some files could not be read for stack(s) %s: their snapshots were saved without them (see per-stack details)",
+			strings.Join(partialStacks, ", "))
 		stream(out, "error", msg)
 		if run.Status == "success" {
 			run.Status = "partial"
@@ -1294,6 +1311,12 @@ type stackResult struct {
 	// `restic ls` failed, or restic reported no snapshot id to verify
 	// (agent-os-3st7). Same shape as retentionFailed.
 	verifyFailed bool
+	// partial is set when restic wrote the snapshot but could not read some
+	// of the stack's files (exit 3, agent-os-sufn); unreadable counts them.
+	// The item keeps "success" because the snapshot is real; the run must not
+	// read as a clean one. backup_run_items has no "partial" status.
+	partial    bool
+	unreadable int
 }
 
 // backupStack performs the full backup cycle for a single stack (stop, backup,
@@ -1408,7 +1431,16 @@ func (s *BackupService) backupStack(
 	tags := []string{stackID}
 	summary, backupErr := restic.Backup(ctx, stack.Directory, tags, out)
 	if backupErr != nil {
-		return res, fmt.Errorf("restic backup: %w", backupErr)
+		if !isPartialBackup(backupErr, summary) {
+			return res, fmt.Errorf("restic backup: %w", backupErr)
+		}
+		// The snapshot exists and lacks only what restic could not read, so
+		// it is verified and retained like a complete one (agent-os-sufn).
+		res.partial = true
+		res.unreadable = summary.UnreadableCount
+		warn(unreadableNote(summary))
+		s.logger.Warn("backup snapshot saved without unreadable files",
+			"stack", stackID, "count", summary.UnreadableCount, "listed", summary.Unreadable)
 	}
 	if summary != nil {
 		res.bytesAdded = summary.BytesAdded
@@ -1432,17 +1464,58 @@ func (s *BackupService) backupStack(
 		}
 	}
 
-	// Apply retention policy.
+	// Apply retention policy, for a partial snapshot too: skipping it is what
+	// let a stack with one permanently unreadable file grow its repository
+	// forever (agent-os-sufn). restic's keep-* policy keeps the latest
+	// snapshot per daily/weekly/monthly/yearly bucket and cannot tell a
+	// partial snapshot from a complete one (marking it needs `restic tag`,
+	// which rewrites it under a new id). Two costs follow. A later partial
+	// snapshot replaces an earlier complete one in the same bucket. And if
+	// the unreadable set GROWS (a permission change, a failing disk), every
+	// bucket fills with partial snapshots while each run reads "partial" as
+	// before, so the newest complete snapshot ages out: after the keep-daily
+	// days, then the keep-weekly weeks, then the keep-monthly months. No
+	// guard exists for that yet; see the follow-up bead.
 	if retentionErr := restic.ApplyRetention(ctx, stackID, out); retentionErr != nil {
 		warn(fmt.Sprintf("retention warning: %v", retentionErr))
 		res.retentionFailed = true
 	}
 
-	stream(out, "info", fmt.Sprintf("[%s] completed successfully", stackID))
+	if res.partial {
+		stream(out, "info", fmt.Sprintf("[%s] completed; some files could not be read", stackID))
+	} else {
+		stream(out, "info", fmt.Sprintf("[%s] completed successfully", stackID))
+	}
 
 	// The deferred restart will fire here for the stop-policy path unless the
 	// stack was known to be stopped beforehand.
 	return res, nil
+}
+
+// maxNotedPathBytes caps each path in the note: 20 paths at PATH_MAX would
+// make one item note about 80 KB.
+const maxNotedPathBytes = 200
+
+// unreadableNote says, for the run item, which paths a partial snapshot lacks:
+// the first maxUnreadableListed by name, the rest by count. Paths are quoted,
+// so a ", " or a newline in a file name cannot blur where one ends.
+func unreadableNote(summary *ResticBackupSummary) string {
+	if summary.UnreadableCount == 0 {
+		return "snapshot saved, but restic could not read some files and named none"
+	}
+	quoted := make([]string, len(summary.Unreadable))
+	for i, p := range summary.Unreadable {
+		if len(p) > maxNotedPathBytes {
+			p = p[:maxNotedPathBytes] + "..."
+		}
+		quoted[i] = fmt.Sprintf("%q", p)
+	}
+	note := fmt.Sprintf("snapshot saved without %d unreadable path(s): %s",
+		summary.UnreadableCount, strings.Join(quoted, ", "))
+	if more := summary.UnreadableCount - len(summary.Unreadable); more > 0 {
+		note += fmt.Sprintf(" (and %d more, not listed)", more)
+	}
+	return note
 }
 
 // --- RunSync ---
