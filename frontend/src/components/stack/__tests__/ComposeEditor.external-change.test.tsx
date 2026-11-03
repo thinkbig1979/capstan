@@ -264,4 +264,40 @@ describe('ComposeEditor after a git pull (agent-os-umig)', () => {
     expect(view.text).toBe(more)
     expect(screen.getByText('Save')).not.toBeDisabled()
   })
+  // The sync effect in ComposeEditor.tsx: the view must follow a load whose
+  // text equals the previous load. Reached only when the save's own refetch
+  // lands while the user is still typing (so nothing is loaded and `loaded`
+  // stays at A), the user types back to the saved text, and then the file on
+  // disk goes back to A. The doc prop does not change (A -> A), so only that
+  // effect can put A in the view.
+  it('the view shows the file when a reload brings back the text loaded before the save', async () => {
+    const queryClient = renderEditor()
+    await loaded()
+    type(EDITED)
+
+    let release: () => void = () => {}
+    mockGetCompose.mockImplementationOnce(
+      () => new Promise((resolve) => {
+        release = () => resolve({ content: diskText })
+      }),
+    )
+    fireEvent.click(screen.getByText('Save'))
+    await waitFor(() => expect(mockUpdateCompose).toHaveBeenCalledWith('s1', EDITED))
+    await waitFor(() => expect(mockGetCompose).toHaveBeenCalledTimes(2))
+    type(EDITED + '    restart: always\n')
+    await act(async () => release())
+    const key = ['stack', 's1', 'compose']
+    await waitFor(() => expect(queryClient.getQueryState(key)?.fetchStatus).toBe('idle'))
+    expect(queryClient.getQueryData(key)).toBe(EDITED)
+
+    // Back to the saved text: clean again, view shows EDITED.
+    type(EDITED)
+    await waitFor(() => expect(screen.getByText('Save')).toBeDisabled())
+
+    await pullTo(ORIGINAL)
+
+    await waitFor(() => expect(queryClient.getQueryData(key)).toBe(ORIGINAL))
+    await waitFor(() => expect(view.text).toBe(ORIGINAL))
+    expect(screen.queryByText(NOTICE)).not.toBeInTheDocument()
+  })
 })

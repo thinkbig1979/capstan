@@ -17,7 +17,8 @@ interface UseExternalFileChangeOptions<T> {
 /**
  * Loads new query data into a file editor without throwing away unsaved
  * edits (agent-os-umig). A clean editor reloads silently. A dirty one keeps
- * its edits and holds the newest data until the user reloads or saves: a git
+ * its edits and holds the newest data until the user reloads, or until the
+ * refetch after a save brings the saved text back to a clean editor: a git
  * pull, a window-focus refetch or another tab's save would otherwise replace
  * what the user typed, and the next save would write over the change on disk.
  *
@@ -56,7 +57,5 @@ export function useExternalFileChange<T>(
       hydrate(pending.value)
       setPending(null)
     },
-    /** A successful save made the editor's text the version on disk. */
-    dismiss: () => setPending(null),
   }
 }

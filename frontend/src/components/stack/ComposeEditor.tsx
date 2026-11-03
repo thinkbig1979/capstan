@@ -75,7 +75,7 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
   })
 
   const hasUnsavedChanges = content !== lastSaved
-  const { changedOnDisk, reload, dismiss } = useExternalFileChange(data, {
+  const { changedOnDisk, reload } = useExternalFileChange(data, {
     isDirty: hasUnsavedChanges,
     hydrate: (next) => {
       // '' is an absent body (see the queryFn), not a file to load.
@@ -100,19 +100,12 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
     }
   }, [loaded, viewRef])
 
-  // A save makes the editor's text the version on disk, so a pending
-  // "changed on disk" version is no longer newer than what was written.
-  const markSaved = (saved: string) => {
-    setLastSaved(saved)
-    dismiss()
-  }
-
   const { lintResults, showSaveConfirm, setShowSaveConfirm, isLintingBeforeSave, saveMutation, lintMutation, handleSave, handleLint } =
     useComposeSaveAndLint({
       stackId,
       viewRef,
       handleSaveRef,
-      setLastSaved: markSaved,
+      setLastSaved,
       onOpenCommit: stack?.isGitRepo ? () => setCommitOpen(true) : undefined,
     })
 
@@ -124,14 +117,7 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
     isExtracting,
     handleExtractToEnv,
     confirmExtract,
-  } = useExtractToEnv({
-    stackId,
-    viewRef,
-    selectedText,
-    setSelectedText,
-    setContent,
-    setLastSaved: markSaved,
-  })
+  } = useExtractToEnv({ stackId, viewRef, selectedText, setSelectedText, setContent, setLastSaved })
 
   const errorCount = lintResults.filter((r) => r.level === 'error').length
 

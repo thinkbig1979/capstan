@@ -115,7 +115,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   // rows edited while locked hold blanked secrets (Save is only disabled,
   // EnvTableView.tsx), and carrying them over an unlock would let a save write
   // the blanks. The edits a lock change still discards are agent-os-vqf5.
-  const { changedOnDisk, reload, dismiss } = useExternalFileChange(envData, {
+  const { changedOnDisk, reload } = useExternalFileChange(envData, {
     isDirty: hasUnsavedChanges,
     hydrate,
     canHydrateWhileDirty: (next, prev) => {
@@ -129,20 +129,13 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
     },
   })
 
-  // A successful save (or a created file) makes the editor's content the
-  // version on disk, so a pending newer version no longer is.
-  const setSavedState: typeof setHasUnsavedChanges = (value) => {
-    setHasUnsavedChanges(value)
-    if (value === false) dismiss()
-  }
-
   const { saveMutation, createEnvMutation, handleSaveTable, handleSaveRaw } = useEnvMutations({
     stackId,
     entries,
     rawContent,
     setEntries,
     setRawContent,
-    setHasUnsavedChanges: setSavedState,
+    setHasUnsavedChanges,
     setShowEnvSection,
     resetHistory,
   })
