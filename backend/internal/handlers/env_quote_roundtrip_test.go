@@ -188,7 +188,7 @@ func putEntries(t *testing.T, router *gin.Engine, stackID, token string, entries
 
 func readEnvQuoteFile(t *testing.T, path string) string {
 	t.Helper()
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) //nolint:gosec // test helper: path is a file under the test's own t.TempDir()
 	require.NoError(t, err)
 	return string(b)
 }
