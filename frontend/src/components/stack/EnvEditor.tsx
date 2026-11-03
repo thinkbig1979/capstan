@@ -18,6 +18,9 @@ import type { EnvEntryRow } from './env-editor/types'
 import { queryKeys } from '@/lib/query-keys'
 import { classifyError } from '@/lib/error-handler'
 import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
+import { FileChangedNotice } from '@/components/FileChangedNotice'
+import { useExternalFileChange } from '@/hooks/useExternalFileChange'
+import type { EnvEntryDraft, EnvFileResponse } from '@/types'
 
 interface EnvEditorProps {
   stackId: string
@@ -32,6 +35,9 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   const [entries, setEntries] = useState<EnvEntryRow[]>([])
   const [rawContent, setRawContent] = useState('')
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
+  // The rows and raw text as last loaded. Table and raw are edited
+  // independently, so this is what tells which of them the user changed.
+  const [loadedEnv, setLoadedEnv] = useState<{ rows: EnvEntryDraft[]; raw: string }>({ rows: [], raw: '' })
   const [showEnvSection, setShowEnvSection] = useState(false)
   const nextRowId = useNextRowId()
 
@@ -75,14 +81,8 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
     queryFn: () => stacksApi.getEnv(stackId),
   })
 
-  // Hydrate local editable state whenever a new envData query result arrives.
-  // Adjusted during render (rather than in an effect) by comparing against the
-  // envData reference from the previous render — see
-  // https://react.dev/learn/you-might-not-need-an-effect.
-  const [prevEnvData, setPrevEnvData] = useState(envData)
-  if (envData !== prevEnvData) {
-    setPrevEnvData(envData)
-    if (envData?.hasEnvFile) {
+  const hydrate = (next: EnvFileResponse) => {
+    if (next.hasEnvFile) {
       // A reveal is stored as `sensitive: false` on the row itself, so a refetch
       // would silently re-mask whatever the user had uncovered. That refetch is
       // now routine: unlocking invalidates this query to swap the blanked values
@@ -91,23 +91,43 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
       const revealedKeys = new Set(
         entries.filter((e) => !e.sensitive && isSensitiveKey(e.key)).map((e) => e.key),
       )
-      const rows = envData.entries.map((e) => ({
+      const rows = next.entries.map((e) => ({
         ...e,
         sensitive: e.sensitive && !revealedKeys.has(e.key),
         _rowId: nextRowId(),
       }))
       setEntries(rows)
+      setLoadedEnv({ rows, raw: next.raw ?? '' })
       // `raw` is absent while locked — the backend withholds it rather than
       // sending an empty file, so default it instead of writing `undefined` into
       // a textarea (agent-os-7o5s).
-      setRawContent(envData.raw ?? '')
+      setRawContent(next.raw ?? '')
       setHasUnsavedChanges(false)
       setShowEnvSection(true)
-      resetHistory(rows, envData.raw ?? '')
+      resetHistory(rows, next.raw ?? '')
     } else {
       setShowEnvSection(false)
     }
   }
+
+  // Unsaved edits survive a new payload (agent-os-umig), except across a lock
+  // change or the file appearing or going away, which keep the plain hydrate:
+  // rows edited while locked hold blanked secrets (Save is only disabled,
+  // EnvTableView.tsx), and carrying them over an unlock would let a save write
+  // the blanks. The edits a lock change still discards are agent-os-vqf5.
+  const { changedOnDisk, reload } = useExternalFileChange(envData, {
+    isDirty: hasUnsavedChanges,
+    hydrate,
+    canHydrateWhileDirty: (next, prev) => {
+      if (!next.hasEnvFile || !prev?.hasEnvFile) return true
+      if (Boolean(next.locked) !== Boolean(prev.locked)) return true
+      // Every representation the user edited must already equal the new
+      // file. Matching only one of them hydrates over edits in the other.
+      const rawEdited = rawContent !== loadedEnv.raw
+      const rowsEdited = !sameEntries(entries, loadedEnv.rows)
+      return (!rawEdited || next.raw === rawContent) && (!rowsEdited || sameEntries(next.entries, entries))
+    },
+  })
 
   const { saveMutation, createEnvMutation, handleSaveTable, handleSaveRaw } = useEnvMutations({
     stackId,
@@ -205,6 +225,8 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
         />
       )}
 
+      {changedOnDisk && <FileChangedNotice onReload={reload} />}
+
       <EnvTableView
         visible={view === 'table'}
         entries={entries}
@@ -228,5 +250,24 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
         />
       )}
     </div>
+  )
+}
+
+/**
+ * Two row lists say the same file, field for field. Quote and inline comment
+ * count: a table save writes them back (agent-os-wcrq). `sensitive` does not,
+ * it is display state.
+ */
+function sameEntries(a: EnvEntryDraft[], b: EnvEntryDraft[]) {
+  return (
+    a.length === b.length &&
+    a.every(
+      (e, i) =>
+        e.key === b[i].key &&
+        e.value === b[i].value &&
+        !!e.comment === !!b[i].comment &&
+        (e.quote ?? '') === (b[i].quote ?? '') &&
+        (e.inlineComment ?? '') === (b[i].inlineComment ?? ''),
+    )
   )
 }
