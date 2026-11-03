@@ -1466,11 +1466,16 @@ func (s *BackupService) backupStack(
 
 	// Apply retention policy, for a partial snapshot too: skipping it is what
 	// let a stack with one permanently unreadable file grow its repository
-	// forever (agent-os-sufn). The cost, accepted: restic's keep-* policy
-	// keeps the latest snapshot per daily/weekly/monthly/yearly bucket, so a
-	// later partial snapshot replaces an earlier complete one in the SAME
-	// bucket. restic cannot mark a snapshot partial without `restic tag`,
-	// which rewrites it under a new id.
+	// forever (agent-os-sufn). restic's keep-* policy keeps the latest
+	// snapshot per daily/weekly/monthly/yearly bucket and cannot tell a
+	// partial snapshot from a complete one (marking it needs `restic tag`,
+	// which rewrites it under a new id). Two costs follow. A later partial
+	// snapshot replaces an earlier complete one in the same bucket. And if
+	// the unreadable set GROWS (a permission change, a failing disk), every
+	// bucket fills with partial snapshots while each run reads "partial" as
+	// before, so the newest complete snapshot ages out: after the keep-daily
+	// days, then the keep-weekly weeks, then the keep-monthly months. No
+	// guard exists for that yet; see the follow-up bead.
 	if retentionErr := restic.ApplyRetention(ctx, stackID, out); retentionErr != nil {
 		warn(fmt.Sprintf("retention warning: %v", retentionErr))
 		res.retentionFailed = true
@@ -1487,14 +1492,26 @@ func (s *BackupService) backupStack(
 	return res, nil
 }
 
-// unreadableNote says, for the run item, which files a partial snapshot lacks:
-// the first maxUnreadableListed by name, the rest by count.
+// maxNotedPathBytes caps each path in the note: 20 paths at PATH_MAX would
+// make one item note about 80 KB.
+const maxNotedPathBytes = 200
+
+// unreadableNote says, for the run item, which paths a partial snapshot lacks:
+// the first maxUnreadableListed by name, the rest by count. Paths are quoted,
+// so a ", " or a newline in a file name cannot blur where one ends.
 func unreadableNote(summary *ResticBackupSummary) string {
 	if summary.UnreadableCount == 0 {
 		return "snapshot saved, but restic could not read some files and named none"
 	}
-	note := fmt.Sprintf("snapshot saved without %d unreadable file(s): %s",
-		summary.UnreadableCount, strings.Join(summary.Unreadable, ", "))
+	quoted := make([]string, len(summary.Unreadable))
+	for i, p := range summary.Unreadable {
+		if len(p) > maxNotedPathBytes {
+			p = p[:maxNotedPathBytes] + "..."
+		}
+		quoted[i] = fmt.Sprintf("%q", p)
+	}
+	note := fmt.Sprintf("snapshot saved without %d unreadable path(s): %s",
+		summary.UnreadableCount, strings.Join(quoted, ", "))
 	if more := summary.UnreadableCount - len(summary.Unreadable); more > 0 {
 		note += fmt.Sprintf(" (and %d more, not listed)", more)
 	}
