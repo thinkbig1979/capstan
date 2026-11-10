@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
@@ -172,15 +173,25 @@ func stacksSharingFiles(db stackLister, selfID string, paths []string) ([]models
 	return sharers, nil
 }
 
-// isSharedTarget reports whether path is one of targets. A path that does not
-// exist cannot be an existing target; any other error leaves the answer
-// unknown and is returned.
+// isSharedTarget reports whether path is one of targets. A path that cannot
+// name a file (missing, a link loop, a non-folder in its middle) is no match:
+// one broken stack must not refuse every other stack's save, and it cannot be
+// a file this save writes. Any other error (EACCES) leaves the answer unknown
+// and is returned.
 func isSharedTarget(path string, targets []sharedTarget) (bool, error) {
 	var info os.FileInfo
 	for _, t := range targets {
 		if t.info == nil {
 			resolved, err := pathutil.ResolveExisting(path)
 			if err != nil {
+				// EvalSymlinks reports a loop as its own error, not ELOOP
+				// (OBSERVED: the looping-link POST case of
+				// TestSharedFileSave_BrokenUnrelatedStack_0j8a answered 500
+				// when this error was checked directly); the kernel's answer
+				// for the same path says which it is.
+				if _, statErr := os.Stat(path); namesNoFile(statErr) {
+					continue
+				}
 				return false, err
 			}
 			if resolved == t.resolved {
@@ -191,7 +202,7 @@ func isSharedTarget(path string, targets []sharedTarget) (bool, error) {
 		if info == nil {
 			var err error
 			info, err = os.Stat(path)
-			if errors.Is(err, os.ErrNotExist) {
+			if namesNoFile(err) {
 				continue
 			}
 			if err != nil {
@@ -203,6 +214,11 @@ func isSharedTarget(path string, targets []sharedTarget) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// namesNoFile reports whether err says the path cannot reach a file at all.
+func namesNoFile(err error) bool {
+	return errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ELOOP) || errors.Is(err, syscall.ENOTDIR)
 }
 
 // acquireExclusiveLock is acquireStackLock for an operation that takes every

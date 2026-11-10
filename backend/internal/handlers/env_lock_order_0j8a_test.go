@@ -117,7 +117,13 @@ func (f lockOrderFixture) putEnvParkedInBind(t *testing.T, id string, between fu
 		case err := <-errc:
 			require.NoError(t, err)
 		case <-done:
-			t.Fatalf("handler answered %d before reading the whole body: %s", rec.Code, rec.Body.String())
+			// The handler finishing and the write returning can be ready at
+			// once. Closing the pipe fails only a write still waiting for a
+			// reader, so the write's own result says which happened.
+			pr.CloseWithError(io.ErrClosedPipe)
+			if err := <-errc; err != nil {
+				t.Fatalf("handler answered %d before reading the whole body: %s", rec.Code, rec.Body.String())
+			}
 		case <-time.After(10 * time.Second):
 			t.Fatal("handler never read the request body")
 		}
@@ -367,6 +373,156 @@ func TestSharedFileSave_LocksEveryStack_0j8a(t *testing.T) {
 				assert.NotEqual(t, before, snapshot(shared), "the save must land on the shared file")
 				assertFree(t, f, "a", "b")
 			})
+		})
+	}
+}
+
+// TestSharedFileSave_BrokenUnrelatedStack_0j8a: a registered stack whose files
+// cannot exist (a compose file that is a link to itself, ELOOP; a folder that
+// is a regular file, ENOTDIR) shares nothing, so it must not turn a healthy
+// stack's save into a 500. Covers both branches of the sharer check: an
+// existing target (PUT) and a missing one (POST /env).
+func TestSharedFileSave_BrokenUnrelatedStack_0j8a(t *testing.T) {
+	for _, broken := range []string{"looping compose link", "folder is a file"} {
+		for _, tc := range []struct {
+			method, path, body string
+			okCode             int
+		}{
+			{http.MethodPut, "/a/compose", `{"content":"services:\n  web:\n    image: nginx\n"}`, http.StatusOK},
+			{http.MethodPut, "/a/env", `{"raw":"NEW=1\n"}`, http.StatusOK},
+			{http.MethodPost, "/b/env", `{"content":"NEW=1\n"}`, http.StatusCreated},
+		} {
+			t.Run(broken+" "+tc.method+" "+tc.path, func(t *testing.T) {
+				f := newLockOrderFixture(t)
+				a, b := filepath.Join(f.root, "a"), filepath.Join(f.root, "b")
+				writeFile0j8a(t, filepath.Join(a, "compose.yaml"), "services: {}\n")
+				writeFile0j8a(t, filepath.Join(a, ".env"), "OLD=1\n")
+				writeFile0j8a(t, filepath.Join(b, "compose.yaml"), "services: {}\n")
+				f.addStack(t, "a", a, "compose.yaml", ".env")
+				f.addStack(t, "b", b, "compose.yaml", "")
+
+				c := filepath.Join(f.root, "c")
+				switch broken {
+				case "looping compose link":
+					require.NoError(t, os.MkdirAll(c, 0o755))
+					require.NoError(t, os.Symlink(filepath.Join(c, "compose.yaml"), filepath.Join(c, "compose.yaml")))
+				case "folder is a file":
+					writeFile0j8a(t, c, "not a folder\n")
+				}
+				f.addStack(t, "c", c, "compose.yaml", ".env")
+
+				rec := f.do(tc.method, tc.path, tc.body)
+
+				assert.Equal(t, tc.okCode, rec.Code, "an unrelated broken stack must not block the save: %s", rec.Body.String())
+			})
+		}
+	}
+}
+
+// listStacksSequence answers each ListStacks call with the next entry.
+type listStacksSequence struct {
+	answers [][]models.Stack
+	calls   int
+}
+
+func (s *listStacksSequence) ListStacks() ([]models.Stack, error) {
+	answer := s.answers[min(s.calls, len(s.answers)-1)]
+	s.calls++
+	return answer, nil
+}
+
+// TestLockStacksSharingFiles_SharersChangedUnderLock_0j8a: the sharers are
+// found again once every lock is held. When the second answer differs (a link
+// moved before its stack's lock was taken) the save is refused with 409 and
+// every lock it took is free again; the same answer twice locks both stacks.
+func TestLockStacksSharingFiles_SharersChangedUnderLock_0j8a(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	root := t.TempDir()
+	shared := filepath.Join(root, "s", ".env")
+	writeFile0j8a(t, shared, "OLD=1\n")
+	stackA := models.Stack{ID: "a", Directory: filepath.Join(root, "s"), ComposeFile: "compose.yaml", EnvFile: ".env", ProjectName: "a"}
+	stackB := models.Stack{ID: "b", Directory: filepath.Join(root, "s"), ComposeFile: "compose.prod.yaml", EnvFile: ".env", ProjectName: "b"}
+
+	assertFree := func(t *testing.T, lock *services.OperationLock) {
+		t.Helper()
+		for _, id := range []string{"a", "b"} {
+			token, err := lock.Acquire(id, "test probe")
+			if assert.NoError(t, err, "stack %s's lock must be free", id) {
+				lock.Release(id, token)
+			}
+		}
+	}
+
+	t.Run("sharers changed", func(t *testing.T) {
+		lock := services.NewOperationLock()
+		db := &listStacksSequence{answers: [][]models.Stack{{stackA, stackB}, {stackA}}}
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+
+		release, ok := lockStacksSharingFiles(c, lock, db, &stackA, services.OpKindEnv, shared)
+
+		assert.False(t, ok, "a sharer set that changed under the locks must refuse")
+		assert.Nil(t, release)
+		assert.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+		assert.Equal(t, 2, db.calls, "the sharers must be listed twice")
+		assertFree(t, lock)
+	})
+
+	t.Run("sharers unchanged", func(t *testing.T) {
+		lock := services.NewOperationLock()
+		db := &listStacksSequence{answers: [][]models.Stack{{stackA, stackB}}}
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+
+		release, ok := lockStacksSharingFiles(c, lock, db, &stackA, services.OpKindEnv, shared)
+
+		require.True(t, ok, rec.Body.String())
+		_, err := lock.Acquire("b", "test probe")
+		assert.Error(t, err, "the sharer b must be held while the save runs")
+		release()
+		release()
+		assertFree(t, lock)
+	})
+}
+
+// TestEnvSave_PathCheckAfterLock_0j8a pins the order itself: with the stack's
+// own lock held elsewhere and a path that resolves outside the root, the save
+// must answer the lock's 409, not the path check's 400. A path check that ran
+// before the lock would answer 400. With the lock free the same request is 400.
+func TestEnvSave_PathCheckAfterLock_0j8a(t *testing.T) {
+	for _, tc := range []struct {
+		name, method, body string
+		setup              func(t *testing.T, f lockOrderFixture, outside string)
+	}{
+		{"PUT, .env links outside", http.MethodPut, `{"raw":"NEW=1\n"}`, func(t *testing.T, f lockOrderFixture, outside string) {
+			dir := filepath.Join(f.root, "app")
+			writeFile0j8a(t, filepath.Join(dir, "compose.yaml"), "services: {}\n")
+			writeFile0j8a(t, filepath.Join(outside, "secret.env"), "KEEP=1\n")
+			require.NoError(t, os.Symlink(filepath.Join(outside, "secret.env"), filepath.Join(dir, ".env")))
+			f.addStack(t, "app", dir, "compose.yaml", ".env")
+		}},
+		{"POST, folder links outside", http.MethodPost, `{"content":"NEW=1\n"}`, func(t *testing.T, f lockOrderFixture, outside string) {
+			dir := filepath.Join(f.root, "app")
+			writeFile0j8a(t, filepath.Join(outside, "compose.yaml"), "services: {}\n")
+			require.NoError(t, os.Symlink(outside, dir))
+			f.addStack(t, "app", dir, "compose.yaml", "")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newLockOrderFixture(t)
+			tc.setup(t, f, t.TempDir())
+			token, err := f.lock.Acquire("app", "test holder")
+			require.NoError(t, err)
+
+			rec := f.do(tc.method, "/app/env", tc.body)
+
+			assert.Equal(t, http.StatusConflict, rec.Code, "the path must be checked only once the lock is held: %s", rec.Body.String())
+
+			// Same request with the lock free: the path check refuses it, so
+			// the 409 above was the lock answering first, not a passing path.
+			f.lock.Release("app", token)
+			rec = f.do(tc.method, "/app/env", tc.body)
+			assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
 		})
 	}
 }
