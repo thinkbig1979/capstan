@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"unicode"
 
@@ -39,6 +40,11 @@ type EnvRequest struct {
 // Create after the file is on disk and before the stack row records it, which
 // is the window agent-os-z91e.23's tests park a concurrent scan in.
 var envCreateBeforeRecordHook func()
+
+// envCreateBeforeLockHook is TEST-ONLY and nil in production. It runs in
+// Create after the stack row is read and before the lock is taken, the window
+// agent-os-0j8a's test retargets the stack's folder link in.
+var envCreateBeforeLockHook func()
 
 func NewEnvHandler(db *database.DB, config *config.Config) *EnvHandler {
 	return &EnvHandler{
@@ -221,15 +227,7 @@ func (h *EnvHandler) Put(c *gin.Context) {
 
 	envPath := filepath.Join(stack.Directory, stack.EnvFile)
 
-	if err := validateStackPath(envPath, h.config); err != nil {
-		c.JSON(http.StatusBadRequest, models.NewAppError(
-			http.StatusBadRequest,
-			models.ErrPathTraversal,
-			"Invalid env file path",
-		))
-		return
-	}
-
+	// The body is read before the lock, so a slow client cannot hold the stack.
 	var req EnvRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.NewAppError(
@@ -240,12 +238,24 @@ func (h *EnvHandler) Put(c *gin.Context) {
 		return
 	}
 
-	// Held across the write and its round-trip verification.
-	releaseLock, ok := acquireStackLock(c, h.opLock, id, services.OpKindEnv)
+	// Held across the path check, the write and its round-trip verification.
+	// The path is checked under the lock (agent-os-0j8a): a git pull holds the
+	// same lock, and one that retargeted a link between an earlier check and
+	// the write had the write follow a link nobody checked.
+	releaseLock, ok := lockStacksSharingFiles(c, h.opLock, h.db, stack, services.OpKindEnv, envPath)
 	if !ok {
 		return
 	}
 	defer releaseLock()
+
+	if err := validateStackPath(envPath, h.config); err != nil {
+		c.JSON(http.StatusBadRequest, models.NewAppError(
+			http.StatusBadRequest,
+			models.ErrPathTraversal,
+			"Invalid env file path",
+		))
+		return
+	}
 
 	var content string
 	if req.Raw != "" {
@@ -309,6 +319,20 @@ func (h *EnvHandler) Create(c *gin.Context) {
 	}
 	envPath := filepath.Join(stack.Directory, envFileName)
 
+	if envCreateBeforeLockHook != nil {
+		envCreateBeforeLockHook()
+	}
+
+	// Held from the path check to after the create and its verification, so
+	// the check, the existence check and the write see the same directory
+	// (agent-os-0j8a: checked before the lock, a folder link retargeted in
+	// between was followed unchecked).
+	releaseLock, ok := lockStacksSharingFiles(c, h.opLock, h.db, stack, services.OpKindEnv, envPath)
+	if !ok {
+		return
+	}
+	defer releaseLock()
+
 	if err := validateStackPath(envPath, h.config); err != nil {
 		c.JSON(http.StatusBadRequest, models.NewAppError(
 			http.StatusBadRequest,
@@ -317,14 +341,6 @@ func (h *EnvHandler) Create(c *gin.Context) {
 		))
 		return
 	}
-
-	// Held from the existence check to after the create and its verification,
-	// so the check and the write see the same directory.
-	releaseLock, ok := acquireStackLock(c, h.opLock, id, services.OpKindEnv)
-	if !ok {
-		return
-	}
-	defer releaseLock()
 
 	// Refuse if the file already exists.
 	if _, statErr := os.Stat(envPath); statErr == nil { //geterrors:ignore existence probe: a stat error that is not NotExist reads as "not there" and the create below is the real gate, which fails loudly
@@ -452,15 +468,11 @@ func validateEnvEntries(entries []EnvEntry) error {
 // validateEnvCommentRow accepts exactly the comment rows parseEnvFile produces
 // (agent-os-2jq6). serializeEnvFile writes a comment row's value verbatim and
 // drops its key, so unchecked a row valued "EVIL=1" or "# x\nEVIL=1" added a
-// variable compose reads. The parser also labels no-"=" lines comments, such
-// as a bare KEY and "KEY: value", which compose reads as variables (compose-go
-// dotenv ends a key at '=' or ':', and inherits a bare one). They pass by
-// design so real files keep saving; the parser fix is agent-os-n43b.
+// variable compose reads. A read-only variable line (bare KEY, "KEY: value")
+// is a comment row carrying its compose key, and must carry that key: the
+// locked view masks by it (agent-os-n43b).
 func validateEnvCommentRow(e EnvEntry) error {
-	if e.Key != "" {
-		return errors.New("is a comment with a key; a comment row has none")
-	}
-	if e.Value == "" {
+	if e.Key == "" && e.Value == "" {
 		return nil // serialised as a blank line
 	}
 	// Keeps a comment row one clean line, the rule validateEnvEntries applies
@@ -476,6 +488,9 @@ func validateEnvCommentRow(e EnvEntry) error {
 	back := (&EnvHandler{}).parseEnvFile(serializeEnvFile([]EnvEntry{e}))
 	if len(back) != 1 || !back[0].Comment || back[0].Value != e.Value {
 		return errors.New("is a comment that would not be written back as the same comment line")
+	}
+	if back[0].Key != e.Key {
+		return errors.New("is a read-only line whose key does not match its text; reload the env file")
 	}
 	return nil
 }
@@ -577,13 +592,17 @@ func (h *EnvHandler) parseEnvFile(content string) []EnvEntry {
 		}
 
 		eqIndex := strings.Index(trimmedLine, "=")
-		if eqIndex == -1 {
-			entries = append(entries, EnvEntry{
-				Key:     "",
-				Value:   trimmedLine,
-				Line:    lineNum,
-				Comment: true,
-			})
+		if colonIndex := strings.Index(trimmedLine, ":"); eqIndex == -1 || (colonIndex != -1 && colonIndex < eqIndex) {
+			// Not a KEY=value line, yet compose may read it as a variable (a
+			// bare KEY, or KEY: value). The table keeps it read-only and writes
+			// it back verbatim, since KEY= would turn an inherited value empty,
+			// but keys it so the locked view masks it like any other variable.
+			entry := EnvEntry{Value: trimmedLine, Line: lineNum, Comment: true}
+			if key, ok := composeLineKey(trimmedLine); ok {
+				entry.Key = key
+				entry.Sensitive = services.IsSensitiveEnvKey(key)
+			}
+			entries = append(entries, entry)
 			continue
 		}
 
@@ -602,6 +621,36 @@ func (h *EnvHandler) parseEnvFile(content string) []EnvEntry {
 	}
 
 	return entries
+}
+
+var exportPrefix = regexp.MustCompile(`^export\s+`)
+
+// composeLineKey returns the variable compose's dotenv parser reads from a
+// line with no "=" before its first ":" (compose-go v2 dotenv/parser.go,
+// locateKeyName): an optional "export " prefix, then a name ending at the
+// first '=' or ':' or the line's end. ok is false where compose rejects the
+// name, such as "a b", so that line stays a plain comment. Inside a name
+// compose skips its isSpace set and rejects only ' ', so "A\tB_PASSWORD: x"
+// is a variable it reads and has to be keyed here for the locked view to
+// mask it.
+func composeLineKey(line string) (key string, ok bool) {
+	s := line
+	if loc := exportPrefix.FindStringIndex(s); loc != nil {
+		s = s[loc[1]:]
+	}
+	if end := strings.IndexAny(s, "=:"); end != -1 {
+		s = s[:end]
+	}
+	key = strings.TrimRightFunc(s, unicode.IsSpace)
+	if key == "" {
+		return "", false
+	}
+	for _, r := range key {
+		if !unicode.IsLetter(r) && !unicode.IsNumber(r) && !strings.ContainsRune("_.-[]\t\v\f\r\u0085\u00a0", r) {
+			return "", false
+		}
+	}
+	return key, true
 }
 
 // splitEnvValue splits the text after "=" the way compose's dotenv parser
