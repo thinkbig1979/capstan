@@ -129,9 +129,11 @@ func (h *ComposeHandler) Put(c *gin.Context) {
 		return
 	}
 
+	composePath := filepath.Join(stack.Directory, stack.ComposeFile)
+
 	// Held from before the lint (which reads the stack directory) to after
-	// the write.
-	releaseLock, ok := acquireStackLock(c, h.opLock, id, services.OpKindCompose)
+	// the write, with the lock of every stack sharing the file (agent-os-0j8a).
+	releaseLock, ok := lockStacksSharingFiles(c, h.opLock, h.db, stack, services.OpKindCompose, composePath)
 	if !ok {
 		return
 	}
@@ -163,8 +165,6 @@ func (h *ComposeHandler) Put(c *gin.Context) {
 		))
 		return
 	}
-
-	composePath := filepath.Join(stack.Directory, stack.ComposeFile)
 
 	if err := validateStackPath(composePath, h.config); err != nil {
 		c.JSON(http.StatusBadRequest, models.NewAppError(
@@ -310,13 +310,6 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 		return
 	}
 
-	// Held across the lint, both writes, and the rollback paths.
-	releaseLock, ok := acquireStackLock(c, h.opLock, id, services.OpKindCompose)
-	if !ok {
-		return
-	}
-	defer releaseLock()
-
 	// ── Determine env content ───────────────────────────────────────────────
 	var envContent string
 	var hasEnvUpdate bool
@@ -346,6 +339,28 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 		return
 	}
 
+	composePath := filepath.Join(stack.Directory, stack.ComposeFile)
+
+	// A stack with no env file recorded gets a new ".env" (agent-os-4p86): the
+	// request is "Extract to .env", and skipping its env half while saving the
+	// compose half that now references ${VAR} lost the value.
+	envFileName := stack.EnvFile
+	if hasEnvUpdate && envFileName == "" {
+		envFileName = ".env"
+	}
+	lockPaths := []string{composePath}
+	if hasEnvUpdate {
+		lockPaths = append(lockPaths, filepath.Join(stack.Directory, envFileName))
+	}
+
+	// Held across the lint, both writes, and the rollback paths, with the lock
+	// of every stack sharing either file (agent-os-0j8a).
+	releaseLock, ok := lockStacksSharingFiles(c, h.opLock, h.db, stack, services.OpKindCompose, lockPaths...)
+	if !ok {
+		return
+	}
+	defer releaseLock()
+
 	// ── Lint compose before touching disk ──────────────────────────────────
 	lintResults, err := h.linter.LintWithDir(req.ComposeContent, stack.Directory)
 	if err != nil {
@@ -364,7 +379,6 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 		}
 	}
 
-	composePath := filepath.Join(stack.Directory, stack.ComposeFile)
 	if err := validateStackPath(composePath, h.config); err != nil {
 		c.JSON(http.StatusBadRequest, models.NewAppError(
 			http.StatusBadRequest,
@@ -387,14 +401,6 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 	// subsequent compose write fails. nil means the file did not previously exist.
 	var originalEnv []byte
 	var envPath string
-
-	// A stack with no env file recorded gets a new ".env" (agent-os-4p86): the
-	// request is "Extract to .env", and skipping its env half while saving the
-	// compose half that now references ${VAR} lost the value.
-	envFileName := stack.EnvFile
-	if hasEnvUpdate && envFileName == "" {
-		envFileName = ".env"
-	}
 
 	if hasEnvUpdate {
 		envPath = filepath.Join(stack.Directory, envFileName)

@@ -41,6 +41,11 @@ type EnvRequest struct {
 // is the window agent-os-z91e.23's tests park a concurrent scan in.
 var envCreateBeforeRecordHook func()
 
+// envCreateBeforeLockHook is TEST-ONLY and nil in production. It runs in
+// Create after the stack row is read and before the lock is taken, the window
+// agent-os-0j8a's test retargets the stack's folder link in.
+var envCreateBeforeLockHook func()
+
 func NewEnvHandler(db *database.DB, config *config.Config) *EnvHandler {
 	return &EnvHandler{
 		db:        db,
@@ -222,15 +227,7 @@ func (h *EnvHandler) Put(c *gin.Context) {
 
 	envPath := filepath.Join(stack.Directory, stack.EnvFile)
 
-	if err := validateStackPath(envPath, h.config); err != nil {
-		c.JSON(http.StatusBadRequest, models.NewAppError(
-			http.StatusBadRequest,
-			models.ErrPathTraversal,
-			"Invalid env file path",
-		))
-		return
-	}
-
+	// The body is read before the lock, so a slow client cannot hold the stack.
 	var req EnvRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.NewAppError(
@@ -241,12 +238,24 @@ func (h *EnvHandler) Put(c *gin.Context) {
 		return
 	}
 
-	// Held across the write and its round-trip verification.
-	releaseLock, ok := acquireStackLock(c, h.opLock, id, services.OpKindEnv)
+	// Held across the path check, the write and its round-trip verification.
+	// The path is checked under the lock (agent-os-0j8a): a git pull holds the
+	// same lock, and one that retargeted a link between an earlier check and
+	// the write had the write follow a link nobody checked.
+	releaseLock, ok := lockStacksSharingFiles(c, h.opLock, h.db, stack, services.OpKindEnv, envPath)
 	if !ok {
 		return
 	}
 	defer releaseLock()
+
+	if err := validateStackPath(envPath, h.config); err != nil {
+		c.JSON(http.StatusBadRequest, models.NewAppError(
+			http.StatusBadRequest,
+			models.ErrPathTraversal,
+			"Invalid env file path",
+		))
+		return
+	}
 
 	var content string
 	if req.Raw != "" {
@@ -310,6 +319,20 @@ func (h *EnvHandler) Create(c *gin.Context) {
 	}
 	envPath := filepath.Join(stack.Directory, envFileName)
 
+	if envCreateBeforeLockHook != nil {
+		envCreateBeforeLockHook()
+	}
+
+	// Held from the path check to after the create and its verification, so
+	// the check, the existence check and the write see the same directory
+	// (agent-os-0j8a: checked before the lock, a folder link retargeted in
+	// between was followed unchecked).
+	releaseLock, ok := lockStacksSharingFiles(c, h.opLock, h.db, stack, services.OpKindEnv, envPath)
+	if !ok {
+		return
+	}
+	defer releaseLock()
+
 	if err := validateStackPath(envPath, h.config); err != nil {
 		c.JSON(http.StatusBadRequest, models.NewAppError(
 			http.StatusBadRequest,
@@ -318,14 +341,6 @@ func (h *EnvHandler) Create(c *gin.Context) {
 		))
 		return
 	}
-
-	// Held from the existence check to after the create and its verification,
-	// so the check and the write see the same directory.
-	releaseLock, ok := acquireStackLock(c, h.opLock, id, services.OpKindEnv)
-	if !ok {
-		return
-	}
-	defer releaseLock()
 
 	// Refuse if the file already exists.
 	if _, statErr := os.Stat(envPath); statErr == nil { //geterrors:ignore existence probe: a stat error that is not NotExist reads as "not there" and the create below is the real gate, which fails loudly
