@@ -83,7 +83,7 @@ func writeFile0j8a(t *testing.T, path, content string) {
 
 func readFile0j8a(t *testing.T, path string) string {
 	t.Helper()
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) //nolint:gosec // G304: test fixture path under t.TempDir()
 	require.NoError(t, err)
 	return string(b)
 }
@@ -124,7 +124,7 @@ func (f lockOrderFixture) putEnvParkedInBind(t *testing.T, id string, between fu
 			if err := <-errc; err != nil {
 				t.Fatalf("handler answered %d before reading the whole body: %s", rec.Code, rec.Body.String())
 			}
-		case <-time.After(10 * time.Second):
+		case <-time.After(time.Until(hangGuardDeadline(t))):
 			t.Fatal("handler never read the request body")
 		}
 	}
@@ -135,7 +135,7 @@ func (f lockOrderFixture) putEnvParkedInBind(t *testing.T, id string, between fu
 
 	select {
 	case <-done:
-	case <-time.After(10 * time.Second):
+	case <-time.After(time.Until(hangGuardDeadline(t))):
 		t.Fatal("handler did not answer after the body was complete")
 	}
 	return rec
@@ -322,7 +322,7 @@ func TestSharedFileSave_LocksEveryStack_0j8a(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			snapshot := func(path string) string {
-				b, err := os.ReadFile(path)
+				b, err := os.ReadFile(path) //nolint:gosec // G304: test fixture path under t.TempDir()
 				if os.IsNotExist(err) {
 					return "<absent>"
 				}
