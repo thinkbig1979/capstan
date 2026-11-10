@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"unicode"
 
@@ -452,15 +453,11 @@ func validateEnvEntries(entries []EnvEntry) error {
 // validateEnvCommentRow accepts exactly the comment rows parseEnvFile produces
 // (agent-os-2jq6). serializeEnvFile writes a comment row's value verbatim and
 // drops its key, so unchecked a row valued "EVIL=1" or "# x\nEVIL=1" added a
-// variable compose reads. The parser also labels no-"=" lines comments, such
-// as a bare KEY and "KEY: value", which compose reads as variables (compose-go
-// dotenv ends a key at '=' or ':', and inherits a bare one). They pass by
-// design so real files keep saving; the parser fix is agent-os-n43b.
+// variable compose reads. A read-only variable line (bare KEY, "KEY: value")
+// is a comment row carrying its compose key, and must carry that key: the
+// locked view masks by it (agent-os-n43b).
 func validateEnvCommentRow(e EnvEntry) error {
-	if e.Key != "" {
-		return errors.New("is a comment with a key; a comment row has none")
-	}
-	if e.Value == "" {
+	if e.Key == "" && e.Value == "" {
 		return nil // serialised as a blank line
 	}
 	// Keeps a comment row one clean line, the rule validateEnvEntries applies
@@ -476,6 +473,9 @@ func validateEnvCommentRow(e EnvEntry) error {
 	back := (&EnvHandler{}).parseEnvFile(serializeEnvFile([]EnvEntry{e}))
 	if len(back) != 1 || !back[0].Comment || back[0].Value != e.Value {
 		return errors.New("is a comment that would not be written back as the same comment line")
+	}
+	if back[0].Key != e.Key {
+		return errors.New("is a read-only line whose key does not match its text; reload the env file")
 	}
 	return nil
 }
@@ -577,13 +577,17 @@ func (h *EnvHandler) parseEnvFile(content string) []EnvEntry {
 		}
 
 		eqIndex := strings.Index(trimmedLine, "=")
-		if eqIndex == -1 {
-			entries = append(entries, EnvEntry{
-				Key:     "",
-				Value:   trimmedLine,
-				Line:    lineNum,
-				Comment: true,
-			})
+		if colonIndex := strings.Index(trimmedLine, ":"); eqIndex == -1 || (colonIndex != -1 && colonIndex < eqIndex) {
+			// Not a KEY=value line, yet compose may read it as a variable (a
+			// bare KEY, or KEY: value). The table keeps it read-only and writes
+			// it back verbatim, since KEY= would turn an inherited value empty,
+			// but keys it so the locked view masks it like any other variable.
+			entry := EnvEntry{Value: trimmedLine, Line: lineNum, Comment: true}
+			if key, ok := composeLineKey(trimmedLine); ok {
+				entry.Key = key
+				entry.Sensitive = services.IsSensitiveEnvKey(key)
+			}
+			entries = append(entries, entry)
 			continue
 		}
 
@@ -602,6 +606,36 @@ func (h *EnvHandler) parseEnvFile(content string) []EnvEntry {
 	}
 
 	return entries
+}
+
+var exportPrefix = regexp.MustCompile(`^export\s+`)
+
+// composeLineKey returns the variable compose's dotenv parser reads from a
+// line with no "=" before its first ":" (compose-go v2 dotenv/parser.go,
+// locateKeyName): an optional "export " prefix, then a name ending at the
+// first '=' or ':' or the line's end. ok is false where compose rejects the
+// name, such as "a b", so that line stays a plain comment. Inside a name
+// compose skips its isSpace set and rejects only ' ', so "A\tB_PASSWORD: x"
+// is a variable it reads and has to be keyed here for the locked view to
+// mask it.
+func composeLineKey(line string) (key string, ok bool) {
+	s := line
+	if loc := exportPrefix.FindStringIndex(s); loc != nil {
+		s = s[loc[1]:]
+	}
+	if end := strings.IndexAny(s, "=:"); end != -1 {
+		s = s[:end]
+	}
+	key = strings.TrimRightFunc(s, unicode.IsSpace)
+	if key == "" {
+		return "", false
+	}
+	for _, r := range key {
+		if !unicode.IsLetter(r) && !unicode.IsNumber(r) && !strings.ContainsRune("_.-[]\t\v\f\r\u0085\u00a0", r) {
+			return "", false
+		}
+	}
+	return key, true
 }
 
 // splitEnvValue splits the text after "=" the way compose's dotenv parser

@@ -27,8 +27,10 @@ func TestValidateEnvEntries_CommentRows(t *testing.T) {
 	accepted := []EnvEntry{
 		{Comment: true, Value: "# a comment"},
 		{Comment: true, Value: "#"},
-		{Comment: true, Value: "LEGACY_FLAG"}, // the parser labels a no-"=" line a comment
-		{Comment: true, Value: "KEY: v"},
+		// A line compose reads as a variable is a read-only row keyed like it
+		// (agent-os-n43b).
+		{Comment: true, Key: "LEGACY_FLAG", Value: "LEGACY_FLAG"},
+		{Comment: true, Key: "KEY", Value: "KEY: v"},
 		{Comment: true, Value: ""}, // a blank line
 	}
 	for _, e := range accepted {
@@ -41,6 +43,8 @@ func TestValidateEnvEntries_CommentRows(t *testing.T) {
 		{Comment: true, Value: "# x\rEVIL=1"},
 		{Comment: true, Value: " # padded"},
 		{Comment: true, Key: "EVIL", Value: "# x"},
+		{Comment: true, Value: "LEGACY_FLAG"}, // unkeyed, the locked view could not mask it
+		{Comment: true, Value: "KEY: v"},
 	}
 	for _, e := range rejected {
 		assert.Error(t, validateEnvEntries([]EnvEntry{e}), "comment row key %q value %q", e.Key, e.Value)
@@ -177,8 +181,8 @@ func TestEnvEmptyKeyError_OmitsTheValue(t *testing.T) {
 // PIN, green before and after the fix: a real file with "#" comments, a bare
 // line, a YAML-style line and blank lines still saves byte-identical, so the
 // comment-row check refuses nothing the parser produced. LEGACY_FLAG and
-// "YAML_STYLE: v" are pinned as accepted BY DESIGN, not as safe: compose reads
-// both as variables while the parser labels them comments (agent-os-n43b).
+// "YAML_STYLE: v" come back as read-only rows keyed like compose reads them,
+// and are written back verbatim (agent-os-n43b).
 func TestEnvCommentRow_HTTP_RealFileSavesUnchanged(t *testing.T) {
 	const content = "# header comment\nLEGACY_FLAG\nYAML_STYLE: v\nA=1\n\n#\n#no space\nB=2 # note\n\n"
 	router, stackID, token, envPath := envQuoteFixture(t, content)
