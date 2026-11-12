@@ -266,6 +266,13 @@ func (h *BackupHandler) getSettings(c *gin.Context) {
 	//   here would build the second detector this comparison exists to avoid.
 	hasEmbeddedCredential := repository != bc.ResticRepository
 
+	// The rclone remote can be a connection string carrying keys
+	// (":s3,access_key_id=...,secret_access_key=..."), which is why
+	// rclone_remote is a sensitive setting; it is served masked, with the
+	// same has-credential flag as the repository (agent-os-qnso).
+	rcloneRemote := services.RedactRcloneRemote(bc.RcloneRemote)
+	rcloneRemoteHasCredential := rcloneRemote != bc.RcloneRemote
+
 	// Every field below comes from bc, the config the engine itself acts on
 	// (agent-os-p7hf). The form used to read the rows itself with hardcoded
 	// defaults, skipping the BACKUP_KEEP_* and other env fallbacks: with
@@ -310,32 +317,33 @@ func (h *BackupHandler) getSettings(c *gin.Context) {
 	repoStatus := h.svc.CheckRepository(c.Request.Context())
 
 	c.JSON(http.StatusOK, gin.H{
-		"repository":              repository,
-		"hasEmbeddedCredential":   hasEmbeddedCredential,
-		"repositorySource":        repoSrc,
-		"hasPassword":             hasPassword,
-		"passwordSource":          pwSrc,
-		"keepDaily":               bc.KeepDaily,
-		"keepWeekly":              bc.KeepWeekly,
-		"keepMonthly":             bc.KeepMonthly,
-		"keepYearly":              bc.KeepYearly,
-		"autoPrune":               bc.AutoPrune,
-		"scheduleIntervalMinutes": bc.ScheduleInterval,
-		"scheduleMode":            bc.ScheduleMode,
-		"scheduleTime":            bc.ScheduleTime,
-		"scheduleDays":            scheduleDays,
-		"serverTimezone":          tzName,
-		"serverTimeOffset":        tzOffset,
-		"syncAfterBackup":         bc.SyncAfter,
-		"verifyWeekly":            verifyWeekly,
-		"rcloneRemote":            bc.RcloneRemote,
-		"rclonePath":              bc.RclonePath,
-		"rcloneTransfers":         bc.RcloneTransfers,
-		"hostname":                bc.BackupHostname,
-		"resticAvailable":         av.ResticPresent,
-		"rcloneAvailable":         av.RclonePresent,
-		"repoState":               repoStatus.RepoState,
-		"repoStateMessage":        repoStatus.Message,
+		"repository":                repository,
+		"hasEmbeddedCredential":     hasEmbeddedCredential,
+		"repositorySource":          repoSrc,
+		"hasPassword":               hasPassword,
+		"passwordSource":            pwSrc,
+		"keepDaily":                 bc.KeepDaily,
+		"keepWeekly":                bc.KeepWeekly,
+		"keepMonthly":               bc.KeepMonthly,
+		"keepYearly":                bc.KeepYearly,
+		"autoPrune":                 bc.AutoPrune,
+		"scheduleIntervalMinutes":   bc.ScheduleInterval,
+		"scheduleMode":              bc.ScheduleMode,
+		"scheduleTime":              bc.ScheduleTime,
+		"scheduleDays":              scheduleDays,
+		"serverTimezone":            tzName,
+		"serverTimeOffset":          tzOffset,
+		"syncAfterBackup":           bc.SyncAfter,
+		"verifyWeekly":              verifyWeekly,
+		"rcloneRemote":              rcloneRemote,
+		"rcloneRemoteHasCredential": rcloneRemoteHasCredential,
+		"rclonePath":                bc.RclonePath,
+		"rcloneTransfers":           bc.RcloneTransfers,
+		"hostname":                  bc.BackupHostname,
+		"resticAvailable":           av.ResticPresent,
+		"rcloneAvailable":           av.RclonePresent,
+		"repoState":                 repoStatus.RepoState,
+		"repoStateMessage":          repoStatus.Message,
 	})
 }
 
@@ -436,6 +444,17 @@ func (h *BackupHandler) updateSettings(c *gin.Context) {
 	// a flag: OBSERVED with v1.60.1, "--log-file=/p" made rclone create "/p:"
 	// (agent-os-tyl6). The argv builders also put "--" before positionals,
 	// which covers values stored before this check existed.
+	// The form is seeded from the masked GET value, so posting it back
+	// unedited would replace the stored keys with "***" (agent-os-qnso), as
+	// for the repository above.
+	if req.RcloneRemote != nil && strings.Contains(*req.RcloneRemote, services.RcloneRedactionMarker) {
+		handleError(c, models.NewAppError(
+			http.StatusUnprocessableEntity,
+			models.ErrValidation,
+			"The rclone remote still contains masked values (=***). Re-enter the full remote including its keys, or leave the field unchanged.",
+		))
+		return
+	}
 	if req.RcloneRemote != nil && strings.HasPrefix(*req.RcloneRemote, "-") {
 		c.JSON(http.StatusBadRequest, models.NewAppError(
 			http.StatusBadRequest,

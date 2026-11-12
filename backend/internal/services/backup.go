@@ -2027,7 +2027,7 @@ func (s *BackupService) RunDRRestore(ctx context.Context, out chan<- StreamLine)
 	rclone := s.newRcloneMgr(bc)
 
 	stream(out, "info", fmt.Sprintf("Starting DR restore from %s:%s to %s (any local-only files the restore would otherwise delete will be preserved in %s)",
-		bc.RcloneRemote, bc.RclonePath, localRepoPath, backupDir))
+		RedactRcloneRemote(bc.RcloneRemote), bc.RclonePath, localRepoPath, backupDir))
 
 	if err := rclone.RestoreRepo(ctx, bc.RcloneRemote, bc.RclonePath, localRepoPath, backupDir, 3, out); err != nil {
 		return fmt.Errorf("rclone restore repo: %w", err)
