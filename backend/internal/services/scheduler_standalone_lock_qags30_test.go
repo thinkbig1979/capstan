@@ -28,7 +28,7 @@ func TestRunAutoUpdates_StandaloneUpdateTakesATurnPrunesWaitFor(t *testing.T) {
 	svc := newApplyFixture(t, checker)
 	lock = NewOperationLock()
 	svc.SetOperationLock(lock)
-	seedContainerPolicy(t, svc, "c1")
+	seedContainerPolicy(t, svc, "web")
 
 	svc.RunAutoUpdates(context.Background(), []models.CachedUpdate{
 		{ContainerID: "c1", ContainerName: "web", ImageRef: "nginx:latest"}, // no StackID
@@ -52,8 +52,8 @@ func TestRunAutoUpdates_BusyStandaloneContainerIsSkipped(t *testing.T) {
 	svc := newApplyFixture(t, checker)
 	lock := NewOperationLock()
 	svc.SetOperationLock(lock)
-	seedContainerPolicy(t, svc, "c1")
-	seedContainerPolicy(t, svc, "c2")
+	seedContainerPolicy(t, svc, "web")
+	seedContainerPolicy(t, svc, "api")
 
 	manual, err := lock.Acquire("c1", OpKindUpdate)
 	require.NoError(t, err)

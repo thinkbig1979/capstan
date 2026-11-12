@@ -319,6 +319,7 @@ function ContainerTable({
     if (!policiesData?.policies) return new Map<string, boolean>()
     const map = new Map<string, boolean>()
     for (const p of policiesData.policies) {
+      // A container policy's target is the container's name (agent-os-ygyv).
       if (p.targetType === 'container') {
         map.set(p.targetId, p.enabled)
       }
@@ -466,8 +467,8 @@ function ContainerTable({
                   <div className="flex items-center">
                     <AutoUpdateToggle
                       targetType="container"
-                      targetId={container.id}
-                      enabled={policyMap.get(container.id) ?? false}
+                      targetId={container.name}
+                      enabled={policyMap.get(container.name) ?? false}
                       paused={false}
                       consecutiveFailures={0}
                       globalState={globalAutoUpdateState}

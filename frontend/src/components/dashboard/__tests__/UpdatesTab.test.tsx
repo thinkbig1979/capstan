@@ -141,7 +141,7 @@ function makePolicy(overrides: Partial<AutoUpdatePolicy> = {}): AutoUpdatePolicy
   return {
     id: 'p1',
     targetType: 'container',
-    targetId: 'c1',
+    targetId: 'web', // a container policy's target is the container's name (agent-os-ygyv)
     enabled: true,
     consecutiveFailures: 0,
     paused: false,
@@ -494,13 +494,13 @@ describe('UpdatesTab — the global auto-update master switch locks the toggles 
     makeContainer({ containerId: 'c1', containerName: 'with-policy', stackId: 'stack1' }),
     makeContainer({ containerId: 'c2', containerName: 'no-policy', stackId: '' }),
   ]
-  const policies = [makePolicy({ targetType: 'container', targetId: 'c1' })]
+  const policies = [makePolicy({ targetType: 'container', targetId: 'with-policy' })]
 
   function renderWithGlobal(query: { data?: unknown; isPending: boolean; isError: boolean }) {
     setCheckUpdates({ data: { updates: containers, fromCache: false } })
     mockAutoUpdatePolicies.mockReturnValue(query)
     render(<UpdatesTab />)
-    return [screen.getByTestId('auto-update-toggle-c1'), screen.getByTestId('auto-update-toggle-c2')]
+    return [screen.getByTestId('auto-update-toggle-with-policy'), screen.getByTestId('auto-update-toggle-no-policy')]
   }
 
   it('locks both toggles when the global switch is OFF', () => {
@@ -541,14 +541,14 @@ describe('UpdatesTab — policy resolution', () => {
     mockAutoUpdatePolicies.mockReturnValue({
       data: {
         policies: [
-          makePolicy({ targetType: 'container', targetId: 'c1', enabled: true }),
+          makePolicy({ targetType: 'container', targetId: 'web', enabled: true }),
           makePolicy({ targetType: 'stack', targetId: 'stack1', enabled: false }),
         ],
       },
     })
     render(<UpdatesTab />)
 
-    const toggle = screen.getByTestId('auto-update-toggle-c1')
+    const toggle = screen.getByTestId('auto-update-toggle-web')
     expect(toggle).toHaveAttribute('data-target-type', 'container')
     expect(toggle).toHaveAttribute('data-enabled', 'true')
   })
@@ -570,7 +570,7 @@ describe('UpdatesTab — policy resolution', () => {
     setCheckUpdates({ data: { updates: containers, fromCache: false } })
     render(<UpdatesTab />)
 
-    const toggle = screen.getByTestId('auto-update-toggle-c1')
+    const toggle = screen.getByTestId('auto-update-toggle-web')
     expect(toggle).toHaveAttribute('data-target-type', 'container')
     expect(toggle).toHaveAttribute('data-enabled', 'false')
   })
@@ -587,7 +587,7 @@ describe('UpdatesTab — policy resolution', () => {
     const containers = [makeContainer({ containerId: 'c1', stackId: 'stack1' })]
     setCheckUpdates({ data: { updates: containers, fromCache: false } })
     mockAutoUpdatePolicies.mockReturnValue({
-      data: { policies: [makePolicy({ targetType: 'container', targetId: 'c1' })] },
+      data: { policies: [makePolicy({ targetType: 'container', targetId: 'web' })] },
     })
     render(<UpdatesTab />)
 

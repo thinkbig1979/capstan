@@ -71,10 +71,10 @@ func z91e21Fixture(t *testing.T) (*SchedulerService, *firstHangsChecker) {
 	checker := &firstHangsChecker{hungID: "c1", entered: make(chan struct{}, 1)}
 	svc := newApplyFixture(t, checker)
 	svc.SetOperationLock(NewOperationLock())
-	seedContainerPolicy(t, svc, "c1")
+	seedContainerPolicy(t, svc, "web")
 	now := time.Now().Format(time.RFC3339)
 	require.NoError(t, svc.db.UpsertAutoUpdatePolicy(&models.AutoUpdatePolicy{
-		ID: "policy-c2", TargetType: "container", TargetID: "c2", Enabled: true,
+		ID: "policy-c2", TargetType: "container", TargetID: "api", Enabled: true,
 		ConsecutiveFailures: 2, CreatedAt: now, UpdatedAt: now,
 	}))
 	return svc, checker
@@ -138,7 +138,7 @@ func TestAutoUpdateDeadline_UnstartedItemIsNotCountedAsFailed(t *testing.T) {
 
 	assert.Equal(t, []string{"c1"}, checker.called(), "the second item must never be handed to UpdateContainer")
 
-	p2 := z91e21PolicyFor(t, svc, "c2")
+	p2 := z91e21PolicyFor(t, svc, "api")
 	assert.Equal(t, 2, p2.ConsecutiveFailures, "an item the pass never started must not count as a failure")
 	assert.False(t, p2.Paused)
 	assertSkippedRow(t, z91e21Rows(t, svc, "s2"), "c2", "api", "api:latest",
@@ -149,7 +149,7 @@ func TestAutoUpdateDeadline_UnstartedItemIsNotCountedAsFailed(t *testing.T) {
 	assert.Equal(t, "failed", hung[0].Status)
 	require.NotNil(t, hung[0].ErrorMessage)
 	assert.Equal(t, "auto-update timed out after 200ms: context deadline exceeded", *hung[0].ErrorMessage)
-	assert.Equal(t, 1, z91e21PolicyFor(t, svc, "c1").ConsecutiveFailures, "the item that hung still counts")
+	assert.Equal(t, 1, z91e21PolicyFor(t, svc, "web").ConsecutiveFailures, "the item that hung still counts")
 
 	msg, err := svc.db.GetSetting(applyLastErrorKey)
 	require.NoError(t, err)
@@ -172,7 +172,7 @@ func TestAutoUpdateDeadline_ShutdownMidPassIsNotCountedAsFailed(t *testing.T) {
 	runUntilGuard(t, "RunAutoUpdates", func() { svc.RunAutoUpdates(ctx, z91e21Updates()) })
 
 	assert.Equal(t, []string{"c1"}, checker.called())
-	p2 := z91e21PolicyFor(t, svc, "c2")
+	p2 := z91e21PolicyFor(t, svc, "api")
 	assert.Equal(t, 2, p2.ConsecutiveFailures)
 	assert.False(t, p2.Paused)
 	assertSkippedRow(t, z91e21Rows(t, svc, "s2"), "c2", "api", "api:latest",
@@ -193,7 +193,7 @@ func TestAutoUpdateDeadline_ItemsRunBeforeTheDeadlineAreUnaffected(t *testing.T)
 	svc.RunAutoUpdates(context.Background(), z91e21Updates())
 
 	assert.Equal(t, []string{"c1", "c2"}, checker.called())
-	assert.Equal(t, 0, z91e21PolicyFor(t, svc, "c2").ConsecutiveFailures)
+	assert.Equal(t, 0, z91e21PolicyFor(t, svc, "api").ConsecutiveFailures)
 	msg, err := svc.db.GetSetting(applyLastErrorKey)
 	require.NoError(t, err)
 	assert.Empty(t, msg)

@@ -21,7 +21,7 @@ import (
 func TestRunAutoUpdates_PausedRowIsClearable(t *testing.T) {
 	checker := &fakeUpdateChecker{updateFn: failingUpdate}
 	svc := newApplyFixture(t, checker)
-	seedContainerPolicy(t, svc, "c1")
+	seedContainerPolicy(t, svc, "web")
 
 	update := models.CachedUpdate{ContainerID: "c1", ContainerName: "web", ImageRef: "nginx:latest"}
 	for i := 0; i < 3; i++ {

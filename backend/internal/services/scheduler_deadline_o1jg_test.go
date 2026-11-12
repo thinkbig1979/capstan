@@ -137,7 +137,7 @@ func TestAutoUpdateDeadline_ImmediateHungUpdateEnds(t *testing.T) {
 	svc.applyTimeout = 200 * time.Millisecond
 	lock := NewOperationLock()
 	svc.SetOperationLock(lock)
-	seedContainerPolicy(t, svc, "c1")
+	seedContainerPolicy(t, svc, "web")
 
 	runUntilGuard(t, "runCycle", func() { svc.runCycle(context.Background()) })
 
@@ -162,7 +162,7 @@ func TestAutoUpdateDeadline_ScheduledHungUpdateEnds(t *testing.T) {
 	svc.applyTimeout = 200 * time.Millisecond
 	lock := NewOperationLock()
 	svc.SetOperationLock(lock)
-	seedContainerPolicy(t, svc, "c1")
+	seedContainerPolicy(t, svc, "web")
 	require.NoError(t, svc.db.SetCachedUpdates([]models.CachedUpdate{{
 		ContainerID: "c1", ContainerName: "web", ImageRef: "nginx:latest", StackID: "s1",
 		ScannedAt: time.Now().Format(time.RFC3339),
@@ -188,7 +188,7 @@ func TestAutoUpdateDeadline_ParentCancelIsNotATimeout(t *testing.T) {
 	svc := newApplyFixture(t, checker)
 	lock := NewOperationLock()
 	svc.SetOperationLock(lock)
-	seedContainerPolicy(t, svc, "c1")
+	seedContainerPolicy(t, svc, "web")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

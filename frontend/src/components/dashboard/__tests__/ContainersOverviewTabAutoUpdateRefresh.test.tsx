@@ -55,7 +55,7 @@ const serverFault = { status: 500, code: 'POLICY_READ_FAILED', message: 'policy 
 
 const policies = {
   policies: [
-    { targetType: 'container', targetId: 'c1', enabled: true, paused: false, consecutiveFailures: 0 },
+    { targetType: 'container', targetId: 'web', enabled: true, paused: false, consecutiveFailures: 0 },
   ],
   globalEnabled: true,
 }
@@ -119,7 +119,7 @@ describe('ContainersOverviewTab — a failed auto-update refetch is disclosed (a
     const { queryClient } = renderTab()
 
     // Unlocked and checked: the state the server really sent.
-    expect(await screen.findByLabelText('Auto-update container c1')).toBeChecked()
+    expect(await screen.findByLabelText('Auto-update container web')).toBeChecked()
 
     autoUpdateMock.getPolicies.mockRejectedValue(serverFault)
     await queryClient.refetchQueries()
@@ -130,9 +130,9 @@ describe('ContainersOverviewTab — a failed auto-update refetch is disclosed (a
     )
 
     // Retention (already correct, pinned so the fix cannot regress it).
-    expect(screen.getByLabelText('Auto-update container c1')).toBeChecked()
+    expect(screen.getByLabelText('Auto-update container web')).toBeChecked()
     expect(
-      screen.queryByLabelText(/Auto-update container c1 \(locked/),
+      screen.queryByLabelText(/Auto-update container web \(locked/),
     ).not.toBeInTheDocument()
 
     // Disclosure — ABSENT before the fix.
@@ -167,7 +167,7 @@ describe('ContainersOverviewTab — a failed auto-update refetch is disclosed (a
    */
   it('renders the notice above both tab panels, not inside the open one', async () => {
     const { queryClient } = renderTab()
-    expect(await screen.findByLabelText('Auto-update container c1')).toBeChecked()
+    expect(await screen.findByLabelText('Auto-update container web')).toBeChecked()
 
     autoUpdateMock.getPolicies.mockRejectedValue(serverFault)
     await queryClient.refetchQueries()
@@ -186,7 +186,7 @@ describe('ContainersOverviewTab — a failed auto-update refetch is disclosed (a
     // other panel is not merely empty — an in-table notice would really
     // re-mount over there rather than vanishing.
     await userEvent.click(screen.getByRole('tab', { name: /Other Containers/ }))
-    expect(await screen.findByLabelText('Auto-update container c2')).toBeInTheDocument()
+    expect(await screen.findByLabelText('Auto-update container sidecar')).toBeInTheDocument()
     expect(notice).toBeInTheDocument()
     expect(screen.getAllByRole('alert')).toHaveLength(1)
     expect(within(screen.getByRole('tabpanel')).queryByRole('alert')).not.toBeInTheDocument()
@@ -196,7 +196,7 @@ describe('ContainersOverviewTab — a failed auto-update refetch is disclosed (a
    *  against a build that renders the notice unconditionally. */
   it('says nothing while the refresh is succeeding', async () => {
     renderTab()
-    expect(await screen.findByLabelText('Auto-update container c1')).toBeChecked()
+    expect(await screen.findByLabelText('Auto-update container web')).toBeChecked()
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 })

@@ -287,6 +287,15 @@ func (s *SchedulerService) startLocked(interval time.Duration) {
 	parentCtx := s.parentCtx
 	applyRearm := s.applyRearm
 
+	// Once at start, so the screens find a re-keyed policy without waiting a
+	// whole scan interval (agent-os-ygyv). Added under s.mu like the scan
+	// cycles below, so Stop's wg.Wait covers it.
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.rekeyLegacyContainerPolicies(parentCtx)
+	}()
+
 	go func() {
 		s.logger.Info("Scheduler started", "interval", interval)
 		for {
@@ -604,6 +613,10 @@ func (s *SchedulerService) StartBackgroundScan() error {
 }
 
 func (s *SchedulerService) runCycle(ctx context.Context) {
+	// Every scan tick, whether or not auto-update is switched on: the screens
+	// read the policies by name too.
+	s.rekeyLegacyContainerPolicies(ctx)
+
 	updates, err := s.RunScan(ctx)
 	if err != nil {
 		s.logger.Error("Scheduler scan cycle failed", "error", err)
@@ -1009,6 +1022,90 @@ func (s *SchedulerService) pruneVanishedTargets(ctx context.Context, updates []m
 	return live, unresolved
 }
 
+// rekeyTimeout bounds one rekeyLegacyContainerPolicies run, whose Docker
+// inspects would otherwise wait on a cancel-only context.
+const rekeyTimeout = time.Minute
+
+// rekeyLegacyContainerPolicies moves container policies still keyed on a
+// container ID to the container's name (agent-os-ygyv). The ID a row holds
+// names either a live container, whose name Docker gives, or one an update
+// already replaced, whose name update_history recorded. Rows for live
+// containers are moved first, so when an old orphaned row and the live
+// container's row resolve to the same name, the live one keeps it. A row whose
+// name is already taken is deleted, since that name's policy is the newer
+// one. Every move and delete is logged with the old ID and the name, the record
+// of what this changed. A row that resolves to no name is left and stays
+// unmatched, as it was before; it is logged on every run.
+//
+// Idempotent: a moved row no longer looks like an ID. A Docker error other than
+// not-found stops the run before anything is written, so the live/orphan order
+// is never decided on a partial picture; the next run tries again.
+func (s *SchedulerService) rekeyLegacyContainerPolicies(ctx context.Context) {
+	legacy, err := s.db.LegacyContainerPolicies()
+	if err != nil {
+		s.logger.Error("Failed to read container-ID auto-update policies; they are re-keyed on a later run", "error", err)
+		return
+	}
+	if len(legacy) == 0 {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, rekeyTimeout)
+	defer cancel()
+	inspector, _ := s.docker.(containerInspector)
+
+	type move struct {
+		policy models.AutoUpdatePolicy
+		name   string
+		from   string // "docker" or "update_history"
+	}
+	var live, orphaned []move
+	for _, p := range legacy {
+		if inspector != nil {
+			info, err := inspector.InspectContainer(ctx, p.TargetID)
+			switch {
+			case err == nil:
+				if info.ContainerJSONBase == nil {
+					break
+				}
+				if name := strings.TrimPrefix(info.Name, "/"); name != "" && info.ID == p.TargetID {
+					live = append(live, move{p, name, "docker"})
+					continue
+				}
+			case !cerrdefs.IsNotFound(err):
+				s.logger.Warn("Could not inspect a container to re-key its auto-update policy; retried later",
+					"container_id", p.TargetID, "error", err)
+				return
+			}
+		}
+		name, err := s.db.LastKnownContainerName(p.TargetID)
+		if err != nil {
+			s.logger.Error("Failed to read update history to re-key an auto-update policy; retried later",
+				"container_id", p.TargetID, "error", err)
+			return
+		}
+		if name == "" {
+			s.logger.Warn("Auto-update policy names a container ID with no known container name; it matches nothing",
+				"policy_id", p.ID, "container_id", p.TargetID)
+			continue
+		}
+		orphaned = append(orphaned, move{p, name, "update_history"})
+	}
+
+	for _, m := range append(live, orphaned...) {
+		outcome, err := s.db.RekeyContainerPolicy(m.policy.ID, m.policy.TargetID, m.name)
+		if err != nil {
+			s.logger.Error("Failed to re-key an auto-update policy", "policy_id", m.policy.ID,
+				"old_container_id", m.policy.TargetID, "container_name", m.name, "error", err)
+			continue
+		}
+		s.logger.Info("Auto-update policy re-keyed from container ID to container name",
+			"outcome", string(outcome), "policy_id", m.policy.ID, "old_container_id", m.policy.TargetID,
+			"container_name", m.name, "name_from", m.from, "enabled", m.policy.Enabled,
+			"paused", m.policy.Paused, "consecutive_failures", m.policy.ConsecutiveFailures)
+	}
+}
+
 // notStartedCause names why a pass's ended ctx left items unstarted: its own
 // deadline, or Stop() cancelling the parent.
 func notStartedCause(ctx context.Context) string {
@@ -1080,6 +1177,8 @@ func (s *SchedulerService) runAutoUpdates(ctx context.Context, updates []models.
 	ctx, cancel := withCommandDeadline(ctx, s.applyTimeout)
 	defer cancel()
 
+	s.rekeyLegacyContainerPolicies(ctx)
+
 	autoEnabledStr, err := s.db.GetSetting("auto_update_enabled")
 	if err != nil {
 		// agent-os-koy9. The read error used to be merged into the value test
@@ -1126,14 +1225,18 @@ func (s *SchedulerService) runAutoUpdates(ctx context.Context, updates []models.
 		p := &policies[i]
 		switch p.TargetType {
 		case string(JobTargetTypeContainer):
-			containerPolicies[p.TargetID] = p
+			containerPolicies[p.TargetID] = p // the container's name (agent-os-ygyv)
 		case string(JobTargetTypeStack):
 			stackPolicies[p.TargetID] = p
 		}
 	}
 
+	// A container policy is keyed on the container's name, which survives the
+	// recreate an update or a compose redeploy does. Its ID does not, so a
+	// policy keyed on the ID matched nothing after the first update
+	// (agent-os-ygyv).
 	policyFor := func(update models.CachedUpdate) (*models.AutoUpdatePolicy, bool) {
-		if p, ok := containerPolicies[update.ContainerID]; ok {
+		if p, ok := containerPolicies[update.ContainerName]; ok {
 			return p, true
 		}
 		if update.StackID != "" {

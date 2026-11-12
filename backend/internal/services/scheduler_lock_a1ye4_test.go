@@ -30,8 +30,8 @@ func TestRunAutoUpdates_LockedStackIsSkipped(t *testing.T) {
 	svc := newApplyFixture(t, checker)
 	lock := NewOperationLock()
 	svc.SetOperationLock(lock)
-	seedContainerPolicy(t, svc, "c1")
-	seedContainerPolicy(t, svc, "c2")
+	seedContainerPolicy(t, svc, "web")
+	seedContainerPolicy(t, svc, "api")
 
 	backupToken, err := lock.Acquire("s1", OpKindBackup)
 	require.NoError(t, err)

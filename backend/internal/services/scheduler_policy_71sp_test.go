@@ -63,18 +63,18 @@ func TestAutoUpdatePassKeepsOperatorChange71sp(t *testing.T) {
 		deleted  bool
 	}{
 		{"disabled during a failing update stays disabled", 0, failingUpdate,
-			func(t *testing.T, s *SchedulerService) { disable71sp(t, s, "c1") }, false},
+			func(t *testing.T, s *SchedulerService) { disable71sp(t, s, "web") }, false},
 		{"disabled during a third failing update stays disabled and is not paused", 2, failingUpdate,
-			func(t *testing.T, s *SchedulerService) { disable71sp(t, s, "c1") }, false},
+			func(t *testing.T, s *SchedulerService) { disable71sp(t, s, "web") }, false},
 		{"disabled during a succeeding update stays disabled", 1, succeedingUpdate,
-			func(t *testing.T, s *SchedulerService) { disable71sp(t, s, "c1") }, false},
+			func(t *testing.T, s *SchedulerService) { disable71sp(t, s, "web") }, false},
 		{"deleted during a failing update stays deleted", 0, failingUpdate,
 			func(t *testing.T, s *SchedulerService) {
-				require.NoError(t, s.db.DeleteAutoUpdatePolicy("container", "c1"))
+				require.NoError(t, s.db.DeleteAutoUpdatePolicy("container", "web"))
 			}, true},
 		{"deleted during a succeeding update stays deleted", 1, succeedingUpdate,
 			func(t *testing.T, s *SchedulerService) {
-				require.NoError(t, s.db.DeleteAutoUpdatePolicy("container", "c1"))
+				require.NoError(t, s.db.DeleteAutoUpdatePolicy("container", "web"))
 			}, true},
 	}
 	for _, tc := range cases {
@@ -84,11 +84,11 @@ func TestAutoUpdatePassKeepsOperatorChange71sp(t *testing.T) {
 				tc.change(t, svc) // between the pass's read and its write
 				return tc.outcome(id)
 			}})
-			seed71spPolicy(t, svc, "c1", tc.failures)
+			seed71spPolicy(t, svc, "web", tc.failures)
 
 			svc.RunAutoUpdates(context.Background(), update)
 
-			policy, err := svc.db.GetAutoUpdatePolicy("container", "c1")
+			policy, err := svc.db.GetAutoUpdatePolicy("container", "web")
 			if tc.deleted {
 				require.True(t, errors.Is(err, errdefs.ErrNotFound), "the pass re-created a deleted policy: %+v, err %v", policy, err)
 				return
@@ -122,11 +122,11 @@ func TestAutoUpdatePassStillCountsUntouchedPolicy71sp(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			svc := newApplyFixture(t, &fakeUpdateChecker{updateFn: tc.outcome})
-			seed71spPolicy(t, svc, "c1", tc.failures)
+			seed71spPolicy(t, svc, "web", tc.failures)
 
 			svc.RunAutoUpdates(context.Background(), update)
 
-			policy, err := svc.db.GetAutoUpdatePolicy("container", "c1")
+			policy, err := svc.db.GetAutoUpdatePolicy("container", "web")
 			require.NoError(t, err)
 			require.True(t, policy.Enabled)
 			require.Equal(t, tc.wantFailures, policy.ConsecutiveFailures)

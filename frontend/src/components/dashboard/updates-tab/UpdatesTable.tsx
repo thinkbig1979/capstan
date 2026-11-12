@@ -139,7 +139,9 @@ export function UpdatesTable({
           </TableHeader>
           <TableBody>
             {sortedUpdates.map((container: UpdateItem) => {
-              const containerPolicy = policies.get(`container:${container.containerId}`)
+              // Keyed on the name: an update recreates the container under a
+              // new id, and a policy keyed on the id stopped matching (agent-os-ygyv).
+              const containerPolicy = policies.get(`container:${container.containerName}`)
               const stackPolicy = container.stackId
                 ? policies.get(`stack:${container.stackId}`)
                 : undefined
@@ -192,7 +194,7 @@ export function UpdatesTable({
                       {activePolicy ? (
                         <AutoUpdateToggle
                           targetType={containerPolicy ? 'container' : 'stack'}
-                          targetId={containerPolicy ? container.containerId : (container.stackId || '')}
+                          targetId={containerPolicy ? container.containerName : (container.stackId || '')}
                           enabled={activePolicy.enabled}
                           paused={activePolicy.paused}
                           consecutiveFailures={activePolicy.consecutiveFailures}
@@ -201,7 +203,7 @@ export function UpdatesTable({
                       ) : (
                         <AutoUpdateToggle
                           targetType="container"
-                          targetId={container.containerId}
+                          targetId={container.containerName}
                           enabled={false}
                           paused={false}
                           consecutiveFailures={0}
