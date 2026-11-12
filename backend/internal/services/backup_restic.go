@@ -298,9 +298,9 @@ const unlockTimeout = 2 * time.Minute
 // this host by a process that no longer exists (restic v0.18.0
 // internal/restic/lock.go, Lock.Stale). OBSERVED: a lock held by a live
 // `restic backup` survived `restic unlock`, and forget still exited 11. So a
-// real concurrent operation, such as an external restic or one of Capstan's
-// own unguarded read-only calls, keeps its lock, the retry fails again, and
-// that is reported as a lock held by another process.
+// real concurrent operation, such as an external restic, keeps its lock, the
+// retry fails again, and that is reported as a lock held by another process.
+// Capstan's own read-only calls take no lock (--no-lock, agent-os-avat).
 func (m *ResticManager) runLocking(ctx context.Context, args, env []string, out chan<- StreamLine) error {
 	err := m.runner.Run(ctx, "restic", args, env, out)
 	if !isExitCode(err, resticExitRepoLocked) {
@@ -343,8 +343,19 @@ func (m *ResticManager) UnlockStale(ctx context.Context) error {
 	return timeoutError(ctx, runDrained(ctx, m.runner, "restic", []string{"unlock"}, m.resticEnv(pwFile)), "restic unlock")
 }
 
-// CheckRepository runs `restic snapshots --quiet` to verify the repository
-// is accessible. Returns nil on success.
+// CheckRepository runs `restic snapshots --no-lock --quiet` to verify the
+// repository is accessible. Returns nil on success.
+//
+// Every read-only restic call here (this probe, ListSnapshots, Stats,
+// RestorePreview and Verify) passes --no-lock. Without it each takes restic's
+// shared lock, and the status poll runs every 60 s outside Capstan's global
+// backup lock, so a forget, prune or check starting meanwhile met that lock,
+// exited 11, and runLocking's one unlock-and-retry failed again because the
+// lock was live (agent-os-avat). OBSERVED with restic 0.18.0: exit codes 10
+// (no repository), 12 (wrong password) and 0 are unchanged under --no-lock,
+// and `snapshots --no-lock` succeeds where `snapshots` fails on a read-only
+// locks directory (TestAvat_RealRestic_NoLockWritesNoLock). The cost is that
+// this probe can no longer see a lock: it never exits 11 now.
 func (m *ResticManager) CheckRepository(ctx context.Context) error {
 	pwFile, cleanup, err := m.withPasswordFile()
 	if err != nil {
@@ -355,7 +366,7 @@ func (m *ResticManager) CheckRepository(ctx context.Context) error {
 	ctx, cancel := withCommandDeadline(ctx, m.opDeadline(checkRepoTimeout))
 	defer cancel()
 
-	if err := runDrained(ctx, m.runner, "restic", []string{"snapshots", "--quiet"}, m.resticEnv(pwFile)); err != nil {
+	if err := runDrained(ctx, m.runner, "restic", []string{"snapshots", "--no-lock", "--quiet"}, m.resticEnv(pwFile)); err != nil {
 		return fmt.Errorf("cannot access restic repository: %w", timeoutError(ctx, err, "restic snapshots"))
 	}
 	return nil
@@ -717,7 +728,7 @@ func (m *ResticManager) Verify(ctx context.Context, snapshotID string) (entries 
 		}
 	}()
 	// "--" stops flag parsing, as in RestorePreview.
-	runErr := m.runner.Run(ctx, "restic", []string{"ls", "--", snapshotID}, m.resticEnv(pwFile), lines)
+	runErr := m.runner.Run(ctx, "restic", []string{"ls", "--no-lock", "--", snapshotID}, m.resticEnv(pwFile), lines)
 	close(lines)
 	<-counted
 
@@ -884,7 +895,7 @@ func (m *ResticManager) ListSnapshots(ctx context.Context, tag string, limit int
 	ctx, cancel := withCommandDeadline(ctx, m.opDeadline(listSnapshotsTimeout))
 	defer cancel()
 
-	args := []string{"snapshots", "--json"}
+	args := []string{"snapshots", "--no-lock", "--json"}
 	if tag != "" {
 		args = append(args, "--tag", tag)
 	}
@@ -947,7 +958,7 @@ func (m *ResticManager) RestorePreview(ctx context.Context, snapshotID string, o
 
 	// "--" stops flag parsing so a snapshot ID beginning with "-" cannot be
 	// interpreted as a restic flag (M5; the handler also validates the format).
-	return timeoutError(ctx, m.runner.Run(ctx, "restic", []string{"ls", "--", snapshotID}, m.resticEnv(pwFile), out), "restic ls")
+	return timeoutError(ctx, m.runner.Run(ctx, "restic", []string{"ls", "--no-lock", "--", snapshotID}, m.resticEnv(pwFile), out), "restic ls")
 }
 
 // resticStatsOutput is the JSON shape returned by `restic stats --json`.
@@ -969,7 +980,7 @@ func (m *ResticManager) Stats(ctx context.Context) (int64, error) {
 	ctx, cancel := withCommandDeadline(ctx, m.opDeadline(statsTimeout))
 	defer cancel()
 
-	args := []string{"stats", "--mode", "raw-data", "--json"}
+	args := []string{"stats", "--no-lock", "--mode", "raw-data", "--json"}
 	raw, err := m.runner.Output(ctx, "restic", args, m.resticEnv(pwFile))
 	if err != nil {
 		return 0, fmt.Errorf("restic stats: %w", timeoutError(ctx, err, "restic stats"))

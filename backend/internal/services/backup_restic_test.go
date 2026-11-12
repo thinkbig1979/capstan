@@ -595,11 +595,10 @@ func TestResticManager_RestorePreview_Args(t *testing.T) {
 
 	call := runner.lastCall()
 	assert.Equal(t, "restic", call.Binary)
-	assert.Equal(t, "ls", call.Args[0])
 	// "--" terminates flag parsing so a "-"-prefixed snapshot ID is treated as a
-	// positional argument, not a restic flag (M5).
-	assert.Equal(t, "--", call.Args[1])
-	assert.Equal(t, "abc123", call.Args[2])
+	// positional argument, not a restic flag (M5); --no-lock keeps a listing
+	// off the repository lock (agent-os-avat).
+	assert.Equal(t, []string{"ls", "--no-lock", "--", "abc123"}, call.Args)
 }
 
 // --- Stats tests ---

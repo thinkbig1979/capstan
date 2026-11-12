@@ -107,6 +107,8 @@ const (
 	// is running or was killed. The network and the credential are fine. The
 	// probe runs outside the global backup lock, so it never unlocks; the next
 	// backup, retention, check or restore clears a stale lock (runLocking).
+	// Since agent-os-avat the probe runs with --no-lock and cannot exit 11,
+	// so CheckRepository no longer produces this state; it stays defined.
 	RepoStateLocked RepoState = "locked"
 )
 
@@ -194,6 +196,13 @@ type BackupService struct {
 
 	// busy is 1 while a global operation (backup/sync/restore/dr) is running.
 	busy atomic.Int32
+
+	// lastRepoProbe and lastRepoSize hold the last answers of the status
+	// probes (CheckRepository's restic probe, RepoSizeBytes). While busy, the
+	// status poll is answered from them rather than reading a repository a
+	// forget or prune is rewriting (agent-os-avat).
+	lastRepoProbe atomic.Pointer[BackupAvailability]
+	lastRepoSize  atomic.Pointer[int64]
 
 	// schedulerActive tracks whether the periodic backup scheduler is currently
 	// started. It reflects StartScheduler/StopScheduler rather than the busy flag
@@ -603,6 +612,10 @@ func (s *BackupService) RepoSizeBytes(ctx context.Context) *int64 {
 	if err != nil {
 		return nil
 	}
+	if cached := s.lastRepoSize.Load(); cached != nil && s.IsBusy() {
+		size := *cached
+		return &size
+	}
 	restic := s.newResticMgr(bc)
 
 	size, err := restic.Stats(ctx)
@@ -610,6 +623,8 @@ func (s *BackupService) RepoSizeBytes(ctx context.Context) *int64 {
 		s.logger.Debug("RepoSizeBytes: stats failed", "error", err)
 		return nil
 	}
+	stored := size
+	s.lastRepoSize.Store(&stored)
 	return &size
 }
 
@@ -722,6 +737,21 @@ func (s *BackupService) CheckRepository(ctx context.Context) BackupAvailability 
 		return av
 	}
 
+	// Busy: a global operation holds the repository, and a forget or prune
+	// may be rewriting its index, so a --no-lock read could see it half done
+	// and report a fault that is not there. Answer from the last probe; with
+	// none on record, probe anyway (agent-os-avat).
+	if cached := s.lastRepoProbe.Load(); cached != nil && s.IsBusy() {
+		return *cached
+	}
+	av = s.probeRepository(ctx, bc, av)
+	s.lastRepoProbe.Store(&av)
+	return av
+}
+
+// probeRepository runs CheckRepository's restic probe and classifies its
+// answer into av.
+func (s *BackupService) probeRepository(ctx context.Context, bc BackupConfig, av BackupAvailability) BackupAvailability {
 	restic := s.newResticMgr(bc)
 	if err := restic.CheckRepository(ctx); err != nil {
 		av.RepoReachable = false
@@ -762,7 +792,9 @@ func (s *BackupService) CheckRepository(ctx context.Context) BackupAvailability 
 		// Exit 11 is "repository is already locked": the repository answered,
 		// so unreachable's hint (check the network, the mount) is wrong.
 		// No unlock here: this runs outside the global backup lock
-		// (agent-os-zg60).
+		// (agent-os-zg60). Unreachable from the real probe since it runs
+		// with --no-lock (agent-os-avat); kept so the state, and its wire
+		// value, stay defined if a lock probe is added back.
 		if isExitCode(err, resticExitRepoLocked) {
 			av.RepoState = RepoStateLocked
 			av.Message = "the repository is locked by another restic operation; if none is running, the lock is stale and the next backup clears it"

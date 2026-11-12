@@ -3540,7 +3540,7 @@ func TestListSnapshots_ValidatesStackID(t *testing.T) {
 		assert.Empty(t, snapshots)
 		args, listed := runner.listingArgs()
 		require.True(t, listed)
-		assert.Equal(t, []string{"snapshots", "--json", "--tag", stackID}, args)
+		assert.Equal(t, []string{"snapshots", "--no-lock", "--json", "--tag", stackID}, args)
 	})
 
 	t.Run("id at the cap is accepted", func(t *testing.T) {
@@ -3561,7 +3561,7 @@ func TestListSnapshots_ValidatesStackID(t *testing.T) {
 		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 		args, listed := runner.listingArgs()
 		require.True(t, listed)
-		assert.Equal(t, []string{"snapshots", "--json"}, args)
+		assert.Equal(t, []string{"snapshots", "--no-lock", "--json"}, args)
 	})
 }
 
