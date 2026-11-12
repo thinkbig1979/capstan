@@ -8,9 +8,11 @@ interface EnvRawViewProps {
   onSaveRaw: () => void
   saving: boolean
   hasUnsavedChanges: boolean
+  /** The rows kept from the locked view could not be filled (agent-os-yt2f). */
+  saveRefused: boolean
 }
 
-export function EnvRawView({ rawContent, onRawChange, onSaveRaw, saving, hasUnsavedChanges }: EnvRawViewProps) {
+export function EnvRawView({ rawContent, onRawChange, onSaveRaw, saving, hasUnsavedChanges, saveRefused }: EnvRawViewProps) {
   return (
     <div className="space-y-4">
       <Textarea
@@ -20,7 +22,7 @@ export function EnvRawView({ rawContent, onRawChange, onSaveRaw, saving, hasUnsa
         className="font-mono min-h-[400px]"
       />
       <div className="flex justify-end">
-        <Button onClick={onSaveRaw} disabled={saving || !hasUnsavedChanges}>
+        <Button onClick={onSaveRaw} disabled={saving || !hasUnsavedChanges || saveRefused}>
           <Save className="mr-2 h-4 w-4" />
           {saving ? 'Saving...' : 'Save'}
         </Button>

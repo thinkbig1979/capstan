@@ -108,6 +108,8 @@ export function useEnvHistory({ setEntries, setRawContent, setHasUnsavedChanges 
   return {
     historyIndex,
     historyLength: history.length,
+    /** Every snapshot Undo or Redo can bring back, read-only. */
+    snapshots: history,
     pushToHistory,
     handleUndo,
     handleRedo,

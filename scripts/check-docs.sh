@@ -27,7 +27,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation networkidle-probes locator-count-guard ws-registration close-reason getter-errors ws-read-deadline path-containment trusted-networks compose-parity ticker-stop project-name-lookup stack-write-callers rclone-delete-argv goroutine-sends settings-writes push-switch-writers full-row-selects arm-refusal pipefail-grep-q awk-portability analysis-caches dockerhub-pulls"
+CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation networkidle-probes locator-count-guard ws-registration close-reason getter-errors ws-read-deadline path-containment trusted-networks compose-parity ticker-stop env-hand-parse project-name-lookup stack-write-callers rclone-delete-argv goroutine-sends settings-writes push-switch-writers full-row-selects arm-refusal pipefail-grep-q awk-portability analysis-caches dockerhub-pulls"
 
 REQUIRED_DOCS="docs/getting-started.md
 docs/how-to/deploy-production.md
@@ -888,6 +888,40 @@ check_ticker_stop() {
   return 1
 }
 
+# check_env_hand_parse delegates to scripts/check-env-hand-parse.sh: no
+# non-test Go file under backend/internal or backend/cmd looks for "=" with a
+# strings or bytes call outside its allowlisted functions (the start of a hand
+# parse of KEY=value); a stack's env is resolved with
+# compose-go through resolveComposeEnv (agent-os-1106). Self-test first, same
+# reasoning as ws-registration.
+check_env_hand_parse() {
+  local script="$SCRIPT_DIR/check-env-hand-parse.sh"
+  if [ ! -f "$script" ]; then
+    echo "FAIL: env-hand-parse - $script not found"
+    return 1
+  fi
+
+  local self status
+  self=$(bash "$script" --self-test 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: env-hand-parse - the check's own self-test failed, so its verdict on the tree cannot be trusted:"
+    echo "$self"
+    return 1
+  fi
+
+  local out
+  out=$(bash "$script" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ]; then
+    echo "PASS: env-hand-parse - ${self#env-hand-parse }; ${out#check-env-hand-parse: }"
+    return 0
+  fi
+  echo "FAIL: env-hand-parse - a strings/bytes call looking for \"=\" outside the allowlist, or a stale allowlist entry:"
+  echo "$out"
+  return 1
+}
+
 # check_project_name_lookup delegates to scripts/check-project-name-lookup.sh:
 # no non-test Go file under backend/internal or backend/cmd filters a query on
 # project_name outside GetStackByProjectName, which reports a name two stacks
@@ -1605,6 +1639,7 @@ run_check() {
     trusted-networks) check_trusted_networks ;;
     compose-parity) check_compose_parity ;;
     ticker-stop) check_ticker_stop ;;
+    env-hand-parse) check_env_hand_parse ;;
     project-name-lookup) check_project_name_lookup ;;
     stack-write-callers) check_stack_write_callers ;;
     rclone-delete-argv) check_rclone_delete_argv ;;

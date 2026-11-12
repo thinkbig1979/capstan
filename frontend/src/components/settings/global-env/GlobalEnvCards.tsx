@@ -1,7 +1,7 @@
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Eye, EyeOff, Trash2 } from 'lucide-react'
-import { isSensitiveKey } from './sensitiveKey'
+import { isSensitiveKey } from '@/components/stack/env-editor/sensitiveKey'
 import type { EnvVar, IndexedEnvVar } from './types'
 
 interface GlobalEnvCardsProps {

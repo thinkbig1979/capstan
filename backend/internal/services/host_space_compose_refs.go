@@ -5,12 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
-	"github.com/compose-spec/compose-go/v2/dotenv"
 	"github.com/compose-spec/compose-go/v2/loader"
 	"github.com/compose-spec/compose-go/v2/template"
 	"github.com/compose-spec/compose-go/v2/types"
@@ -19,7 +17,6 @@ import (
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/volume"
 
-	"github.com/thinkbig1979/capstan/backend/internal/dockerenv"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
@@ -191,49 +188,18 @@ func tolerantSubstitute(value string, mapping template.Mapping) (string, error) 
 }
 
 // composeEnvironment is the interpolation environment `docker compose` sees
-// when Capstan runs it: the --env-file arguments buildComposeArgs passes
-// (global.env when it exists, then the stack's EnvFile), or the project
-// directory's .env when there are none, overridden by the compose child's
-// own environment. That child gets dockerenv.Env() (exec_env.go dockerEnv),
-// not Capstan's process environment, so only those variables override a
-// file: a TAG set in Capstan's own env never reaches compose and must not
-// change a name here either. A file compose would fail to read fails here
-// too.
+// when Capstan runs it: resolveComposeEnv's exact mode (agent-os-1106), which
+// is shared with redaction's superset mode so the two cannot drift apart on
+// how compose reads a stack's env. Exact, not superset: the compose child gets
+// dockerenv.Env(), not Capstan's process environment, so a TAG set in
+// Capstan's own env never reaches compose and must not change a name here,
+// and a file compose would fail to read fails here too.
 func composeEnvironment(st models.Stack, globalEnvPath string) (map[string]string, error) {
-	var files []string
-	if globalEnvPath != "" {
-		if _, err := os.Stat(globalEnvPath); err == nil {
-			files = append(files, globalEnvPath)
-		} else if !os.IsNotExist(err) {
-			return nil, fmt.Errorf("checking the global env file: %w", err)
-		}
-	}
-	if st.EnvFile != "" {
-		files = append(files, stackRelativePath(st.Directory, st.EnvFile))
-	}
-	if len(files) == 0 && st.Directory != "" {
-		dotEnv := filepath.Join(st.Directory, ".env")
-		if _, err := os.Stat(dotEnv); err == nil {
-			files = append(files, dotEnv)
-		} else if !os.IsNotExist(err) {
-			return nil, fmt.Errorf("checking the stack's .env: %w", err)
-		}
-	}
-
-	processEnv := map[string]string{}
-	for _, kv := range dockerenv.Env() {
-		if k, v, ok := strings.Cut(kv, "="); ok {
-			processEnv[k] = v
-		}
-	}
-	env, err := dotenv.GetEnvFromFile(processEnv, files)
+	envs, err := resolveComposeEnv(st, globalEnvPath, composeEnvExact)
 	if err != nil {
 		return nil, err
 	}
-	for k, v := range processEnv {
-		env[k] = v
-	}
-	return env, nil
+	return envs[0], nil
 }
 
 func stackRelativePath(dir, p string) string {

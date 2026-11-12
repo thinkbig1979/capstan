@@ -122,7 +122,8 @@ func TestEnvComposeLines_N43b_ColonAfterEqualsStaysKeyRow(t *testing.T) {
 	assert.Equal(t, []EnvEntry{
 		{Key: "TIME", Value: "12:00", Line: 1},
 		{Key: "K", Value: "a:b", Line: 2, Quote: `"`},
-		{Key: "DATABASE_URL", Value: "postgres://u:p@h", Line: 3},
+		// Sensitive since agent-os-yt2f: the value carries a URL credential.
+		{Key: "DATABASE_URL", Value: "postgres://u:p@h", Line: 3, Sensitive: true},
 	}, entries)
 }
 

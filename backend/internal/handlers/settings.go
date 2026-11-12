@@ -286,9 +286,11 @@ func (h *SettingsHandler) ChangePassword(c *gin.Context) {
 func (h *SettingsHandler) GetGlobalEnv(c *gin.Context) {
 	globalEnvPath := h.cfg.DataDir + "/global.env"
 
-	// parseEnvFile owns the absence contract (no global.env yet is an empty
-	// env, not an error), so any error it returns is a real read fault.
-	envVars, err := parseEnvFile(globalEnvPath)
+	// readGlobalEnvFile owns the absence contract (no global.env yet is an
+	// empty env, not an error), so any error it returns is a real read fault.
+	// The file is read once: the rows and, when locked, their redaction are
+	// both built from these bytes (agent-os-yt2f review DS1).
+	data, err := readGlobalEnvFile(globalEnvPath)
 	if err != nil {
 		handleError(c, models.NewAppErrorWithCause(
 			http.StatusInternalServerError,
@@ -298,6 +300,7 @@ func (h *SettingsHandler) GetGlobalEnv(c *gin.Context) {
 		))
 		return
 	}
+	envVars := parseGlobalEnvText(string(data))
 
 	// Same second factor as the per-stack .env surface: without a live unlock
 	// token, secret-looking values are blanked. Global env routinely holds the
@@ -305,11 +308,7 @@ func (h *SettingsHandler) GetGlobalEnv(c *gin.Context) {
 	// hole one endpoint sideways.
 	locked := !envUnlocked(c)
 	if locked {
-		for i := range envVars {
-			if services.IsSensitiveEnvKey(envVars[i]["key"]) {
-				envVars[i]["value"] = ""
-			}
-		}
+		redactGlobalEnvVars(envVars, string(data))
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -390,21 +389,37 @@ func (h *SettingsHandler) UpdateGlobalEnv(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// parseEnvFile reads the global env file. A file that does not exist is an
-// empty env with a nil error: a fresh install has none yet. Every other read
-// failure (a directory in its place, a permission or I/O fault) is returned,
-// never dressed as an empty result (agent-os-2ucq).
-func parseEnvFile(path string) ([]map[string]string, error) {
+// readGlobalEnvFile reads the global env file. A file that does not exist is
+// an empty env (no bytes) with a nil error: a fresh install has none yet.
+// Every other read failure (a directory in its place, a permission or I/O
+// fault) is returned, never dressed as an empty result (agent-os-2ucq).
+func readGlobalEnvFile(path string) ([]byte, error) {
 	//nolint:gosec // path's only caller passes h.cfg.DataDir + "/global.env", config-derived, never request input
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return []map[string]string{}, nil
+			return nil, nil
 		}
 		return nil, err
 	}
+	return data, nil
+}
 
-	lines := strings.Split(string(data), "\n")
+// parseEnvFile reads and parses the global env file; see readGlobalEnvFile
+// for the absence contract and parseGlobalEnvText for the rows.
+func parseEnvFile(path string) ([]map[string]string, error) {
+	data, err := readGlobalEnvFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return parseGlobalEnvText(string(data)), nil
+}
+
+// parseGlobalEnvText is the global env page's parser over the file's text
+// (split out of parseEnvFile unchanged, so GetGlobalEnv can redact from the
+// same bytes it parsed). agent-os-rd1l replaces it.
+func parseGlobalEnvText(text string) []map[string]string {
+	lines := strings.Split(text, "\n")
 	vars := []map[string]string{}
 
 	for _, line := range lines {
@@ -424,7 +439,7 @@ func parseEnvFile(path string) ([]map[string]string, error) {
 		}
 	}
 
-	return vars, nil
+	return vars
 }
 
 func (h *SettingsHandler) GetLogRetention(c *gin.Context) {

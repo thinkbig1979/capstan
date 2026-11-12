@@ -36,6 +36,8 @@ interface EnvTableViewProps {
    * left to fail (agent-os-7o5s).
    */
   locked: boolean
+  /** The rows kept from the locked view could not be filled (agent-os-yt2f). */
+  saveRefused: boolean
 }
 
 export function EnvTableView({
@@ -49,6 +51,7 @@ export function EnvTableView({
   saving,
   hasUnsavedChanges,
   locked,
+  saveRefused,
 }: EnvTableViewProps) {
   // Entries are tagged with their original index so that all edit/delete/toggle
   // handlers still target `entries[originalIndex]` regardless of filter order.
@@ -244,7 +247,7 @@ export function EnvTableView({
         </Button>
         <Button
           onClick={onSaveTable}
-          disabled={saving || !hasUnsavedChanges || locked}
+          disabled={saving || !hasUnsavedChanges || locked || saveRefused}
           title={locked ? 'Unlock with your password to edit environment variables' : undefined}
         >
           <Save className="mr-2 h-4 w-4" />

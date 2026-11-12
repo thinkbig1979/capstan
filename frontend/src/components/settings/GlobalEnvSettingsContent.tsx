@@ -36,6 +36,7 @@ export function GlobalEnvSettingsContent() {
     isRefetchError,
     refetch,
     locked,
+    saveRefused,
     vars,
     dirty,
     query,
@@ -147,10 +148,19 @@ export function GlobalEnvSettingsContent() {
         <EnvLockedNotice hasUnsavedEdits onUnlock={() => handleDialogOpenChange(true)} />
       )}
 
-      {changedElsewhere && (
+      {saveRefused ? (
+        // Placeholder copy (agent-os-yt2f): wording to be confirmed.
         <FileChangedNotice onReload={reloadChanged}>
-          These settings changed elsewhere. Reload to see the new values; saving now overwrites them.
+          {saveRefused === 'unaligned'
+            ? "The unlocked settings do not line up with the variables you edited while locked, so they can't be saved safely. Reload to load the settings; your edits will be lost."
+            : "You changed or deleted variables that were hidden while locked, so they can't be saved safely. Reload to load the settings; your edits will be lost."}
         </FileChangedNotice>
+      ) : (
+        changedElsewhere && (
+          <FileChangedNotice onReload={reloadChanged}>
+            These settings changed elsewhere. Reload to see the new values; saving now overwrites them.
+          </FileChangedNotice>
+        )
       )}
 
       <div className="flex justify-between">
@@ -161,7 +171,7 @@ export function GlobalEnvSettingsContent() {
         <Button
           type="button"
           onClick={handleSave}
-          disabled={isSaving || !dirty || locked}
+          disabled={isSaving || !dirty || locked || saveRefused !== null}
           title={locked ? 'Unlock with your password to edit global environment variables' : undefined}
         >
           {isSaving ? (
