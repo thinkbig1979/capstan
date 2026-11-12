@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react'
+import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import { toast } from 'sonner'
 import { useTextFilter } from '@/hooks/useTextFilter'
 import { useGlobalEnv, useUpdateGlobalEnv } from '@/hooks/useResources'
+import { useExternalFileChange } from '@/hooks/useExternalFileChange'
 import { presentError } from '@/lib/error-handler'
 import type { EnvVar, IndexedEnvVar } from './types'
 
@@ -24,16 +25,29 @@ export function useGlobalEnvVars(setVisible: Dispatch<SetStateAction<Record<numb
   const [vars, setVars] = useState<EnvVar[]>([])
   const [dirty, setDirty] = useState(false)
 
+  // The list a save last sent. Its own refetch comes back carrying exactly this,
+  // which must not read as a change made elsewhere (agent-os-lqcw).
+  const savedRef = useRef<EnvVar[] | null>(null)
+  const varsRef = useRef(vars)
   useEffect(() => {
-    if (!data) return
-    // Sync server state into local edit buffer when query resolves or refetches.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setVars(data.vars ?? [])
+    varsRef.current = vars
+  }, [vars])
 
-    setVisible({})
-
-    setDirty(false)
-  }, [data, setVisible])
+  // A new payload replaces the form only when the form is clean. A dirty form
+  // keeps what the user typed and offers Reload (agent-os-lqcw), the rule the
+  // compose and stack env editors follow (agent-os-umig). A lock change keeps
+  // the plain reload for now: agent-os-vqf5 owns the edits that still discards.
+  const { changedOnDisk, reload } = useExternalFileChange(data, {
+    isDirty: dirty,
+    hydrate: (next) => {
+      setVars(next.vars ?? [])
+      setVisible({})
+      setDirty(false)
+    },
+    canHydrateWhileDirty: (next, prev) =>
+      Boolean(next.locked) !== Boolean(prev?.locked) || sameVars(next.vars ?? [], vars),
+    isOwnSave: (next) => savedRef.current !== null && sameVars(next.vars ?? [], savedRef.current),
+  })
 
   // Wrap vars with their original index so filtered results can route edits correctly.
   const indexedVars = useMemo<IndexedEnvVar[]>(
@@ -67,13 +81,15 @@ export function useGlobalEnvVars(setVisible: Dispatch<SetStateAction<Record<numb
   }
 
   const handleSave = () => {
-    const cleaned = vars
-      .map((v) => ({ key: v.key.trim(), value: v.value }))
-      .filter((v) => v.key !== '')
+    const cleaned = cleanVars(vars)
+    savedRef.current = cleaned
     updateGlobalEnv.mutate(cleaned, {
       onSuccess: () => {
         toast.success('Global environment variables saved')
-        setDirty(false)
+        // Typing that landed while the save was in flight is not on the server:
+        // stay dirty, and the refetch is then recognised as this save's own
+        // (agent-os-lqcw, the same rule as agent-os-3761).
+        if (sameVars(cleanVars(varsRef.current), cleaned)) setDirty(false)
       },
       onError: (err) => {
         presentError(err, { fallback: 'Failed to save global environment variables' })
@@ -109,6 +125,18 @@ export function useGlobalEnvVars(setVisible: Dispatch<SetStateAction<Record<numb
     handleAdd,
     handleDelete,
     handleSave,
+    changedElsewhere: changedOnDisk,
+    reloadChanged: reload,
     isSaving: updateGlobalEnv.isPending,
   }
+}
+
+/** What a save sends: keys trimmed, rows without a key dropped. */
+function cleanVars(vars: EnvVar[]): EnvVar[] {
+  return vars.map((v) => ({ key: v.key.trim(), value: v.value })).filter((v) => v.key !== '')
+}
+
+/** Two lists say the same variables, in the same order. */
+function sameVars(a: EnvVar[], b: EnvVar[]) {
+  return a.length === b.length && a.every((v, i) => v.key === b[i].key && v.value === b[i].value)
 }

@@ -13,6 +13,7 @@ import { GlobalEnvCards } from './global-env/GlobalEnvCards'
 import { useGlobalEnvReveal } from './global-env/useGlobalEnvReveal'
 import { useGlobalEnvVars } from './global-env/useGlobalEnvVars'
 import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
+import { FileChangedNotice } from '@/components/FileChangedNotice'
 
 export function GlobalEnvSettingsContent() {
   const { authDisabled } = useAuth()
@@ -43,6 +44,8 @@ export function GlobalEnvSettingsContent() {
     handleAdd,
     handleDelete,
     handleSave,
+    changedElsewhere,
+    reloadChanged,
     isSaving,
   } = useGlobalEnvVars(setVisible)
 
@@ -137,6 +140,12 @@ export function GlobalEnvSettingsContent() {
           beforeSave
           onRetry={() => refetch()}
         />
+      )}
+
+      {changedElsewhere && (
+        <FileChangedNotice onReload={reloadChanged}>
+          These settings changed elsewhere. Reload to see the new values; saving now overwrites them.
+        </FileChangedNotice>
       )}
 
       <div className="flex justify-between">
