@@ -86,6 +86,10 @@ const applyRetryDelay = 30 * time.Second
 // restarted (agent-os-o1jg).
 const autoApplyTimeout = 10 * time.Minute
 
+// autoUpdatePauseAfterFailures is how many consecutive failed passes pause a
+// policy.
+const autoUpdatePauseAfterFailures = 3
+
 // applySchedule is the scheduler's resolved view of the update_apply_* settings.
 // A zero value means immediate mode, which is both the seeded default and the
 // fallback for an absent key or an unparseable stored value (see
@@ -1339,13 +1343,17 @@ func (s *SchedulerService) runAutoUpdates(ctx context.Context, updates []models.
 
 	// Applied once per policy, after every item has run: any failure counts
 	// one, otherwise any success resets. no_change items leave it alone.
+	//
+	// policy is the row as this pass read it, which can be minutes old by now.
+	// It names the row (by id) and nothing else: the writes below change only
+	// the pass's own columns, and only while the stored row is still enabled
+	// and not paused, so a policy the operator turned off or deleted meanwhile
+	// stays that way (agent-os-71sp).
 	for _, policy := range passPolicies {
 		r := passResults[policy]
 		if r.failedUpdate == nil {
 			if r.succeeded {
-				policy.ConsecutiveFailures = 0
-				policy.UpdatedAt = time.Now().Format(time.RFC3339)
-				if err := s.db.UpsertAutoUpdatePolicy(policy); err != nil {
+				if _, err := s.db.ResetAutoUpdatePolicyFailures(policy.ID, time.Now().Format(time.RFC3339)); err != nil {
 					s.logger.Error("Failed to reset policy failures", "error", err)
 				}
 			}
@@ -1353,14 +1361,14 @@ func (s *SchedulerService) runAutoUpdates(ctx context.Context, updates []models.
 		}
 		update := *r.failedUpdate
 
-		policy.ConsecutiveFailures++
-		if policy.ConsecutiveFailures >= 3 {
-			policy.Paused = true
-			policy.UpdatedAt = time.Now().Format(time.RFC3339)
-			if err := s.db.UpsertAutoUpdatePolicy(policy); err != nil {
-				s.logger.Error("Failed to update paused policy", "error", err)
-			}
-
+		written, paused, err := s.db.RecordAutoUpdatePolicyFailure(policy.ID, time.Now().Format(time.RFC3339), autoUpdatePauseAfterFailures)
+		switch {
+		case err != nil:
+			s.logger.Error("Failed to update policy", "error", err)
+		case !written:
+			s.logger.Info("Auto-update policy changed during the pass; its failure was not counted",
+				"target_type", policy.TargetType, "target_id", policy.TargetID)
+		case paused:
 			// completed_at = started_at, as on a skipped row: retention
 			// and the manual clear both delete by completed_at, so a row
 			// without one would never go (agent-os-z91e.46).
@@ -1382,15 +1390,11 @@ func (s *SchedulerService) runAutoUpdates(ctx context.Context, updates []models.
 				s.logger.Error("Failed to insert paused history", "error", err)
 			}
 
-			s.logger.Warn("Auto-update paused after 3 consecutive failures",
+			s.logger.Warn("Auto-update paused after consecutive failures",
+				"failures", autoUpdatePauseAfterFailures,
 				"container", update.ContainerName,
 				"target_type", policy.TargetType,
 				"target_id", policy.TargetID)
-		} else {
-			policy.UpdatedAt = time.Now().Format(time.RFC3339)
-			if err := s.db.UpsertAutoUpdatePolicy(policy); err != nil {
-				s.logger.Error("Failed to update policy", "error", err)
-			}
 		}
 	}
 

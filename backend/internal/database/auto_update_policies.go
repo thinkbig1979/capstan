@@ -1,6 +1,8 @@
 package database
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/thinkbig1979/capstan/backend/internal/models"
@@ -59,6 +61,56 @@ func (d *DB) UpsertAutoUpdatePolicy(policy *models.AutoUpdatePolicy) error {
 		policy.Enabled, policy.ConsecutiveFailures, policy.Paused,
 		policy.CreatedAt, policy.UpdatedAt)
 	return err
+}
+
+// The two writers below are the auto-update pass's only writes to a policy.
+// The pass reads its policies once, at its start, and an operator can turn a
+// policy off or delete it while the pass runs. Writing the pass's whole row
+// back with UpsertAutoUpdatePolicy (INSERT OR REPLACE) turned such a policy
+// back on, or re-created it (agent-os-71sp). So the pass writes only its own
+// columns, and only to the row it read while that row is still enabled and not
+// paused:
+//   - keyed on id, not on the target: a policy deleted and created again gets
+//     a new id (handlers/updates.go upsertAutoUpdatePolicy), and must not
+//     inherit the stale pass's counters;
+//   - a disabled, paused or missing row matches nothing, so the write is a
+//     no-op and the operator's change stands;
+//   - the failure count is incremented in SQL, from the stored value, never
+//     from the copy the pass read.
+const autoUpdatePolicyPassGuard = `WHERE id = ? AND enabled = TRUE AND paused = FALSE`
+
+// ResetAutoUpdatePolicyFailures zeroes a policy's failure count after a pass
+// in which its updates succeeded. It reports whether a row was written.
+func (d *DB) ResetAutoUpdatePolicyFailures(id, updatedAt string) (bool, error) {
+	res, err := d.db.Exec(`UPDATE auto_update_policies SET consecutive_failures = 0, updated_at = ? `+autoUpdatePolicyPassGuard,
+		updatedAt, id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// RecordAutoUpdatePolicyFailure counts one failed pass against a policy and
+// pauses it when that makes pauseAt consecutive failures. written reports
+// whether a row was written; paused reports whether this write paused it.
+func (d *DB) RecordAutoUpdatePolicyFailure(id, updatedAt string, pauseAt int) (written, paused bool, err error) {
+	err = d.db.QueryRow(`UPDATE auto_update_policies
+		SET consecutive_failures = consecutive_failures + 1,
+		    paused = (consecutive_failures + 1 >= ?),
+		    updated_at = ?
+		`+autoUpdatePolicyPassGuard+`
+		RETURNING paused`, pauseAt, updatedAt, id).Scan(&paused)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+	return true, paused, nil
 }
 
 func (d *DB) DeleteAutoUpdatePolicy(targetType, targetID string) error {
