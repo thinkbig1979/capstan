@@ -57,7 +57,7 @@ func snapshotJSONAt(id, stackID, path string, extraTags ...string) []byte {
 }
 
 // fmeuRestore runs the restore and returns its error and every stream line.
-func fmeuRestore(t *testing.T, svc *BackupService) (error, string) {
+func fmeuRestore(t *testing.T, svc *BackupService) (string, error) {
 	t.Helper()
 	out := make(chan StreamLine, 256)
 	var lines []string
@@ -72,7 +72,7 @@ func fmeuRestore(t *testing.T, svc *BackupService) (error, string) {
 	err := svc.RunRestore(context.Background(), "myapp", fmeuSnap, out)
 	close(out)
 	wg.Wait()
-	return err, strings.Join(lines, "\n")
+	return strings.Join(lines, "\n"), err
 }
 
 func restoreCall(t *testing.T, r *fakeRunner) []string {
@@ -95,7 +95,7 @@ func TestFmeu_PartialSnapshotRestoreKeepsUnreadablePaths(t *testing.T) {
 	svc, _, runner, _, _ := fmeuSetup(t, t.TempDir(), &models.BackupRunItem{
 		UnreadableCount: intp(2), UnreadablePaths: []string{"$STACK/data/db", "$STACK/locked.txt"}})
 
-	err, stream := fmeuRestore(t, svc)
+	stream, err := fmeuRestore(t, svc)
 	require.NoError(t, err)
 	args := restoreCall(t, runner)
 	assert.Contains(t, args, "--delete")
@@ -111,7 +111,7 @@ func TestFmeu_UnlistedUnreadablePathsDropDelete(t *testing.T) {
 	svc, _, runner, _, _ := fmeuSetup(t, t.TempDir(), &models.BackupRunItem{
 		UnreadableCount: intp(3), UnreadablePaths: []string{"$STACK/a", "$STACK/b"}})
 
-	err, stream := fmeuRestore(t, svc)
+	stream, err := fmeuRestore(t, svc)
 	require.NoError(t, err)
 	args := restoreCall(t, runner)
 	assert.NotContains(t, args, "--delete", "%v", args)
@@ -125,7 +125,7 @@ func TestFmeu_PathOutsideSourceDropsDelete(t *testing.T) {
 	svc, _, runner, _, _ := fmeuSetup(t, t.TempDir(), &models.BackupRunItem{
 		UnreadableCount: intp(1), UnreadablePaths: []string{"/elsewhere/x"}})
 
-	err, _ := fmeuRestore(t, svc)
+	_, err := fmeuRestore(t, svc)
 	require.NoError(t, err)
 	assert.NotContains(t, restoreCall(t, runner), "--delete")
 }
@@ -141,7 +141,7 @@ func TestFmeu_CompleteSnapshotRestoreDeletes(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			svc, _, runner, _, _ := fmeuSetup(t, t.TempDir(), item)
-			err, stream := fmeuRestore(t, svc)
+			stream, err := fmeuRestore(t, svc)
 			require.NoError(t, err)
 			args := restoreCall(t, runner)
 			assert.Contains(t, args, "--delete")
@@ -165,7 +165,7 @@ func TestFmeu_UnreadableItemRefusesBeforeStopping(t *testing.T) {
 	_, armErr := db.GetRunItemForSnapshot("myapp", fmeuSnap)
 	require.Error(t, armErr, "fixture is unarmed")
 
-	err, _ = fmeuRestore(t, svc)
+	_, err = fmeuRestore(t, svc)
 	require.Error(t, err)
 	assert.Equal(t, 0, docker.stopped(), "the stack must not be stopped for a refused restore")
 	for _, c := range runner.calls {
@@ -222,7 +222,7 @@ func TestFmeu_TaggedPartialWithoutItemDropsDelete(t *testing.T) {
 	svc, _, runner, _, stack := fmeuSetup(t, t.TempDir(), nil)
 	runner.outputData = snapshotJSONAt(fmeuSnap, "myapp", stack, PartialSnapshotTag)
 
-	err, stream := fmeuRestore(t, svc)
+	stream, err := fmeuRestore(t, svc)
 	require.NoError(t, err)
 	assert.NotContains(t, restoreCall(t, runner), "--delete")
 	assert.Contains(t, stream, "no longer on record")
@@ -236,7 +236,7 @@ func TestFmeu_TaggedPartialWithItemExcludesPaths(t *testing.T) {
 		UnreadableCount: intp(1), UnreadablePaths: []string{"$STACK/data/db"}})
 	runner.outputData = snapshotJSONAt(fmeuSnap, "myapp", stack, PartialSnapshotTag)
 
-	err, _ := fmeuRestore(t, svc)
+	_, err := fmeuRestore(t, svc)
 	require.NoError(t, err)
 	args := restoreCall(t, runner)
 	assert.Contains(t, args, "--delete")
@@ -250,7 +250,7 @@ func TestFmeu_TaggedSnapshotWithCompleteItemDropsDelete(t *testing.T) {
 	svc, _, runner, _, stack := fmeuSetup(t, t.TempDir(), &models.BackupRunItem{})
 	runner.outputData = snapshotJSONAt(fmeuSnap, "myapp", stack, PartialSnapshotTag)
 
-	err, _ := fmeuRestore(t, svc)
+	_, err := fmeuRestore(t, svc)
 	require.NoError(t, err)
 	assert.NotContains(t, restoreCall(t, runner), "--delete")
 }

@@ -173,7 +173,7 @@ func TestQnso_DRStreamLineNeverCarriesTheRemoteCredential(t *testing.T) {
 	svc := buildSvc(t, db, &fakeDocker{}, &fakeRunner{}, r)
 
 	out := make(chan StreamLine, 128)
-	_ = svc.RunDRRestore(context.Background(), out)
+	require.NoError(t, svc.RunDRRestore(context.Background(), out))
 	close(out)
 	var all []string
 	for l := range out {

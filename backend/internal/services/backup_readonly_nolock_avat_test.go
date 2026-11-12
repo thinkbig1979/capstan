@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -20,18 +21,30 @@ import (
 func TestAvat_EveryReadOnlyResticCallCarriesNoLock(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	calls := map[string]func(m *ResticManager){
-		"CheckRepository (snapshots --quiet)": func(m *ResticManager) { _ = m.CheckRepository(ctx) },
-		"ListSnapshots (snapshots --json)":    func(m *ResticManager) { _, _ = m.ListSnapshots(ctx, "app", 0) },
-		"Stats (stats --mode raw-data)":       func(m *ResticManager) { _, _ = m.Stats(ctx) },
-		"RestorePreview (ls)":                 func(m *ResticManager) { _ = m.RestorePreview(ctx, "abcd1234", nil) },
-		"Verify (ls)":                         func(m *ResticManager) { _, _ = m.Verify(ctx, "abcd1234") },
+	calls := map[string]func(m *ResticManager) error{
+		"CheckRepository (snapshots --quiet)": func(m *ResticManager) error { return m.CheckRepository(ctx) },
+		"ListSnapshots (snapshots --json)": func(m *ResticManager) error {
+			_, err := m.ListSnapshots(ctx, "app", 0)
+			return err
+		},
+		"Stats (stats --mode raw-data)": func(m *ResticManager) error {
+			_, err := m.Stats(ctx)
+			return err
+		},
+		"RestorePreview (ls)": func(m *ResticManager) error { return m.RestorePreview(ctx, "abcd1234", nil) },
+		"Verify (ls)": func(m *ResticManager) error {
+			_, err := m.Verify(ctx, "abcd1234")
+			return err
+		},
 	}
 	for name, call := range calls {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			r := &fakeRunner{outputData: []byte(`{"total_size":1}`)}
-			call(newResticManagerWithRunner(testBackupConfig(), r, nil))
+			if strings.HasPrefix(name, "ListSnapshots") {
+				r.outputData = []byte(`[]`)
+			}
+			require.NoError(t, call(newResticManagerWithRunner(testBackupConfig(), r, nil)))
 			require.Len(t, r.calls, 1)
 			assert.Contains(t, r.calls[0].Args, "--no-lock", "argv %v", r.calls[0].Args)
 		})
@@ -45,8 +58,8 @@ func TestAvat_LockingCallsKeepTheirLock(t *testing.T) {
 	ctx := context.Background()
 	r := &fakeRunner{}
 	m := newResticManagerWithRunner(testBackupConfig(), r, nil)
-	_ = m.ApplyRetention(ctx, "app", nil)
-	_ = m.Prune(ctx, false, nil)
+	require.NoError(t, m.ApplyRetention(ctx, "app", nil))
+	require.NoError(t, m.Prune(ctx, false, nil))
 	require.NotEmpty(t, r.calls)
 	for _, c := range r.calls {
 		assert.NotContains(t, c.Args, "--no-lock", "argv %v", c.Args)
@@ -116,8 +129,8 @@ func TestAvat_RealRestic_NoLockWritesNoLock(t *testing.T) {
 	require.NoError(t, m.EnsureRepository(ctx))
 
 	locks := filepath.Join(repo, "locks")
-	require.NoError(t, os.Chmod(locks, 0o555))       //nolint:gosec // G302: a directory under this test's t.TempDir(), made read-only on purpose
-	t.Cleanup(func() { _ = os.Chmod(locks, 0o755) }) //nolint:gosec // G302: restored so t.TempDir() can remove it
+	require.NoError(t, os.Chmod(locks, 0o555))                       //nolint:gosec // G302: a directory under this test's t.TempDir(), made read-only on purpose
+	t.Cleanup(func() { require.NoError(t, os.Chmod(locks, 0o755)) }) //nolint:gosec // G302: restored so t.TempDir() can remove it
 
 	pwFile, cleanup, err := m.withPasswordFile()
 	require.NoError(t, err)
