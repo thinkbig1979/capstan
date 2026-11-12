@@ -295,7 +295,7 @@ jobs:
     # these are required by branch protection, and a skipped required check
     # blocks a PR forever rather than failing it honestly.
     runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || 'self-hosted' }}
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     steps:
       - name: Checkout
@@ -317,7 +317,12 @@ jobs:
 
       - name: Unit tests with -race
         working-directory: backend
-        run: go test ./... -count=1 -race
+        # -timeout is explicit: Go's default is 10m PER PACKAGE, and the services
+        # package alone takes 9-10 minutes under -race on the capstan runners
+        # (PRs #705 8m59s, #709 9m34s, #707 9m59s; #710 hit the default and
+        # panicked with the tests still running). The job's timeout-minutes is
+        # the real ceiling.
+        run: go test ./... -count=1 -race -timeout 20m
 
   # golangci-lint (agent-os-far). Its own job, not folded into `unit`: a
   # failing build/vet/test signal and a failing lint signal are different
