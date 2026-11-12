@@ -29,8 +29,8 @@ func TestScheduledApply_UninspectableContainerLeavesSkippedRow(t *testing.T) {
 		},
 	}
 	svc := newApplyFixture(t, checker)
-	seedContainerPolicy(t, svc, "c1")
-	seedContainerPolicy(t, svc, "c2")
+	seedContainerPolicy(t, svc, "web")
+	seedContainerPolicy(t, svc, "api")
 	seedCachedUpdate(t, svc, "c1", "web")
 	seedCachedUpdate(t, svc, "c2", "api")
 	seedCachedUpdate(t, svc, "c3", "nopolicy")
@@ -49,7 +49,7 @@ func TestScheduledApply_UninspectableContainerLeavesSkippedRow(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, n, "a container with no auto-update policy would not have run, so it gets no row")
 
-	policy, err := svc.db.GetAutoUpdatePolicy("container", "c1")
+	policy, err := svc.db.GetAutoUpdatePolicy("container", "web")
 	require.NoError(t, err)
 	assert.Equal(t, 0, policy.ConsecutiveFailures, "an inspect failure is not an update failure")
 	cached, err := svc.db.GetCachedUpdates()

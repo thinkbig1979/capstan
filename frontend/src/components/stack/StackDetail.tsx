@@ -7,7 +7,7 @@ import { ComposeEnvSplit } from './ComposeEnvSplit'
 import { TerminalComponent } from './Terminal'
 import { LogViewer } from './LogViewer'
 import { ActivityTab } from './ActivityTab'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { HelpHint } from '@/components/ui/help-hint'
 import { AutoUpdateToggle } from '@/components/dashboard/AutoUpdateToggle'
 import { toGlobalAutoUpdateState } from '@/components/dashboard/auto-update-state'
@@ -60,7 +60,8 @@ function OverviewTabContent({
     (p) => p.targetType === 'stack' && p.targetId === stack.id,
   )
   const hasContainerPolicies = policiesData?.policies?.some(
-    (p) => p.targetType === 'container' && stack.containers?.some((c) => c.id === p.targetId),
+    // A container policy's target is the container's name (agent-os-ygyv).
+    (p) => p.targetType === 'container' && stack.containers?.some((c) => c.name === p.targetId),
   )
 
   // Per-stack metrics stream — the same socket path the Metrics tab uses, but
@@ -117,14 +118,19 @@ function OverviewTabContent({
                 </p>
               </HelpHint>
               {hasContainerPolicies && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p>Individual container settings override this stack-level toggle</p>
-                  </TooltipContent>
-                </Tooltip>
+                // Its own provider, like every other tooltip here: there is
+                // none higher up, and without one this note crashed the tab
+                // (found under agent-os-ygyv, which makes it show far more often).
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>Individual container settings override this stack-level toggle</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               )}
             </div>
             <AutoUpdateToggle

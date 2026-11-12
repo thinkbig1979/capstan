@@ -95,6 +95,11 @@ func (f *qyg72ListFake) ContainerStart(_ context.Context, _ string, _ container.
 	return errQyg72Beyond
 }
 
+func (f *qyg72ListFake) ContainerRename(_ context.Context, _, _ string) error {
+	f.beyond = append(f.beyond, "ContainerRename")
+	return errQyg72Beyond
+}
+
 // qyg72RunCompose drives UpdateComposeServiceStreaming to its container-lookup
 // branch and returns the ActionResult plus the fake, so a caller can assert
 // that nothing past the branch ran.
@@ -160,4 +165,9 @@ func TestUpdateComposeServiceStreaming_ListFaultIsNotReportedAsAbsence(t *testin
 	if emptyAR.Err != nil {
 		t.Fatalf("empty arm: Err = %v, want nil (nothing failed; the service simply has no container)", emptyAR.Err)
 	}
+}
+
+func (f *qyg72ListFake) ContainerUpdate(_ context.Context, _ string, _ container.UpdateConfig) (container.UpdateResponse, error) {
+	f.beyond = append(f.beyond, "ContainerUpdate")
+	return container.UpdateResponse{}, errQyg72Beyond
 }

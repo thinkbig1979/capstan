@@ -22,8 +22,8 @@ func TestRunAutoUpdates_LookupFailedRowIsSkippedNotAppliedUnlocked(t *testing.T)
 	checker := &fakeUpdateChecker{updateFn: succeedingUpdate}
 	svc := newApplyFixture(t, checker)
 	svc.SetOperationLock(NewOperationLock())
-	seedContainerPolicy(t, svc, "c1")
-	seedContainerPolicy(t, svc, "c2")
+	seedContainerPolicy(t, svc, "web")
+	seedContainerPolicy(t, svc, "api")
 
 	svc.RunAutoUpdates(context.Background(), []models.CachedUpdate{
 		{ContainerID: "c1", ContainerName: "web", ImageRef: "nginx:latest", StackLookupFailed: true},
@@ -38,7 +38,7 @@ func TestRunAutoUpdates_LookupFailedRowIsSkippedNotAppliedUnlocked(t *testing.T)
 	assertSkippedRow(t, rows, "c1", "web", "nginx:latest",
 		"skipped: the stack for this container could not be looked up during the scan; retried next pass")
 
-	policy, err := svc.db.GetAutoUpdatePolicy("container", "c1")
+	policy, err := svc.db.GetAutoUpdatePolicy("container", "web")
 	require.NoError(t, err)
 	assert.Equal(t, 0, policy.ConsecutiveFailures, "a lookup skip is not an update failure")
 

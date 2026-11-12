@@ -86,6 +86,10 @@ const applyRetryDelay = 30 * time.Second
 // restarted (agent-os-o1jg).
 const autoApplyTimeout = 10 * time.Minute
 
+// autoUpdatePauseAfterFailures is how many consecutive failed passes pause a
+// policy.
+const autoUpdatePauseAfterFailures = 3
+
 // applySchedule is the scheduler's resolved view of the update_apply_* settings.
 // A zero value means immediate mode, which is both the seeded default and the
 // fallback for an absent key or an unparseable stored value (see
@@ -179,6 +183,14 @@ type SchedulerService struct {
 	// deadlock against the goroutines it is waiting for. Order: lifecycleMu
 	// before mu, never the reverse.
 	lifecycleMu sync.Mutex
+
+	// rekeyMu serialises rekeyLegacyContainerPolicies runs (Start's one-off,
+	// scan ticks and passes can overlap) and guards unresolvedWarned: the
+	// container-ID policies already warned about as unresolvable, so each is
+	// warned about once per process, not on every tick (agent-os-ygyv).
+	rekeyMu          sync.Mutex
+	unresolvedWarned map[string]bool
+
 	// closed is the terminal latch set by Close at process shutdown. Once set,
 	// Start and Restart refuse, so a settings save that lands during shutdown
 	// cannot re-arm the scan ticker or the apply loop. Guarded by lifecycleMu;
@@ -282,6 +294,15 @@ func (s *SchedulerService) startLocked(interval time.Duration) {
 	done := s.done
 	parentCtx := s.parentCtx
 	applyRearm := s.applyRearm
+
+	// Once at start, so the screens find a re-keyed policy without waiting a
+	// whole scan interval (agent-os-ygyv). Added under s.mu like the scan
+	// cycles below, so Stop's wg.Wait covers it.
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.rekeyLegacyContainerPolicies(parentCtx)
+	}()
 
 	go func() {
 		s.logger.Info("Scheduler started", "interval", interval)
@@ -600,6 +621,10 @@ func (s *SchedulerService) StartBackgroundScan() error {
 }
 
 func (s *SchedulerService) runCycle(ctx context.Context) {
+	// Every scan tick, whether or not auto-update is switched on: the screens
+	// read the policies by name too.
+	s.rekeyLegacyContainerPolicies(ctx)
+
 	updates, err := s.RunScan(ctx)
 	if err != nil {
 		s.logger.Error("Scheduler scan cycle failed", "error", err)
@@ -1005,6 +1030,141 @@ func (s *SchedulerService) pruneVanishedTargets(ctx context.Context, updates []m
 	return live, unresolved
 }
 
+// newestIntentFirst orders orphaned policies that may resolve to the same
+// name: the most recently updated first, because its state is the operator's
+// latest choice. Times are compared parsed, not as text: the stored spelling
+// carries the server's UTC offset, so text order and time order can disagree.
+// An unparseable updated_at sorts after every parseable one, and ties go to
+// the lower id, so the order is total.
+func newestIntentFirst(a, b models.AutoUpdatePolicy) int {
+	ta, ea := time.Parse(time.RFC3339, a.UpdatedAt) //geterrors:ignore an unparseable updated_at is a value to order, not a failure to report: it sorts last
+	tb, eb := time.Parse(time.RFC3339, b.UpdatedAt) //geterrors:ignore same as the line above
+	switch {
+	case ea == nil && eb == nil:
+		if c := tb.Compare(ta); c != 0 {
+			return c
+		}
+	case ea == nil:
+		return -1
+	case eb == nil:
+		return 1
+	}
+	return strings.Compare(a.ID, b.ID)
+}
+
+// rekeyTimeout bounds one rekeyLegacyContainerPolicies run, whose Docker
+// inspects would otherwise wait on a cancel-only context.
+const rekeyTimeout = time.Minute
+
+// rekeyLegacyContainerPolicies moves container policies still keyed on a
+// container ID to the container's name (agent-os-ygyv). The ID a row holds
+// names either a live container, whose name Docker gives, or one an update
+// already replaced, whose name update_history recorded. Rows for live
+// containers are moved first, so when an old orphaned row and the live
+// container's row resolve to the same name, the live one keeps it; among
+// orphans, the most recently updated one keeps it. A row whose
+// name is already taken is deleted, since that name's policy is the newer
+// one. Every move and delete is logged with the old ID and the name, the record
+// of what this changed. A row that resolves to no name is left and stays
+// unmatched, as it was before; it is logged on every run.
+//
+// Idempotent: a moved row no longer looks like an ID. A Docker error other than
+// not-found stops the run before anything is written, so the live/orphan order
+// is never decided on a partial picture; the next run tries again.
+func (s *SchedulerService) rekeyLegacyContainerPolicies(ctx context.Context) {
+	s.rekeyMu.Lock()
+	defer s.rekeyMu.Unlock()
+
+	legacy, err := s.db.LegacyContainerPolicies()
+	if err != nil {
+		s.logger.Error("Failed to read container-ID auto-update policies; they are re-keyed on a later run", "error", err)
+		return
+	}
+	if len(legacy) == 0 {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, rekeyTimeout)
+	defer cancel()
+	inspector, _ := s.docker.(containerInspector)
+
+	type move struct {
+		policy models.AutoUpdatePolicy
+		name   string
+		from   string // "docker" or "update_history"
+	}
+	var live, orphaned []move
+	for _, p := range legacy {
+		if inspector != nil {
+			info, err := inspector.InspectContainer(ctx, p.TargetID)
+			switch {
+			case err == nil:
+				if info.ContainerJSONBase == nil {
+					break
+				}
+				name := strings.TrimPrefix(info.Name, "/")
+				if name != "" && info.ID == p.TargetID && strings.Contains(name, oldContainerSuffix) {
+					// Set aside by a standalone update in flight, or left by
+					// one whose final removal failed. Moving the row to that
+					// temporary name would match nothing once it is gone, and
+					// the row would no longer look like an ID to retry.
+					s.logger.Info("Container is set aside by an update; its auto-update policy is re-keyed on a later run",
+						"policy_id", p.ID, "container_id", p.TargetID, "container_name", name)
+					continue
+				}
+				if name != "" && info.ID == p.TargetID {
+					live = append(live, move{p, name, "docker"})
+					continue
+				}
+			case !cerrdefs.IsNotFound(err):
+				s.logger.Warn("Could not inspect a container to re-key its auto-update policy; retried later",
+					"container_id", p.TargetID, "error", err)
+				return
+			}
+		}
+		name, err := s.db.LastKnownContainerName(p.TargetID)
+		if err != nil {
+			s.logger.Error("Failed to read update history to re-key an auto-update policy; retried later",
+				"container_id", p.TargetID, "error", err)
+			return
+		}
+		if name == "" {
+			// It can never resolve, and it matched nothing before either; warn
+			// once per process and keep later runs quiet.
+			level := slog.LevelDebug
+			if !s.unresolvedWarned[p.ID] {
+				if s.unresolvedWarned == nil {
+					s.unresolvedWarned = map[string]bool{}
+				}
+				s.unresolvedWarned[p.ID] = true
+				level = slog.LevelWarn
+			}
+			s.logger.Log(ctx, level, "Auto-update policy names a container ID with no known container name; it matches nothing",
+				"policy_id", p.ID, "container_id", p.TargetID)
+			continue
+		}
+		orphaned = append(orphaned, move{p, name, "update_history"})
+	}
+
+	// Orphans that resolve to the same name: the operator's latest choice
+	// wins (newestIntentFirst). Ordering by age kept the oldest, which could
+	// turn a policy the operator switched off back on.
+	slices.SortStableFunc(orphaned, func(a, b move) int { return newestIntentFirst(a.policy, b.policy) })
+
+	for _, m := range append(live, orphaned...) {
+		outcome, err := s.db.RekeyContainerPolicy(m.policy.ID, m.policy.TargetID, m.name)
+		if err != nil {
+			s.logger.Error("Failed to re-key an auto-update policy", "policy_id", m.policy.ID,
+				"old_container_id", m.policy.TargetID, "container_name", m.name, "error", err)
+			continue
+		}
+		s.logger.Info("Auto-update policy re-keyed from container ID to container name",
+			"outcome", string(outcome), "policy_id", m.policy.ID, "old_container_id", m.policy.TargetID,
+			"container_name", m.name, "name_from", m.from, "enabled", m.policy.Enabled,
+			"paused", m.policy.Paused, "consecutive_failures", m.policy.ConsecutiveFailures)
+	}
+}
+
 // notStartedCause names why a pass's ended ctx left items unstarted: its own
 // deadline, or Stop() cancelling the parent.
 func notStartedCause(ctx context.Context) string {
@@ -1076,6 +1236,8 @@ func (s *SchedulerService) runAutoUpdates(ctx context.Context, updates []models.
 	ctx, cancel := withCommandDeadline(ctx, s.applyTimeout)
 	defer cancel()
 
+	s.rekeyLegacyContainerPolicies(ctx)
+
 	autoEnabledStr, err := s.db.GetSetting("auto_update_enabled")
 	if err != nil {
 		// agent-os-koy9. The read error used to be merged into the value test
@@ -1122,14 +1284,18 @@ func (s *SchedulerService) runAutoUpdates(ctx context.Context, updates []models.
 		p := &policies[i]
 		switch p.TargetType {
 		case string(JobTargetTypeContainer):
-			containerPolicies[p.TargetID] = p
+			containerPolicies[p.TargetID] = p // the container's name (agent-os-ygyv)
 		case string(JobTargetTypeStack):
 			stackPolicies[p.TargetID] = p
 		}
 	}
 
+	// A container policy is keyed on the container's name, which survives the
+	// recreate an update or a compose redeploy does. Its ID does not, so a
+	// policy keyed on the ID matched nothing after the first update
+	// (agent-os-ygyv).
 	policyFor := func(update models.CachedUpdate) (*models.AutoUpdatePolicy, bool) {
-		if p, ok := containerPolicies[update.ContainerID]; ok {
+		if p, ok := containerPolicies[update.ContainerName]; ok {
 			return p, true
 		}
 		if update.StackID != "" {
@@ -1339,13 +1505,17 @@ func (s *SchedulerService) runAutoUpdates(ctx context.Context, updates []models.
 
 	// Applied once per policy, after every item has run: any failure counts
 	// one, otherwise any success resets. no_change items leave it alone.
+	//
+	// policy is the row as this pass read it, which can be minutes old by now.
+	// It names the row (by id) and nothing else: the writes below change only
+	// the pass's own columns, and only while the stored row is still enabled
+	// and not paused, so a policy the operator turned off or deleted meanwhile
+	// stays that way (agent-os-71sp).
 	for _, policy := range passPolicies {
 		r := passResults[policy]
 		if r.failedUpdate == nil {
 			if r.succeeded {
-				policy.ConsecutiveFailures = 0
-				policy.UpdatedAt = time.Now().Format(time.RFC3339)
-				if err := s.db.UpsertAutoUpdatePolicy(policy); err != nil {
+				if _, err := s.db.ResetAutoUpdatePolicyFailures(policy.ID, time.Now().Format(time.RFC3339)); err != nil {
 					s.logger.Error("Failed to reset policy failures", "error", err)
 				}
 			}
@@ -1353,14 +1523,14 @@ func (s *SchedulerService) runAutoUpdates(ctx context.Context, updates []models.
 		}
 		update := *r.failedUpdate
 
-		policy.ConsecutiveFailures++
-		if policy.ConsecutiveFailures >= 3 {
-			policy.Paused = true
-			policy.UpdatedAt = time.Now().Format(time.RFC3339)
-			if err := s.db.UpsertAutoUpdatePolicy(policy); err != nil {
-				s.logger.Error("Failed to update paused policy", "error", err)
-			}
-
+		written, paused, err := s.db.RecordAutoUpdatePolicyFailure(policy.ID, time.Now().Format(time.RFC3339), autoUpdatePauseAfterFailures)
+		switch {
+		case err != nil:
+			s.logger.Error("Failed to update policy", "error", err)
+		case !written:
+			s.logger.Info("Auto-update policy changed during the pass; its failure was not counted",
+				"target_type", policy.TargetType, "target_id", policy.TargetID)
+		case paused:
 			// completed_at = started_at, as on a skipped row: retention
 			// and the manual clear both delete by completed_at, so a row
 			// without one would never go (agent-os-z91e.46).
@@ -1382,15 +1552,11 @@ func (s *SchedulerService) runAutoUpdates(ctx context.Context, updates []models.
 				s.logger.Error("Failed to insert paused history", "error", err)
 			}
 
-			s.logger.Warn("Auto-update paused after 3 consecutive failures",
+			s.logger.Warn("Auto-update paused after consecutive failures",
+				"failures", autoUpdatePauseAfterFailures,
 				"container", update.ContainerName,
 				"target_type", policy.TargetType,
 				"target_id", policy.TargetID)
-		} else {
-			policy.UpdatedAt = time.Now().Format(time.RFC3339)
-			if err := s.db.UpsertAutoUpdatePolicy(policy); err != nil {
-				s.logger.Error("Failed to update policy", "error", err)
-			}
 		}
 	}
 

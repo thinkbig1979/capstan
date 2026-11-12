@@ -75,7 +75,7 @@ const { stacksMock, resourcesMock, autoUpdateMock } = vi.hoisted(() => ({
     stopContainer: vi.fn(),
     restartContainer: vi.fn(),
   },
-  autoUpdateMock: { getPolicies: vi.fn() },
+  autoUpdateMock: { getPolicies: vi.fn(), setPolicy: vi.fn() },
 }))
 
 vi.mock('sonner', () => ({
@@ -482,7 +482,7 @@ describe('ContainersOverviewTab — a compose project with no stack record', () 
  */
 describe('ContainersOverviewTab — the auto-update lock names the state it is in', () => {
   const findToggle = () =>
-    screen.findByRole('switch', { name: /^Auto-update container c1/ })
+    screen.findByRole('switch', { name: /^Auto-update container web/ })
 
   it('does not blame the global switch when the policies query fails', async () => {
     autoUpdateMock.getPolicies.mockRejectedValue(new Error('policies unreachable'))
@@ -513,7 +513,7 @@ describe('ContainersOverviewTab — the auto-update lock names the state it is i
     renderTab()
 
     await waitFor(async () => expect(await findToggle()).not.toBeDisabled())
-    expect((await findToggle()).getAttribute('aria-label')).toBe('Auto-update container c1')
+    expect((await findToggle()).getAttribute('aria-label')).toBe('Auto-update container web')
   })
 })
 
@@ -744,5 +744,52 @@ describe('ContainersOverviewTab — prune warns about stacks that would lose con
     expect(await screen.findByText(/could not check which stacks this prune affects/i)).toBeInTheDocument()
     expect(typedBox()).toBeInTheDocument()
     expect(confirmButton()).toBeDisabled()
+  })
+})
+
+/**
+ * agent-os-ygyv. A container's auto-update policy is keyed on the container's
+ * NAME: an update recreates the container under a new id, and a policy keyed
+ * on the id stopped matching after the first update. This row reads and saves
+ * the name.
+ */
+describe('ContainersOverviewTab — a container policy is keyed on the container name (agent-os-ygyv)', () => {
+  it('ygyv: shows a policy saved under the name for a container with a new id', async () => {
+    autoUpdateMock.getPolicies.mockResolvedValue({
+      policies: [{ targetType: 'container', targetId: 'web', enabled: true, paused: false, consecutiveFailures: 0 }],
+      globalEnabled: true,
+    })
+    renderTab(makeContainer({ id: 'recreated-id' }))
+
+    await waitFor(async () =>
+      expect(await screen.findByRole('switch', { name: 'Auto-update container web' })).toBeChecked(),
+    )
+  })
+
+  it('ygyv: ignores a policy keyed on the container id', async () => {
+    autoUpdateMock.getPolicies.mockResolvedValue({
+      policies: [{ targetType: 'container', targetId: 'c1', enabled: true, paused: false, consecutiveFailures: 0 }],
+      globalEnabled: true,
+    })
+    renderTab()
+
+    // Unlocked means the policies have loaded (the toggle is locked while they
+    // load), so the unchecked state below is the answer, not the wait.
+    const toggle = await screen.findByRole('switch', { name: 'Auto-update container web' })
+    await waitFor(() => expect(toggle).not.toBeDisabled())
+    expect(toggle).not.toBeChecked()
+  })
+
+  it('ygyv: switching auto-update on saves the container name, not its id', async () => {
+    autoUpdateMock.getPolicies.mockResolvedValue({ policies: [], globalEnabled: true })
+    autoUpdateMock.setPolicy.mockResolvedValue({})
+    renderTab()
+
+    const toggle = await screen.findByRole('switch', { name: 'Auto-update container web' })
+    await waitFor(() => expect(toggle).not.toBeDisabled())
+    fireEvent.click(toggle)
+
+    await waitFor(() => expect(autoUpdateMock.setPolicy).toHaveBeenCalledTimes(1))
+    expect(autoUpdateMock.setPolicy).toHaveBeenCalledWith('container', 'web', { enabled: true })
   })
 })

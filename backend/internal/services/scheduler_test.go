@@ -487,14 +487,15 @@ func newApplyFixture(t *testing.T, checker updateChecker) *SchedulerService {
 	return svc
 }
 
-// seedContainerPolicy enables auto-update for one container target.
-func seedContainerPolicy(t *testing.T, svc *SchedulerService, containerID string) {
+// seedContainerPolicy enables auto-update for one container target. A
+// container policy is keyed on the container's name (agent-os-ygyv).
+func seedContainerPolicy(t *testing.T, svc *SchedulerService, containerName string) {
 	t.Helper()
 	now := time.Now().Format(time.RFC3339)
 	require.NoError(t, svc.db.UpsertAutoUpdatePolicy(&models.AutoUpdatePolicy{
-		ID:         "policy-" + containerID,
+		ID:         "policy-" + containerName,
 		TargetType: "container",
-		TargetID:   containerID,
+		TargetID:   containerName,
 		Enabled:    true,
 		CreatedAt:  now,
 		UpdatedAt:  now,
@@ -537,7 +538,7 @@ func TestRunCycle_ImmediateMode_AppliesOnScanTick(t *testing.T) {
 		updateFn: succeedingUpdate,
 	}
 	svc := newApplyFixture(t, checker)
-	seedContainerPolicy(t, svc, "c1")
+	seedContainerPolicy(t, svc, "web")
 
 	mode, err := svc.db.GetSetting("update_apply_mode")
 	require.NoError(t, err)
@@ -556,7 +557,7 @@ func TestRunCycle_ImmediateMode_AppliesOnScanTick(t *testing.T) {
 func TestRunAutoUpdates_FailureIncrementsConsecutiveFailures(t *testing.T) {
 	checker := &fakeUpdateChecker{updateFn: failingUpdate}
 	svc := newApplyFixture(t, checker)
-	seedContainerPolicy(t, svc, "c1")
+	seedContainerPolicy(t, svc, "web")
 
 	svc.RunAutoUpdates(context.Background(), []models.CachedUpdate{{
 		ContainerID:   "c1",
@@ -564,7 +565,7 @@ func TestRunAutoUpdates_FailureIncrementsConsecutiveFailures(t *testing.T) {
 		ImageRef:      "nginx:latest",
 	}})
 
-	policy, err := svc.db.GetAutoUpdatePolicy("container", "c1")
+	policy, err := svc.db.GetAutoUpdatePolicy("container", "web")
 	require.NoError(t, err)
 	assert.Equal(t, 1, policy.ConsecutiveFailures, "a failed apply must increment the failure counter")
 	assert.False(t, policy.Paused, "one failure is not yet a pause")
@@ -575,14 +576,14 @@ func TestRunAutoUpdates_FailureIncrementsConsecutiveFailures(t *testing.T) {
 func TestRunAutoUpdates_ThreeFailuresPause(t *testing.T) {
 	checker := &fakeUpdateChecker{updateFn: failingUpdate}
 	svc := newApplyFixture(t, checker)
-	seedContainerPolicy(t, svc, "c1")
+	seedContainerPolicy(t, svc, "web")
 
 	update := models.CachedUpdate{ContainerID: "c1", ContainerName: "web", ImageRef: "nginx:latest"}
 	for i := 0; i < 3; i++ {
 		svc.RunAutoUpdates(context.Background(), []models.CachedUpdate{update})
 	}
 
-	policy, err := svc.db.GetAutoUpdatePolicy("container", "c1")
+	policy, err := svc.db.GetAutoUpdatePolicy("container", "web")
 	require.NoError(t, err)
 	assert.Equal(t, 3, policy.ConsecutiveFailures)
 	assert.True(t, policy.Paused, "three consecutive failures must pause the policy")
@@ -668,7 +669,7 @@ func TestRunCycle_ScheduledMode_DoesNotApplyOnScanTick(t *testing.T) {
 		updateFn: succeedingUpdate,
 	}
 	svc := newApplyFixture(t, checker)
-	seedContainerPolicy(t, svc, "c1")
+	seedContainerPolicy(t, svc, "web")
 	enableScheduledApply(t, svc, "03:00")
 
 	svc.runCycle(context.Background())
@@ -694,7 +695,7 @@ func TestRunCycle_InvalidStoredSchedule_FallsBackToImmediate(t *testing.T) {
 		updateFn: succeedingUpdate,
 	}
 	svc := newApplyFixture(t, checker)
-	seedContainerPolicy(t, svc, "c1")
+	seedContainerPolicy(t, svc, "web")
 	enableScheduledApply(t, svc, "03:00")
 	require.NoError(t, svc.db.SetSetting("update_apply_time", "25:99"))
 
@@ -725,7 +726,7 @@ func TestApplyTimer_FiresAndAppliesCachedUpdates(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		checker := &fakeUpdateChecker{updateFn: succeedingUpdate}
 		svc := newApplyFixture(t, checker)
-		seedContainerPolicy(t, svc, "c1")
+		seedContainerPolicy(t, svc, "web")
 		seedCachedUpdate(t, svc, "c1", "web")
 		enableScheduledApply(t, svc, "03:00")
 
@@ -786,7 +787,7 @@ func TestApplyTimer_StoppedSchedulerDoesNotFire(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		checker := &fakeUpdateChecker{updateFn: succeedingUpdate}
 		svc := newApplyFixture(t, checker)
-		seedContainerPolicy(t, svc, "c1")
+		seedContainerPolicy(t, svc, "web")
 		seedCachedUpdate(t, svc, "c1", "web")
 		enableScheduledApply(t, svc, "03:00")
 
@@ -829,8 +830,8 @@ func TestScheduledApply_VanishedContainerIsEvictedNotFailed(t *testing.T) {
 		},
 	}
 	svc := newApplyFixture(t, checker)
-	seedContainerPolicy(t, svc, "c1")
-	seedContainerPolicy(t, svc, "c2")
+	seedContainerPolicy(t, svc, "vanished")
+	seedContainerPolicy(t, svc, "still-here")
 	seedCachedUpdate(t, svc, "c1", "vanished")
 	seedCachedUpdate(t, svc, "c2", "still-here")
 	enableScheduledApply(t, svc, "03:00")
@@ -841,14 +842,14 @@ func TestScheduledApply_VanishedContainerIsEvictedNotFailed(t *testing.T) {
 	assert.Equal(t, []string{"c2"}, checker.updatedIDs(),
 		"a container that no longer exists must not reach UpdateContainer")
 
-	vanished, err := svc.db.GetAutoUpdatePolicy("container", "c1")
+	vanished, err := svc.db.GetAutoUpdatePolicy("container", "vanished")
 	require.NoError(t, err)
 	assert.Equal(t, 0, vanished.ConsecutiveFailures,
 		"an evicted container must not count as an update failure")
 	assert.False(t, vanished.Paused, "an evicted container must never drive a policy to paused")
 
 	// Control side, same instrument, same run: a real failure still counts.
-	present, err := svc.db.GetAutoUpdatePolicy("container", "c2")
+	present, err := svc.db.GetAutoUpdatePolicy("container", "still-here")
 	require.NoError(t, err)
 	assert.Equal(t, 1, present.ConsecutiveFailures,
 		"a genuine update failure must still increment the failure counter")
@@ -872,7 +873,7 @@ func TestScheduledApply_UninspectableContainerIsSkippedNotEvicted(t *testing.T) 
 		},
 	}
 	svc := newApplyFixture(t, checker)
-	seedContainerPolicy(t, svc, "c1")
+	seedContainerPolicy(t, svc, "web")
 	seedCachedUpdate(t, svc, "c1", "web")
 	enableScheduledApply(t, svc, "03:00")
 
@@ -880,7 +881,7 @@ func TestScheduledApply_UninspectableContainerIsSkippedNotEvicted(t *testing.T) 
 
 	assert.Empty(t, checker.updatedIDs(), "an unresolvable container must not be applied to")
 
-	policy, err := svc.db.GetAutoUpdatePolicy("container", "c1")
+	policy, err := svc.db.GetAutoUpdatePolicy("container", "web")
 	require.NoError(t, err)
 	assert.Equal(t, 0, policy.ConsecutiveFailures, "a daemon outage must not count as an update failure")
 
@@ -909,7 +910,7 @@ func TestScheduledApply_DeferredWhileScanning(t *testing.T) {
 		checker, release := blockedChecker()
 		checker.updateFn = succeedingUpdate
 		svc := newApplyFixture(t, checker)
-		seedContainerPolicy(t, svc, "c1")
+		seedContainerPolicy(t, svc, "web")
 		seedCachedUpdate(t, svc, "c1", "web")
 		enableScheduledApply(t, svc, "03:00")
 
@@ -942,7 +943,7 @@ func TestReloadApplySchedule_PicksUpASettingsChange(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		checker := &fakeUpdateChecker{updateFn: succeedingUpdate}
 		svc := newApplyFixture(t, checker)
-		seedContainerPolicy(t, svc, "c1")
+		seedContainerPolicy(t, svc, "web")
 		seedCachedUpdate(t, svc, "c1", "web")
 
 		base := time.Date(2026, 3, 2, 2, 59, 0, 0, time.Local)

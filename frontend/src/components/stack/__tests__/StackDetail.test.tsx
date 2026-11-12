@@ -415,3 +415,35 @@ describe('StackDetail — field help (agent-os-pkq9)', () => {
     await expectHintOpensHelp(user, 'Backup', 'stack.backup')
   })
 })
+
+/**
+ * agent-os-ygyv. A container's auto-update policy is keyed on the container's
+ * NAME, which survives the recreate an update does; its id does not. The note
+ * "individual container settings override this stack-level toggle" sits beside
+ * a HelpHint that draws the same info icon, so presence of an icon decides
+ * nothing: this compares the icon count for a policy that matches against one
+ * that does not, same fixture otherwise.
+ */
+describe('StackDetail — container policies are matched by name (agent-os-ygyv)', () => {
+  async function infoIcons(targetId: string) {
+    mockGetPolicies.mockResolvedValue({
+      policies: [{ id: 'p1', targetType: 'container', targetId, enabled: true }],
+      globalEnabled: true,
+    })
+    const view = renderDetail({
+      stack: stack({ containers: [{ id: 'recreated-id', name: 'web' }] as Stack['containers'] }),
+    })
+    const toggle = await screen.findByTestId('auto-update-toggle')
+    await waitFor(() => expect(toggle).toHaveAttribute('data-global-state', 'enabled'))
+    const count = document.querySelectorAll('svg.lucide-info').length
+    view.unmount()
+    return count
+  }
+
+  it('ygyv: notes a container policy saved under the container name', async () => {
+    const byOldId = await infoIcons('old-container-id')
+    const byName = await infoIcons('web')
+    expect(byName).toBe(byOldId + 1)
+  })
+})
+

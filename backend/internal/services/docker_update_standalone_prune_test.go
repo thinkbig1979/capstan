@@ -20,10 +20,12 @@ import (
 )
 
 // agent-os-qags.20: a standalone container has no stack, so no operation lock
-// covers it. A container prune that lands between the update's own stop and its
-// remove makes ContainerRemove answer "no such container"; the update used to
-// return "removing container: ..." there and never reach the recreate, so the
-// user's container was gone and the update reported a failure.
+// covers it. A container prune that lands between the update's own stop and the
+// step that sets the old container aside makes Docker answer "no such
+// container"; the update used to return an error there and never reach the
+// recreate, so the user's container was gone and the update reported a failure.
+// Since agent-os-ohiy that step is a rename (the old container is kept until the
+// new one starts), not a remove.
 //
 // The fake below lets every call succeed except the ones a case names, so the
 // recreate is reachable. (bx43FakeDocker fails every apply call on purpose and
@@ -38,6 +40,7 @@ type qags20Fake struct {
 	calls     []string
 	stopErr   error
 	removeErr error
+	renameErr error
 }
 
 func (f *qags20Fake) record(name string) {
@@ -62,7 +65,8 @@ func (f *qags20Fake) ContainerInspect(context.Context, string) (container.Inspec
 }
 
 func (f *qags20Fake) ImageInspect(context.Context, string, ...dockerclient.ImageInspectOption) (image.InspectResponse, error) {
-	return image.InspectResponse{}, errors.New("qags20 fake: unexpected ImageInspect")
+	f.record("ImageInspect")
+	return image.InspectResponse{}, nil
 }
 
 func (f *qags20Fake) ContainerList(context.Context, container.ListOptions) ([]container.Summary, error) {
@@ -94,6 +98,11 @@ func (f *qags20Fake) ContainerStart(context.Context, string, container.StartOpti
 	return nil
 }
 
+func (f *qags20Fake) ContainerRename(context.Context, string, string) error {
+	f.record("ContainerRename")
+	return f.renameErr
+}
+
 // qags20NotFound is the shape the Docker client returns for a missing
 // container: an error that cerrdefs.IsNotFound recognises.
 func qags20NotFound() error {
@@ -107,8 +116,8 @@ func qags20Inspect() container.InspectResponse {
 	}
 }
 
-// qags20Apply is one of the two standalone apply functions behind one
-// signature, so each case runs against both.
+// qags20Apply is the standalone apply path. There were two copies, streaming
+// and not; agent-os-ohiy made them one function, which both callers use.
 type qags20Apply struct {
 	name string
 	run  func(*DockerService, bool) (string, error)
@@ -116,11 +125,8 @@ type qags20Apply struct {
 
 func qags20Applies() []qags20Apply {
 	return []qags20Apply{
-		{"updateStandaloneContainer", func(s *DockerService, wasRunning bool) (string, error) {
-			return s.updateStandaloneContainer(context.Background(), qags20Inspect(), wasRunning)
-		}},
-		{"updateStandaloneContainerStreaming", func(s *DockerService, wasRunning bool) (string, error) {
-			return s.updateStandaloneContainerStreaming(context.Background(), qags20Inspect(), wasRunning,
+		{"recreateStandaloneContainer", func(s *DockerService, wasRunning bool) (string, error) {
+			return s.recreateStandaloneContainer(context.Background(), qags20Inspect(), wasRunning,
 				func(LogLine) {}, func(Status) {})
 		}},
 	}
@@ -135,9 +141,9 @@ func TestStandaloneUpdate_RemoveNotFoundAfterOwnStop(t *testing.T) {
 
 			// A prune removed the container after our stop: it is already gone,
 			// so the recreate must run and the update must succeed.
-			t.Run("prune between stop and remove: recreate runs", func(t *testing.T) {
+			t.Run("prune between stop and rename: recreate runs", func(t *testing.T) {
 				t.Parallel()
-				fake := &qags20Fake{removeErr: qags20NotFound()}
+				fake := &qags20Fake{renameErr: qags20NotFound()}
 				id, err := apply.run(&DockerService{updateClient: fake}, true)
 
 				require.NoError(t, err)
@@ -145,6 +151,7 @@ func TestStandaloneUpdate_RemoveNotFoundAfterOwnStop(t *testing.T) {
 				assert.True(t, fake.called("ContainerStop"), "the stop this case is about must have happened")
 				assert.True(t, fake.called("ContainerCreate"), "the recreate must run")
 				assert.True(t, fake.called("ContainerStart"), "the container was running, so the recreate starts it")
+				assert.False(t, fake.called("ContainerRemove"), "the pruned container is gone: nothing to remove")
 			})
 
 			// The same instrument, the other side: a container gone BEFORE our
@@ -156,33 +163,38 @@ func TestStandaloneUpdate_RemoveNotFoundAfterOwnStop(t *testing.T) {
 
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "stopping container")
-				assert.False(t, fake.called("ContainerRemove"))
+				assert.False(t, fake.called("ContainerRename"))
 				assert.False(t, fake.called("ContainerCreate"))
 			})
 
 			// Not running: we stopped nothing, so a not-found gives no proof the
 			// container was not deleted on purpose. Recreating would resurrect it.
-			t.Run("not running, remove not-found: error, no recreate", func(t *testing.T) {
+			t.Run("not running, rename not-found: error, no recreate", func(t *testing.T) {
 				t.Parallel()
-				fake := &qags20Fake{removeErr: qags20NotFound()}
+				fake := &qags20Fake{renameErr: qags20NotFound()}
 				_, err := apply.run(&DockerService{updateClient: fake}, false)
 
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), "removing container")
+				assert.Contains(t, err.Error(), "renaming container")
 				assert.False(t, fake.called("ContainerStop"))
 				assert.False(t, fake.called("ContainerCreate"))
 			})
 
 			// Only not-found is forgiven.
-			t.Run("any other remove error: error, no recreate", func(t *testing.T) {
+			t.Run("any other rename error: error, no recreate", func(t *testing.T) {
 				t.Parallel()
-				fake := &qags20Fake{removeErr: errQags20Daemon}
+				fake := &qags20Fake{renameErr: errQags20Daemon}
 				_, err := apply.run(&DockerService{updateClient: fake}, true)
 
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), "removing container")
+				assert.Contains(t, err.Error(), "renaming container")
 				assert.False(t, fake.called("ContainerCreate"))
 			})
 		})
 	}
+}
+
+func (f *qags20Fake) ContainerUpdate(context.Context, string, container.UpdateConfig) (container.UpdateResponse, error) {
+	f.record("ContainerUpdate")
+	return container.UpdateResponse{}, nil
 }

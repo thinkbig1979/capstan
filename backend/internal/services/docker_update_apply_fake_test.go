@@ -140,6 +140,11 @@ func (f *bx43FakeDocker) ContainerStart(_ context.Context, _ string, _ container
 	return errBx43Apply
 }
 
+func (f *bx43FakeDocker) ContainerRename(_ context.Context, _, _ string) error {
+	f.record("ContainerRename")
+	return errBx43Apply
+}
+
 // bx43Service returns a DockerService wired to the fake, with the compose
 // labels the test wants on the inspected container.
 func bx43Service(labels map[string]string) (*DockerService, *bx43FakeDocker) {
@@ -273,4 +278,9 @@ func TestBx43FakeSatisfiesTruthImageInspector(t *testing.T) {
 	if !strings.Contains(ref, "bx43") || imgID != bx43ImageID {
 		t.Fatalf("ResolveContainerImage: got ref=%q imageID=%q, want the fake's %q / %q", ref, imgID, bx43ImageRef, bx43ImageID)
 	}
+}
+
+func (f *bx43FakeDocker) ContainerUpdate(_ context.Context, _ string, _ container.UpdateConfig) (container.UpdateResponse, error) {
+	f.record("ContainerUpdate")
+	return container.UpdateResponse{}, errBx43Apply
 }
