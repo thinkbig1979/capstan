@@ -51,6 +51,31 @@ func IsSensitiveEnvKey(key string) bool {
 	return strings.Contains(upperKey, "_API_")
 }
 
+// IsSensitiveEnvVar is IsSensitiveEnvKey widened by the value: a value that
+// carries a URL credential (postgres://user:pw@host/db) is a secret whatever
+// its key is called (agent-os-yt2f). The locked env views mask by this.
+func IsSensitiveEnvVar(key, value string) bool {
+	return IsSensitiveEnvKey(key) || HasURLUserinfo(value)
+}
+
+// HasURLUserinfo reports whether any scheme://... token in s carries a
+// credential, by asking RedactURLUserinfo: it returns a URL without one
+// byte-for-byte, so any change means it found userinfo to star.
+func HasURLUserinfo(s string) bool {
+	for _, tok := range urlTokenRe.FindAllString(s, -1) {
+		if RedactURLUserinfo(tok) != tok {
+			return true
+		}
+	}
+	return false
+}
+
+// RedactURLUserinfoInText stars the userinfo of every scheme://... token in
+// free text, leaving the rest byte-for-byte.
+func RedactURLUserinfoInText(s string) string {
+	return urlTokenRe.ReplaceAllStringFunc(s, RedactURLUserinfo)
+}
+
 // sensitiveEnvWords are the words that make a key sensitive on their own.
 var sensitiveEnvWords = map[string]bool{
 	"PASSWORD": true, "PASSWD": true, "SECRET": true, "TOKEN": true,
@@ -107,7 +132,7 @@ func redactComposeOutput(s string, secrets []string) string {
 	if s == "" {
 		return s
 	}
-	s = urlTokenRe.ReplaceAllStringFunc(s, RedactURLUserinfo)
+	s = RedactURLUserinfoInText(s)
 	for _, v := range secrets {
 		s = strings.ReplaceAll(s, v, userinfoPlaceholder)
 	}

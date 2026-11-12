@@ -1,0 +1,17 @@
+{
+  "comment": "agent-os-yt2f: the one vector for the env secret-name rule. Read by TestSensitiveKey_Yt2f_SharedVector (IsSensitiveEnvKey, backend/internal/services/redact_compose.go) and sensitiveKey.yt2f.test.ts (isSensitiveKey, frontend/src/components/stack/env-editor/sensitiveKey.ts), so the two rules cannot drift apart without one of them going red.",
+  "sensitive": [
+    "API_KEY", "DB_PASSWORD", "SECRET_TOKEN", "AUTH_SECRET", "MY_API_KEY",
+    "TEST_API_ENDPOINT", "api_key", "db_password", "export DB_PASSWORD",
+    "DB_PASSWORD2", "PASSWORD_DB", "DB_PASSWORD_OLD", "PASSWORD", "SECRET",
+    "TOKEN", "KEY", "KEY2", "db.password", "DB-PASSWD", "DBPASSWORD",
+    "CLIENTSECRET", "AUTHTOKEN", "MY_APIKEY", "SSH_PRIVATEKEY",
+    "export DB_PASSWORD2", "export\tPASSWORD_DB",
+    "PASSWORD_MIN_LENGTH", "TOKEN_EXPIRY", "AWS_ACCESS_KEY_ID"
+  ],
+  "notSensitive": [
+    "DB_HOST", "API_ENDPOINT", "PORT", "DEBUG", "HOSTNAME",
+    "MONKEY", "HOTKEY", "KEYCLOAK_URL", "TOKENIZER_MODEL", "SECRETARY_NAME",
+    "PASSPORT_ID", "PASS_THROUGH", "PWD", "SSH_KEYS", "export TZ", ""
+  ]
+}

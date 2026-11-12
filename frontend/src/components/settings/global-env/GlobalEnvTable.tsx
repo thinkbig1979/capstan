@@ -2,7 +2,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Eye, EyeOff, Trash2 } from 'lucide-react'
-import { isSensitiveKey } from './sensitiveKey'
+import { isSensitiveKey } from '@/components/stack/env-editor/sensitiveKey'
 import type { EnvVar, IndexedEnvVar } from './types'
 
 /** The single source of truth for this table's width: the header cells and the

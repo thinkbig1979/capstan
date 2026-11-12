@@ -164,16 +164,97 @@ func envUnlocked(c *gin.Context) bool {
 // Keys, line numbers, comments and non-sensitive values survive, so a locked
 // session can still see the shape of the file (which variables a stack defines,
 // what its TZ is) without seeing any secret.
+//
+// Two row shapes carry a secret that no Sensitive flag marks (agent-os-yt2f):
+// the body lines of a multi-line value, which the line-by-line parser reads as
+// rows of their own (hideMultilineBodies), and a commented-out assignment
+// (redactEnvCommentRow). A comment in free text ("# the pw is x") cannot be
+// told from prose and is shown; only a URL credential in it is starred.
 func redactEnvResponse(resp *EnvResponse) {
+	hideMultilineBodies(resp.Entries, resp.Raw)
 	resp.Raw = ""
 	for i := range resp.Entries {
-		if resp.Entries[i].Sensitive {
+		e := &resp.Entries[i]
+		switch {
+		case e.Comment && e.Key == "":
+			redactEnvCommentRow(e)
+		case e.Sensitive:
 			// The quote fields can hold part of the value: a line that falls
 			// back to the unquoted cut leaves its tail in InlineComment.
-			resp.Entries[i].Value = ""
-			resp.Entries[i].Quote = ""
-			resp.Entries[i].InlineComment = ""
+			e.Value = ""
+			e.Quote = ""
+			e.InlineComment = ""
 		}
+	}
+}
+
+// hideMultilineBodies blanks the rows after a sensitive variable whose quoted
+// value is still open at the end of its line. compose reads a ' or " quoted
+// value across newlines to its closing quote (compose-go v2 dotenv/parser.go,
+// extractVarValue), so those rows are the secret's body: a PEM key's base64
+// lines, say. They are blanked up to and including the line that closes the
+// quote; with no closing quote, compose reads to the end of the file, and so
+// does this, failing closed. raw is the file text the entries were parsed
+// from; Line numbers index it.
+func hideMultilineBodies(entries []EnvEntry, raw string) {
+	lines := strings.Split(raw, "\n")
+	lineText := func(e EnvEntry) string {
+		if e.Line < 1 || e.Line > len(lines) {
+			return ""
+		}
+		return lines[e.Line-1]
+	}
+	for i := 0; i < len(entries); i++ {
+		if !entries[i].Sensitive {
+			continue
+		}
+		q, open := opensMultilineValue(lineText(entries[i]))
+		if !open {
+			continue
+		}
+		for i+1 < len(entries) {
+			i++
+			closes, _ := closingQuote(lineText(entries[i]), q)
+			entries[i] = EnvEntry{Line: entries[i].Line, Comment: entries[i].Comment, Sensitive: true}
+			if closes != -1 {
+				break
+			}
+		}
+	}
+}
+
+// opensMultilineValue reports whether a variable line's value starts with a
+// quote that does not close on the same line, and which quote. The value
+// starts after the first '=' or ':', where compose ends a key.
+func opensMultilineValue(line string) (quote byte, open bool) {
+	sep := strings.IndexAny(line, "=:")
+	if sep == -1 {
+		return 0, false
+	}
+	rest := strings.TrimLeftFunc(line[sep+1:], unicode.IsSpace)
+	if rest == "" || (rest[0] != '\'' && rest[0] != '"') {
+		return 0, false
+	}
+	end, _ := closingQuote(rest[1:], rest[0])
+	return rest[0], end == -1
+}
+
+// redactEnvCommentRow masks a comment row for a locked session. A commented-
+// out assignment whose key or value is sensitive keeps its text up to the
+// separator ("#OLD_SECRET="), so the locked view still shows which variable
+// it was. Otherwise only a URL credential in the text is starred.
+func redactEnvCommentRow(e *EnvEntry) {
+	body := strings.TrimLeftFunc(e.Value, func(r rune) bool { return r == '#' || unicode.IsSpace(r) })
+	if sep := strings.IndexAny(body, "=:"); sep != -1 {
+		if key, ok := composeLineKey(body); ok && services.IsSensitiveEnvVar(key, body[sep+1:]) {
+			e.Value = e.Value[:len(e.Value)-len(body)+sep+1]
+			e.Sensitive = true
+			return
+		}
+	}
+	if services.HasURLUserinfo(e.Value) {
+		e.Value = services.RedactURLUserinfoInText(e.Value)
+		e.Sensitive = true
 	}
 }
 
@@ -600,7 +681,7 @@ func (h *EnvHandler) parseEnvFile(content string) []EnvEntry {
 			entry := EnvEntry{Value: trimmedLine, Line: lineNum, Comment: true}
 			if key, ok := composeLineKey(trimmedLine); ok {
 				entry.Key = key
-				entry.Sensitive = services.IsSensitiveEnvKey(key)
+				entry.Sensitive = services.IsSensitiveEnvVar(key, trimmedLine)
 			}
 			entries = append(entries, entry)
 			continue
@@ -613,7 +694,7 @@ func (h *EnvHandler) parseEnvFile(content string) []EnvEntry {
 			Key:           key,
 			Value:         value,
 			Line:          lineNum,
-			Sensitive:     services.IsSensitiveEnvKey(key),
+			Sensitive:     services.IsSensitiveEnvVar(key, value),
 			Comment:       false,
 			Quote:         quote,
 			InlineComment: inlineComment,
