@@ -140,6 +140,11 @@ func (f *bx43FakeDocker) ContainerStart(_ context.Context, _ string, _ container
 	return errBx43Apply
 }
 
+func (f *bx43FakeDocker) ContainerRename(_ context.Context, _, _ string) error {
+	f.record("ContainerRename")
+	return errBx43Apply
+}
+
 // bx43Service returns a DockerService wired to the fake, with the compose
 // labels the test wants on the inspected container.
 func bx43Service(labels map[string]string) (*DockerService, *bx43FakeDocker) {

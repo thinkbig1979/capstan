@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -58,6 +60,7 @@ type containerUpdateAPI interface {
 	ContainerRemove(ctx context.Context, containerID string, options container.RemoveOptions) error
 	ContainerCreate(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, networkingConfig *dockernet.NetworkingConfig, platform *ocispec.Platform, containerName string) (container.CreateResponse, error)
 	ContainerStart(ctx context.Context, containerID string, options container.StartOptions) error
+	ContainerRename(ctx context.Context, containerID, newContainerName string) error
 }
 
 // updateAPI returns the Docker API the container-update paths call: the fake a
@@ -432,7 +435,7 @@ func (s *DockerService) UpdateContainer(ctx context.Context, containerID string,
 	case updateViaCompose:
 		applyErr = s.updateComposeContainer(ctx, *stack, serviceName, wasRunning)
 	default:
-		recreatedID, applyErr = s.updateStandaloneContainer(ctx, inspect, wasRunning)
+		recreatedID, applyErr = s.recreateStandaloneContainer(ctx, inspect, wasRunning, func(LogLine) {}, func(Status) {})
 	}
 
 	durationMs := time.Since(start).Milliseconds()
@@ -575,58 +578,179 @@ func (s *DockerService) updateComposeContainer(ctx context.Context, stack models
 	return nil
 }
 
-// removeAfterOwnStop removes the container a standalone update is about to
-// recreate. A standalone container has no stack and so no operation lock, which
-// leaves a window between the update's stop and its remove in which a container
-// prune can remove the stopped container first (agent-os-qags.20). That
-// not-found means the container is already removed, so it is not an error and
-// the recreate from the captured inspect must still run.
+// standaloneRollbackTimeout bounds the restore of the old container after a
+// failed recreate. The restore runs on a context detached from the update's,
+// because the update's deadline ending is one of the ways the create or start
+// fails, and a restore on that same ended context would fail at once and leave
+// no container at all (agent-os-ohiy).
+const standaloneRollbackTimeout = time.Minute
+
+// oldContainerSuffix marks the previous container while its replacement is
+// created. A leftover one (see recreateStandaloneContainer) is found by it.
+const oldContainerSuffix = "-capstan-old-"
+
+// withoutImageDefaults returns a copy of a container's Config with every value
+// it inherited from its old image's defaults removed, so the new image's
+// defaults apply at create (agent-os-ohiy). A container's inspected Config is
+// the image's Config with the user's settings merged over it; recreating from
+// it verbatim pinned the old image's Env, Cmd, Entrypoint, labels and the rest,
+// so a new image version's changed defaults never took effect.
 //
-// It is forgiven only when this update's own stop succeeded (stoppedByUs): that
-// stop proves the container existed a moment ago, and a prune only removes
-// stopped containers. For a container that was not running nothing proves it was
-// not deleted on purpose, and recreating it would bring it back, so that
-// not-found stays an error, as does any other remove failure.
-func removeAfterOwnStop(ctx context.Context, api containerUpdateAPI, containerID string, stoppedByUs bool) error {
-	err := api.ContainerRemove(ctx, containerID, container.RemoveOptions{})
-	if err == nil || (stoppedByUs && cerrdefs.IsNotFound(err)) {
-		return nil
+// The cost, accepted: a value the user set explicitly that happens to equal the
+// old image's default cannot be told apart from the default, so it is removed
+// and the new image's value applies to it too.
+//
+// Cmd is dropped only together with Entrypoint. Docker clears the image's Cmd
+// when a container sets its own Entrypoint, so dropping a default Cmd beside a
+// custom Entrypoint would start the container with no command.
+func withoutImageDefaults(cfg *container.Config, oldImage image.InspectResponse) *container.Config {
+	out := *cfg
+	img := oldImage.Config
+	if img == nil {
+		return &out
 	}
-	return fmt.Errorf("removing container: %w", err)
+
+	if len(cfg.Env) > 0 {
+		out.Env = slices.DeleteFunc(slices.Clone(cfg.Env), func(e string) bool {
+			return slices.Contains(img.Env, e)
+		})
+	}
+	if slices.Equal(cfg.Entrypoint, img.Entrypoint) {
+		out.Entrypoint = nil
+		if slices.Equal(cfg.Cmd, img.Cmd) {
+			out.Cmd = nil
+		}
+	}
+	out.Labels = dropKeys(cfg.Labels, func(k string) bool {
+		v, ok := img.Labels[k]
+		return ok && v == cfg.Labels[k]
+	})
+	out.ExposedPorts = dropKeys(cfg.ExposedPorts, func(p string) bool {
+		_, ok := img.ExposedPorts[p]
+		return ok
+	})
+	out.Volumes = dropKeys(cfg.Volumes, func(v string) bool {
+		_, ok := img.Volumes[v]
+		return ok
+	})
+	if cfg.WorkingDir == img.WorkingDir {
+		out.WorkingDir = ""
+	}
+	if cfg.User == img.User {
+		out.User = ""
+	}
+	if cfg.StopSignal == img.StopSignal {
+		out.StopSignal = ""
+	}
+	if slices.Equal(cfg.Shell, img.Shell) {
+		out.Shell = nil
+	}
+	if slices.Equal(cfg.OnBuild, img.OnBuild) {
+		out.OnBuild = nil
+	}
+	if c, h := cfg.Healthcheck, img.Healthcheck; c != nil && h != nil &&
+		slices.Equal(c.Test, h.Test) && c.Interval == h.Interval &&
+		c.Timeout == h.Timeout && c.StartPeriod == h.StartPeriod &&
+		c.StartInterval == h.StartInterval && c.Retries == h.Retries {
+		out.Healthcheck = nil
+	}
+	return &out
 }
 
-// updateStandaloneContainer pulls the image, decoding the stream via
-// truth.DrainPullStream so that auth/manifest errors are surfaced (finding #3).
-// It returns the id of the container it created. That return value is load-bearing:
-// the recreate gives the container a NEW id, and the caller's post-update
-// verification has to inspect that one. Before agent-os-ekmk this returned only an
-// error, the caller kept inspecting the pre-update id, and every successful
-// standalone update was reported to the user as failed.
-func (s *DockerService) updateStandaloneContainer(ctx context.Context, inspect container.InspectResponse, wasRunning bool) (string, error) {
-	imageRef := inspect.Config.Image
+// dropKeys returns a copy of m without the keys drop reports, or nil for nil.
+func dropKeys[K ~string, V any](m map[K]V, drop func(string) bool) map[K]V {
+	if m == nil {
+		return nil
+	}
+	out := maps.Clone(m)
+	maps.DeleteFunc(out, func(k K, _ V) bool { return drop(string(k)) })
+	return out
+}
 
-	reader, err := s.updateAPI().ImagePull(ctx, imageRef, image.PullOptions{})
+// recreateStandaloneContainer updates a container no compose project manages:
+// it pulls the image, decoding the stream via truth.DrainPullStream so that
+// auth/manifest errors are surfaced (finding #3), and recreates the container
+// from the new image. It returns the id of the container it created. That
+// return value is load-bearing: the recreate gives the container a NEW id, and
+// the caller's post-update verification has to inspect that one (agent-os-ekmk).
+//
+// One function for both apply paths; emit and setStatus may be no-ops. There
+// used to be two copies, one streaming and one not (agent-os-ohiy).
+//
+// The old container is kept, renamed, until the new one has started, and is
+// put back if the create or the start fails, so a failure at any step leaves a
+// container. It used to be removed first, and a failed create left none.
+//
+// A standalone container has no stack, so no stack lock covers it, which leaves
+// a window between the update's stop and its rename in which a container prune
+// can remove the stopped container first (agent-os-qags.20). That not-found is
+// forgiven only when this update's own stop succeeded: the stop proves the
+// container existed a moment ago, and a prune only removes stopped containers.
+// The recreate then runs from the captured inspect, with nothing to restore. For
+// a container that was not running nothing proves it was not deleted on
+// purpose, and recreating it would bring it back, so that not-found stays an
+// error, as does any other rename failure.
+func (s *DockerService) recreateStandaloneContainer(
+	ctx context.Context,
+	inspect container.InspectResponse,
+	wasRunning bool,
+	emit func(LogLine),
+	setStatus func(Status),
+) (string, error) {
+	api := s.updateAPI()
+	say := func(stream Stream, text string) {
+		emit(LogLine{Ts: time.Now().UTC(), Text: text, Stream: stream})
+	}
+	imageRef := inspect.Config.Image
+	name := strings.TrimPrefix(inspect.Name, "/")
+
+	setStatus(StatusPulling)
+	say(StreamStatus, "==> Pulling "+imageRef)
+
+	reader, err := api.ImagePull(ctx, imageRef, image.PullOptions{})
 	if err != nil {
 		return "", fmt.Errorf("pulling image: %w", err)
 	}
 	defer reader.Close()
 
-	// Decode the stream — surfaces errorDetail/error messages (finding #3 fix).
-	if pullErr := truth.DrainPullStream(reader, nil); pullErr != nil {
+	if pullErr := truth.DrainPullStream(reader, func(line string) { say(StreamStdout, line) }); pullErr != nil {
 		return "", fmt.Errorf("pulling image %s: %w", imageRef, pullErr)
 	}
+	say(StreamStdout, "Pull complete")
+
+	// Read before anything is stopped: without the old image's defaults the
+	// new container could only be created from the old ones, which is the
+	// defect, so an unreadable old image fails the update with the old
+	// container untouched.
+	oldImage, err := api.ImageInspect(ctx, inspect.Image)
+	if err != nil {
+		return "", fmt.Errorf("inspecting the current image: %w", err)
+	}
+	config := withoutImageDefaults(inspect.Config, oldImage)
+
+	setStatus(StatusRecreating)
+	say(StreamStatus, "==> Recreating "+name)
 
 	if wasRunning {
-		if err := s.updateAPI().ContainerStop(ctx, inspect.ID, container.StopOptions{}); err != nil {
+		if err := api.ContainerStop(ctx, inspect.ID, container.StopOptions{}); err != nil {
 			return "", fmt.Errorf("stopping container: %w", err)
 		}
+		say(StreamStdout, "Container stopped")
 	}
 
-	if err := removeAfterOwnStop(ctx, s.updateAPI(), inspect.ID, wasRunning); err != nil {
-		return "", err
+	// kept is the old container's id while it is renamed aside; empty when a
+	// prune removed it first.
+	kept := inspect.ID
+	keptName := name + oldContainerSuffix + shortContainerID(inspect.ID)
+	if err := api.ContainerRename(ctx, inspect.ID, keptName); err != nil {
+		if !wasRunning || !cerrdefs.IsNotFound(err) {
+			s.restartOld(ctx, inspect.ID, wasRunning, say)
+			return "", fmt.Errorf("renaming container: %w", err)
+		}
+		kept = ""
+	} else {
+		say(StreamStdout, "Old container kept as "+keptName)
 	}
-
-	name := strings.TrimPrefix(inspect.Name, "/")
 
 	var netConfig *dockernet.NetworkingConfig
 	if inspect.NetworkSettings != nil {
@@ -635,18 +759,91 @@ func (s *DockerService) updateStandaloneContainer(ctx context.Context, inspect c
 		}
 	}
 
-	newContainer, err := s.updateAPI().ContainerCreate(ctx, inspect.Config, inspect.HostConfig, netConfig, nil, name)
+	newContainer, err := api.ContainerCreate(ctx, config, inspect.HostConfig, netConfig, nil, name)
 	if err != nil {
-		return "", fmt.Errorf("creating container: %w", err)
+		err = fmt.Errorf("creating container: %w", err)
+		return "", errors.Join(err, s.restoreOld(ctx, "", kept, name, wasRunning, say))
 	}
+	say(StreamStdout, "New container created")
 
 	if wasRunning {
-		if err := s.updateAPI().ContainerStart(ctx, newContainer.ID, container.StartOptions{}); err != nil {
-			return newContainer.ID, fmt.Errorf("starting container: %w", err)
+		if err := api.ContainerStart(ctx, newContainer.ID, container.StartOptions{}); err != nil {
+			err = fmt.Errorf("starting container: %w", err)
+			return "", errors.Join(err, s.restoreOld(ctx, newContainer.ID, kept, name, wasRunning, say))
+		}
+		say(StreamStdout, "Container started")
+	}
+
+	if kept != "" {
+		// The update has happened; a leftover old container does not undo it,
+		// so this is a warning, not a failure. It is stopped, but one with a
+		// restart policy of "always" starts again when the Docker daemon
+		// restarts, beside its replacement.
+		if err := api.ContainerRemove(ctx, kept, container.RemoveOptions{}); err != nil {
+			slog.Warn("Standalone update: the old container could not be removed; remove it by hand",
+				"container", keptName, "id", kept, "error", err)
+			say(StreamStderr, "Warning: the old container "+keptName+" could not be removed ("+err.Error()+"); remove it by hand")
+		} else {
+			say(StreamStdout, "Old container removed")
 		}
 	}
 
 	return newContainer.ID, nil
+}
+
+// restoreOld undoes a failed recreate: it removes the new container (if one was
+// created), gives the old one back its name and starts it again if it was
+// running. It runs on its own deadline, detached from ctx; see
+// standaloneRollbackTimeout. kept is empty when there is no old container to
+// restore. It returns what could not be undone, or nil.
+func (s *DockerService) restoreOld(ctx context.Context, newID, kept, name string, wasRunning bool, say func(Stream, string)) error {
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), standaloneRollbackTimeout)
+	defer cancel()
+	api := s.updateAPI()
+
+	if newID != "" {
+		if err := api.ContainerRemove(rctx, newID, container.RemoveOptions{Force: true}); err != nil {
+			return fmt.Errorf("rollback: removing the new container: %w", err)
+		}
+	}
+	if kept == "" {
+		return nil
+	}
+	if err := api.ContainerRename(rctx, kept, name); err != nil {
+		return fmt.Errorf("rollback: renaming the old container back to %s: %w", name, err)
+	}
+	say(StreamStdout, "Old container restored")
+	if wasRunning {
+		if err := api.ContainerStart(rctx, kept, container.StartOptions{}); err != nil {
+			return fmt.Errorf("rollback: starting the old container: %w", err)
+		}
+		say(StreamStdout, "Old container started")
+	}
+	return nil
+}
+
+// restartOld starts the old container again when the update stopped it and
+// then could not set it aside. Same detached deadline as restoreOld. A failure
+// is logged: the rename error is what the caller reports.
+func (s *DockerService) restartOld(ctx context.Context, id string, wasRunning bool, say func(Stream, string)) {
+	if !wasRunning {
+		return
+	}
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), standaloneRollbackTimeout)
+	defer cancel()
+	if err := s.updateAPI().ContainerStart(rctx, id, container.StartOptions{}); err != nil {
+		slog.Warn("Standalone update: could not start the old container again", "id", id, "error", err)
+		return
+	}
+	say(StreamStdout, "Old container started")
+}
+
+// shortContainerID is the 12-character form Docker shows.
+func shortContainerID(id string) string {
+	if len(id) > 12 {
+		return id[:12]
+	}
+	return id
 }
 
 // streamComposeCmd runs a docker compose command and streams each output line
@@ -766,7 +963,7 @@ func (s *DockerService) UpdateContainerStreaming(
 	case updateViaCompose:
 		applyErr = s.updateComposeContainerStreaming(ctx, *stack, serviceName, wasRunning, emit, setStatus)
 	default:
-		recreatedID, applyErr = s.updateStandaloneContainerStreaming(ctx, inspect, wasRunning, emit, setStatus)
+		recreatedID, applyErr = s.recreateStandaloneContainer(ctx, inspect, wasRunning, emit, setStatus)
 	}
 
 	durationMs := time.Since(start).Milliseconds()
@@ -873,80 +1070,6 @@ func (s *DockerService) updateComposeContainerStreaming(
 	}
 
 	return nil
-}
-
-// It returns the id of the recreated container, for the same reason as
-// updateStandaloneContainer above (agent-os-ekmk).
-//
-// updateStandaloneContainerStreaming pulls the image via the Docker SDK and
-// decodes the pull stream via truth.DrainPullStream (finding #3 fix), then
-// recreates the container.
-func (s *DockerService) updateStandaloneContainerStreaming(
-	ctx context.Context,
-	inspect container.InspectResponse,
-	wasRunning bool,
-	emit func(LogLine),
-	setStatus func(Status),
-) (string, error) {
-	imageRef := inspect.Config.Image
-
-	setStatus(StatusPulling)
-	emit(LogLine{Ts: time.Now().UTC(), Text: "==> Pulling " + imageRef, Stream: StreamStatus})
-
-	reader, err := s.updateAPI().ImagePull(ctx, imageRef, image.PullOptions{})
-	if err != nil {
-		return "", fmt.Errorf("pulling image: %w", err)
-	}
-	defer reader.Close()
-
-	// Decode the stream: surface pull progress to the WS log AND detect
-	// errorDetail/error messages (finding #3 fix: replaces io.Copy(io.Discard)).
-	if pullErr := truth.DrainPullStream(reader, func(line string) {
-		emit(LogLine{Ts: time.Now().UTC(), Text: line, Stream: StreamStdout})
-	}); pullErr != nil {
-		return "", fmt.Errorf("pulling image %s: %w", imageRef, pullErr)
-	}
-
-	emit(LogLine{Ts: time.Now().UTC(), Text: "Pull complete", Stream: StreamStdout})
-
-	setStatus(StatusRecreating)
-	emit(LogLine{Ts: time.Now().UTC(), Text: "==> Recreating " + strings.TrimPrefix(inspect.Name, "/"), Stream: StreamStatus})
-
-	if wasRunning {
-		if err := s.updateAPI().ContainerStop(ctx, inspect.ID, container.StopOptions{}); err != nil {
-			return "", fmt.Errorf("stopping container: %w", err)
-		}
-		emit(LogLine{Ts: time.Now().UTC(), Text: "Container stopped", Stream: StreamStdout})
-	}
-
-	if err := removeAfterOwnStop(ctx, s.updateAPI(), inspect.ID, wasRunning); err != nil {
-		return "", err
-	}
-	emit(LogLine{Ts: time.Now().UTC(), Text: "Old container removed", Stream: StreamStdout})
-
-	name := strings.TrimPrefix(inspect.Name, "/")
-
-	var netConfig *dockernet.NetworkingConfig
-	if inspect.NetworkSettings != nil {
-		netConfig = &dockernet.NetworkingConfig{
-			EndpointsConfig: inspect.NetworkSettings.Networks,
-		}
-	}
-
-	newContainer, err := s.updateAPI().ContainerCreate(ctx, inspect.Config, inspect.HostConfig, netConfig, nil, name)
-	if err != nil {
-		return "", fmt.Errorf("creating container: %w", err)
-	}
-	emit(LogLine{Ts: time.Now().UTC(), Text: "New container created", Stream: StreamStdout})
-
-	if wasRunning {
-		if err := s.updateAPI().ContainerStart(ctx, newContainer.ID, container.StartOptions{}); err != nil {
-			return newContainer.ID, fmt.Errorf("starting container: %w", err)
-		}
-		emit(LogLine{Ts: time.Now().UTC(), Text: "Container started", Stream: StreamStdout})
-	}
-
-	return newContainer.ID, nil
 }
 
 // UpdateComposeServiceStreaming updates a single compose service for a stack,
