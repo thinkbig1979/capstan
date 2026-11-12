@@ -890,6 +890,37 @@ func (m *ResticManager) TagPartial(ctx context.Context, tag, id string, out chan
 	return newID, nil
 }
 
+// ListForPartialMarks lists the snapshots tagged tag with the fields the
+// partial-mark heal pass reads: id, tags and "original" (agent-os-95dk).
+func (m *ResticManager) ListForPartialMarks(ctx context.Context, tag string) ([]resticSnapshot, error) {
+	pwFile, cleanup, err := m.withPasswordFile()
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+
+	ctx, cancel := withCommandDeadline(ctx, m.opDeadline(listSnapshotsTimeout))
+	defer cancel()
+	raw, err := m.runner.Output(ctx, "restic", []string{"snapshots", "--no-lock", "--json", "--tag", tag}, m.resticEnv(pwFile))
+	if err != nil {
+		return nil, fmt.Errorf("list snapshots: %w", timeoutError(ctx, err, "restic snapshots"))
+	}
+	raw = bytes.TrimSpace(raw)
+	if string(raw) == "null" || len(raw) == 0 {
+		return nil, nil
+	}
+	var snaps []resticSnapshot
+	if err := json.Unmarshal(raw, &snaps); err != nil {
+		return nil, fmt.Errorf("parse snapshots JSON: %w", err)
+	}
+	for _, s := range snaps {
+		if s.ID == "" {
+			return nil, errors.New("parse snapshots JSON: a snapshot has no id")
+		}
+	}
+	return snaps, nil
+}
+
 // snapshotByOriginal returns the id of the snapshot tagged tag and
 // PartialSnapshotTag whose "original" is id.
 func (m *ResticManager) snapshotByOriginal(ctx context.Context, tag, id string, env []string) (string, error) {

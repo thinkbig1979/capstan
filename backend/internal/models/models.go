@@ -531,6 +531,9 @@ type BackupRunItem struct {
 	// by restore to keep --delete off them (agent-os-fmeu). Not sent to clients:
 	// the item note already names the first ones.
 	UnreadablePaths []string `json:"-"`
+	// PartialMarked is true once the repository holds no untagged copy of
+	// this partial snapshot (agent-os-95dk heal pass). Not sent to clients.
+	PartialMarked bool `json:"-"`
 }
 
 type BackupSnapshot struct {

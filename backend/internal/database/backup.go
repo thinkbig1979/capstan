@@ -357,8 +357,8 @@ func (d *DB) SweepInterruptedBackupRuns() (int, error) {
 
 func (d *DB) AddBackupRunItem(item *models.BackupRunItem) error {
 	query := `INSERT INTO backup_run_items (id, run_id, stack_id, status, snapshot_id, stop_applied, duration_ms, error_message,
-	                                        unreadable_count, unreadable_paths)
-	          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	                                        unreadable_count, unreadable_paths, partial_marked)
+	          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	var paths any // NULL when none were stored
 	if len(item.UnreadablePaths) > 0 {
 		raw, err := json.Marshal(item.UnreadablePaths)
@@ -368,7 +368,7 @@ func (d *DB) AddBackupRunItem(item *models.BackupRunItem) error {
 		paths = string(raw)
 	}
 	_, err := d.db.Exec(query, item.ID, item.RunID, item.StackID, item.Status, item.SnapshotID,
-		item.StopApplied, item.DurationMs, item.ErrorMessage, item.UnreadableCount, paths)
+		item.StopApplied, item.DurationMs, item.ErrorMessage, item.UnreadableCount, paths, item.PartialMarked)
 	return err
 }
 
@@ -380,7 +380,7 @@ func (d *DB) AddBackupRunItem(item *models.BackupRunItem) error {
 const backupRunItemColumns = `backup_run_items.id, backup_run_items.run_id, backup_run_items.stack_id, ` +
 	`backup_run_items.status, COALESCE(backup_run_items.snapshot_id, ''), backup_run_items.stop_applied, ` +
 	`COALESCE(backup_run_items.duration_ms, 0), COALESCE(backup_run_items.error_message, ''), ` +
-	`backup_run_items.unreadable_count, backup_run_items.unreadable_paths`
+	`backup_run_items.unreadable_count, backup_run_items.unreadable_paths, backup_run_items.partial_marked`
 
 // scanBackupRunItem reads one row selected with backupRunItemColumns, from
 // *sql.Row or *sql.Rows.
@@ -391,7 +391,7 @@ func scanBackupRunItem(row interface{ Scan(dest ...any) error }) (models.BackupR
 		paths sql.NullString
 	)
 	if err := row.Scan(&item.ID, &item.RunID, &item.StackID, &item.Status, &item.SnapshotID,
-		&item.StopApplied, &item.DurationMs, &item.ErrorMessage, &count, &paths); err != nil {
+		&item.StopApplied, &item.DurationMs, &item.ErrorMessage, &count, &paths, &item.PartialMarked); err != nil {
 		return item, err
 	}
 	if count.Valid {
@@ -454,6 +454,55 @@ func (d *DB) GetPartialSnapshotIDs(stackID string) ([]string, error) {
 		return nil, fmt.Errorf("reading partial snapshot ids: %w", err)
 	}
 	return ids, nil
+}
+
+// GetUnmarkedPartialItems returns up to limit of the stack's successful
+// partial items whose snapshot may still be untagged in the repository
+// (partial_marked 0), oldest run first (agent-os-95dk heal pass).
+func (d *DB) GetUnmarkedPartialItems(stackID string, limit int) ([]models.BackupRunItem, error) {
+	rows, err := d.db.Query(`SELECT `+backupRunItemColumns+`
+	          FROM backup_run_items
+	          JOIN backup_runs br ON br.id = backup_run_items.run_id
+	          WHERE backup_run_items.stack_id = ? AND backup_run_items.status = 'success'
+	            AND COALESCE(backup_run_items.snapshot_id, '') <> ''
+	            AND backup_run_items.unreadable_count IS NOT NULL
+	            AND backup_run_items.partial_marked = 0
+	          ORDER BY br.started_at, backup_run_items.rowid
+	          LIMIT ?`, stackID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []models.BackupRunItem
+	for rows.Next() {
+		item, err := scanBackupRunItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading unmarked partial items: %w", err)
+	}
+	return items, nil
+}
+
+// MarkPartialItem records that item itemID's partial snapshot is settled in
+// the repository, under snapshotID (its id after tagging, or its last known
+// id when it is gone).
+func (d *DB) MarkPartialItem(itemID, snapshotID string) error {
+	res, err := d.db.Exec(`UPDATE backup_run_items SET snapshot_id = ?, partial_marked = 1 WHERE id = ?`, snapshotID, itemID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("count marked partial items: %w", err)
+	}
+	if n != 1 {
+		return fmt.Errorf("mark partial item %s: %d rows matched", itemID, n)
+	}
+	return nil
 }
 
 // GetRunItemForSnapshot returns the stack's newest successful backup item

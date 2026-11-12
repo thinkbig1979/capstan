@@ -124,7 +124,7 @@ INSERT INTO backup_run_items (id, run_id, stack_id, status, snapshot_id, stop_ap
 	// v26 appends its two columns with ALTER TABLE ADD COLUMN, which SQLite
 	// writes into the stored CREATE TABLE text; removed here so the comparison
 	// still pins v19's rebuild.
-	itemsSQLAfter = strings.Replace(itemsSQLAfter, ", unreadable_count INTEGER, unreadable_paths TEXT", "", 1)
+	itemsSQLAfter = strings.Replace(itemsSQLAfter, ", unreadable_count INTEGER, unreadable_paths TEXT, partial_marked INTEGER NOT NULL DEFAULT 0", "", 1)
 	assert.Equal(t, itemsSQLBefore, itemsSQLAfter, "backup_run_items must be rebuilt unchanged")
 
 	assertRebuildForeignKeyIntact(t, db, "backup_run_items", "backup_runs", "backup_runs_new", "backup_run_items_v19")

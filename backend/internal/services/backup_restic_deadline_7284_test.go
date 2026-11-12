@@ -139,7 +139,7 @@ func TestChildProcessCallsRunUnderACommandDeadline(t *testing.T) {
 		"CheckRepository", "EnsureRepository", "Backup", "Restore", "ListSnapshots", "RestorePreview", "Stats",
 		"Verify", "VerifyRepositoryData", "ApplyRetention", "Prune", "unlockStale",
 		"TestConnectivity", "probeRestoreSource", "remoteHasSnapshots", "Sync", "RestoreRepo", "syncPreflight",
-		"ApplyRetentionAfterPartial", "TagPartial",
+		"ApplyRetentionAfterPartial", "TagPartial", "ListForPartialMarks",
 	} {
 		assert.True(t, found[want], "guard did not see %s start a child: its call detection is blind", want)
 	}

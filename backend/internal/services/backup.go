@@ -1379,6 +1379,8 @@ func (s *BackupService) backupStack(
 		// unreadable is set for a partial snapshot (agent-os-95dk): the item
 		// records it, so later retention and restores can tell it apart.
 		unreadable *ResticBackupSummary
+		// marked is set once that snapshot carries PartialSnapshotTag.
+		marked bool
 	)
 	defer func() {
 		status := "success"
@@ -1392,6 +1394,7 @@ func (s *BackupService) backupStack(
 			n := unreadable.UnreadableCount
 			item.unreadableCount = &n
 			item.unreadablePaths = unreadable.Unreadable
+			item.partialMarked = marked
 		}
 		s.recordItem(runID, stackID, item)
 	}()
@@ -1526,9 +1529,12 @@ func (s *BackupService) backupStack(
 		} else {
 			stream(out, "info", fmt.Sprintf("[%s] marked snapshot %s %s; its id is now %s", stackID, snapshotID, PartialSnapshotTag, shortSnapshotID(newID)))
 			snapshotID = shortSnapshotID(newID)
-			s.applyStackRetention(ctx, restic, stackID, newID, warn, &res, out)
+			marked = true
+			if s.healOrSkipRetention(ctx, restic, stackID, warn, &res, out) {
+				s.applyStackRetention(ctx, restic, stackID, newID, warn, &res, out)
+			}
 		}
-	} else {
+	} else if s.healOrSkipRetention(ctx, restic, stackID, warn, &res, out) {
 		// Apply retention policy, for a partial snapshot too: skipping it is
 		// what let a stack with one permanently unreadable file grow its
 		// repository forever (agent-os-sufn). After a complete backup the
@@ -1546,6 +1552,86 @@ func (s *BackupService) backupStack(
 	// The deferred restart will fire here for the stop-policy path unless the
 	// stack was known to be stopped beforehand.
 	return res, nil
+}
+
+// healPartialMarksPerRun caps how many earlier partial snapshots one backup
+// of a stack tags, so a backlog heals over several runs instead of holding
+// the global lock for one long one.
+const healPartialMarksPerRun = 20
+
+// healOrSkipRetention runs healPartialMarks and reports whether retention may
+// run. Any fault skips retention for the stack this run: an untagged partial
+// snapshot would read as complete once its run item is pruned.
+func (s *BackupService) healOrSkipRetention(ctx context.Context, restic *ResticManager, stackID string, warn func(string), res *stackResult, out chan<- StreamLine) bool {
+	if err := s.healPartialMarks(ctx, restic, stackID, out); err != nil {
+		warn(fmt.Sprintf("retention skipped: earlier partial snapshots could not be marked %s: %v", PartialSnapshotTag, err))
+		res.retentionFailed = true
+		return false
+	}
+	return true
+}
+
+// healPartialMarks tags the stack's earlier partial snapshots that run items
+// record but the repository does not mark (agent-os-95dk review MUST-D1):
+// partials written before PartialSnapshotTag existed, and nights whose
+// TagPartial failed. Once history pruning deletes their items they would read
+// as complete, so they are marked while the items still exist. At most
+// healPartialMarksPerRun per run.
+//
+// Per item, against one listing of the stack's snapshots:
+//   - the snapshot carries the tag: the item is marked settled;
+//   - it does not: it is tagged and the item records its new id;
+//   - it is gone, but a tagged snapshot records it as "original" (restic tag
+//     rewrote it and TagPartial's lookup then failed, review SD1): the item
+//     records that snapshot's id;
+//   - it is gone with no such snapshot (forgotten): logged and settled.
+//
+// With nothing recorded unmarked, it makes no restic call at all.
+func (s *BackupService) healPartialMarks(ctx context.Context, restic *ResticManager, stackID string, out chan<- StreamLine) error {
+	items, err := s.db.GetUnmarkedPartialItems(stackID, healPartialMarksPerRun)
+	if err != nil {
+		return fmt.Errorf("read partial snapshots still to mark: %w", err)
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	snaps, err := restic.ListForPartialMarks(ctx, stackID)
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		id := item.SnapshotID
+		var direct, rewritten *resticSnapshot
+		for i := range snaps {
+			snap := &snaps[i]
+			if snapshotIDMatches(*snap, id) {
+				direct = snap
+			}
+			if snap.Original != "" && strings.HasPrefix(snap.Original, id) && slices.Contains(snap.Tags, PartialSnapshotTag) {
+				rewritten = snap
+			}
+		}
+		settledAs := id
+		switch {
+		case direct != nil && slices.Contains(direct.Tags, PartialSnapshotTag):
+		case direct != nil:
+			newID, tagErr := restic.TagPartial(ctx, stackID, direct.ID, out)
+			if tagErr != nil {
+				return fmt.Errorf("mark earlier partial snapshot %s: %w", id, tagErr)
+			}
+			settledAs = shortSnapshotID(newID)
+			stream(out, "info", fmt.Sprintf("[%s] marked earlier partial snapshot %s %s; its id is now %s", stackID, id, PartialSnapshotTag, settledAs))
+		case rewritten != nil:
+			settledAs = shortSnapshotID(rewritten.ID)
+			stream(out, "info", fmt.Sprintf("[%s] earlier partial snapshot %s is marked %s under id %s; its record now says so", stackID, id, PartialSnapshotTag, settledAs))
+		default:
+			s.logger.Info("earlier partial snapshot is no longer in the repository; nothing to mark", "stack", stackID, "snapshot", id)
+		}
+		if err := s.db.MarkPartialItem(item.ID, settledAs); err != nil {
+			return fmt.Errorf("record the mark of partial snapshot %s: %w", id, err)
+		}
+	}
+	return nil
 }
 
 // applyStackRetention runs the stack's retention after its backup.
@@ -2315,6 +2401,7 @@ type runItemOutcome struct {
 	// unreadableCount is nil for a complete snapshot (agent-os-95dk).
 	unreadableCount *int
 	unreadablePaths []string
+	partialMarked   bool
 }
 
 // recordItem writes a BackupRunItem to the DB, ignoring errors (they are
@@ -2331,6 +2418,7 @@ func (s *BackupService) recordItem(runID, stackID string, o runItemOutcome) {
 		ErrorMessage:    o.message,
 		UnreadableCount: o.unreadableCount,
 		UnreadablePaths: o.unreadablePaths,
+		PartialMarked:   o.partialMarked,
 	}
 	if err := s.db.AddBackupRunItem(item); err != nil {
 		s.logger.Error("failed to record backup run item", "stack", stackID, "error", err)

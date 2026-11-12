@@ -952,6 +952,11 @@ ALTER TABLE directories ADD COLUMN git_push_enabled INTEGER NOT NULL DEFAULT 0;
 -- --delete off files the snapshot never held.
 ALTER TABLE backup_run_items ADD COLUMN unreadable_count INTEGER;
 ALTER TABLE backup_run_items ADD COLUMN unreadable_paths TEXT;
+-- partial_marked is 1 once the repository holds no UNTAGGED copy of the
+-- item's partial snapshot: it carries the capstan-partial tag, or it is gone.
+-- 0 means the self-healing pass still has to tag it (review MUST-D1). Every
+-- backfilled sufn-era partial starts at 0.
+ALTER TABLE backup_run_items ADD COLUMN partial_marked INTEGER NOT NULL DEFAULT 0;
 
 -- Backfill items written since agent-os-sufn from their note, and ONLY when a
 -- note segment (notes are joined with "; ") is one of the two exact sentences
