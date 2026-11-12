@@ -8,8 +8,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/compose-spec/compose-go/v2/dotenv"
-
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
@@ -151,38 +149,28 @@ func (s *DockerService) redactComposeOutputFor(stack models.Stack, out string) s
 // composeSecrets returns the sensitive env values compose can interpolate for
 // this stack, longest first so a value that contains another is replaced whole.
 //
-// The files are the ones buildComposeArgs hands compose (global.env and the
-// stack's EnvFile) plus the project directory's .env, which compose reads when
-// no --env-file is given. Over-including .env costs nothing: it only adds
-// values of sensitive keys.
+// The files are resolveComposeEnv's superset: the ones buildComposeArgs hands
+// compose (global.env and the stack's EnvFile) plus the project directory's
+// .env, which compose reads when no --env-file is given. Over-including .env
+// costs nothing: it only adds values of sensitive keys.
 //
-// Each value is learned twice (agent-os-tfef). First as compose resolves it:
-// compose-go's dotenv.GetEnvFromFile, the function compose-go's
-// cli.WithDotEnv calls, over global.env then the stack file, seeded with the
-// environment the compose child actually gets (dockerEnv). Quotes, escapes,
-// "KEY: value" and ${VAR} references therefore come out as compose sees them,
-// with compose's precedence: a value set in the same file wins over
-// global.env's. Second by the older sensitiveEnvValues, on every readable
-// file, always: a file compose-go rejects then still masks what that parser
-// finds, and the raw text of a line is masked too. Never fewer values than
-// before this change.
+// Each value is learned twice (agent-os-tfef). First as compose resolves it,
+// by resolveComposeEnv (compose-go's dotenv.GetEnvFromFile, the function
+// compose-go's cli.WithDotEnv calls, seeded with the compose child's
+// environment). Quotes, escapes, "KEY: value" and ${VAR} references therefore
+// come out as compose sees them, with compose's precedence: a value set in the
+// same file wins over global.env's. Second by the older sensitiveEnvValues, on
+// every readable file, always: a file compose-go rejects then still masks what
+// that parser finds, and the raw text of a line is masked too. Never fewer
+// values than before this change.
 //
 // A file that cannot be read is skipped. compose runs as the same user against
 // the same file, so it could not read it either and cannot have echoed it; the
 // URL arm still applies.
 func (s *DockerService) composeSecrets(stack models.Stack) []string {
-	var globalPath, dotEnvPath, envPath string
+	var globalPath string
 	if s.config != nil && s.config.DataDir != "" {
 		globalPath = filepath.Join(s.config.DataDir, "global.env")
-	}
-	if stack.Directory != "" {
-		dotEnvPath = filepath.Join(stack.Directory, ".env")
-	}
-	if stack.EnvFile != "" {
-		envPath = stack.EnvFile
-		if !filepath.IsAbs(envPath) {
-			envPath = filepath.Join(stack.Directory, envPath)
-		}
 	}
 
 	seen := map[string]bool{}
@@ -194,41 +182,36 @@ func (s *DockerService) composeSecrets(stack models.Stack) []string {
 		}
 	}
 
-	for _, p := range []string{globalPath, dotEnvPath, envPath} {
-		if p == "" {
-			continue
-		}
-		//nolint:gosec // G304: the paths come from config.DataDir and the scanned stack record, the same files buildComposeArgs passes to compose
-		data, err := os.ReadFile(p)
-		if err != nil {
-			continue
-		}
-		for _, v := range sensitiveEnvValues(string(data)) {
-			add(v)
+	// Superset chains never fail; they only hold files that can be stat'ed.
+	chains, _ := composeEnvFileChains(stack, globalPath, composeEnvSuperset)
+	read := map[string]bool{}
+	for _, chain := range chains {
+		for _, p := range chain {
+			if read[p] {
+				continue
+			}
+			read[p] = true
+			//nolint:gosec // G304: the paths come from config.DataDir and the scanned stack record, the same files buildComposeArgs passes to compose
+			data, err := os.ReadFile(p)
+			if err != nil {
+				continue
+			}
+			for _, v := range sensitiveEnvValues(string(data)) {
+				add(v)
+			}
 		}
 	}
 
-	chains := [][]string{{globalPath, dotEnvPath}}
-	if envPath != "" && envPath != dotEnvPath {
-		chains = append(chains, []string{globalPath, envPath})
+	envs, err := resolveComposeEnv(stack, globalPath, composeEnvSuperset)
+	if err != nil {
+		// The partial maps are still used and the sensitiveEnvValues pass
+		// above covers the rest. err is not logged: compose-go quotes the
+		// offending line's text, which can be a secret.
+		slog.Debug("compose-go could not parse a stack's env files; redacting with the fallback parser's values too",
+			"stack", stack.ProjectName)
 	}
-	composeEnv := map[string]string{}
-	for _, kv := range dockerEnv() {
-		if k, v, ok := strings.Cut(kv, "="); ok {
-			composeEnv[k] = v
-		}
-	}
-	for _, chain := range chains {
-		resolved, err := dotenv.GetEnvFromFile(composeEnv, existingFiles(chain))
-		if err != nil {
-			// The partial map is still used and the sensitiveEnvValues pass
-			// above covers the rest. err is not logged: compose-go quotes the
-			// offending line's text, which can be a secret (observed:
-			// `unterminated quoted value "<value>`).
-			slog.Debug("compose-go could not parse a stack's env files; redacting with the fallback parser's values too",
-				"stack", stack.ProjectName)
-		}
-		for k, v := range resolved {
+	for _, env := range envs {
+		for k, v := range env {
 			if IsSensitiveEnvKey(k) {
 				add(v)
 			}
@@ -237,26 +220,6 @@ func (s *DockerService) composeSecrets(stack models.Stack) []string {
 
 	sort.Slice(secrets, func(i, j int) bool { return len(secrets[i]) > len(secrets[j]) })
 	return secrets
-}
-
-// existingFiles drops the paths GetEnvFromFile would stop on before reading
-// the rest: empty, unstattable or a directory. An unstattable file is skipped
-// for the same reason composeSecrets skips an unreadable one.
-func existingFiles(paths []string) []string {
-	var out []string
-	for _, p := range paths {
-		if p == "" {
-			continue
-		}
-		fi, err := os.Stat(p)
-		if err != nil {
-			continue
-		}
-		if !fi.IsDir() {
-			out = append(out, p)
-		}
-	}
-	return out
 }
 
 // sensitiveEnvValues returns the values of sensitive keys in a dotenv file.
