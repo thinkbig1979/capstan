@@ -220,7 +220,12 @@ const dupUnlocked = {
 const keyInput = (n: number) =>
   screen.getAllByLabelText(`Environment variable key ${n}`)[0] as HTMLInputElement
 
-const savedBody = () => mockUpdateEnv.mock.calls[0][1] as { entries: Array<{ key: string; value: string }> }
+const savedBody = () => {
+  const body = mockUpdateEnv.mock.calls[0][1] as { entries: Array<{ key: string; value: string }> }
+  // _rowId is client-side identity and must not reach the wire.
+  expect(body.entries.every((e) => !('_rowId' in e))).toBe(true)
+  return body
+}
 
 async function saveAfterUnlock() {
   fireEvent.click(screen.getAllByRole('button', { name: /^Save$/ })[0])

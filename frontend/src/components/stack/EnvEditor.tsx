@@ -169,7 +169,11 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
       return sent.entries ? sameEntries(next.entries, sent.entries) : next.raw === sent.raw
     },
     onOwnSave: (next) => {
-      setLoadedEnv((prev) => ({ rows: sent?.entries ?? prev.rows, raw: (next.hasEnvFile ? next.raw : undefined) ?? prev.raw }))
+      const savedRaw = next.hasEnvFile ? next.raw : undefined
+      // The raw text the user never touched follows the file, as the baseline
+      // does; otherwise rawContent !== loadedEnv.raw would read as a raw edit.
+      if (savedRaw !== undefined && rawContent === loadedEnv.raw) setRawContent(savedRaw)
+      setLoadedEnv((prev) => ({ rows: sent?.entries ?? prev.rows, raw: savedRaw ?? prev.raw }))
       clearSent()
     },
     canHydrateWhileDirty: (next, prev) => {

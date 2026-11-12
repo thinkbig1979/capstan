@@ -122,6 +122,8 @@ describe('EnvEditor typing during a save (agent-os-3761)', () => {
     await waitFor(() => expect(mockUpdateEnv).toHaveBeenCalledTimes(2))
     const body = mockUpdateEnv.mock.calls[1][1] as { entries: Array<{ value: string }> }
     expect(body.entries[0].value).toBe('9191')
+    // _rowId is client-side identity and must not reach the wire.
+    expect(body.entries.every((e) => !('_rowId' in e))).toBe(true)
   })
 
   it('3761: with no newer typing the editor takes the refetch and is clean', async () => {
@@ -171,6 +173,45 @@ describe('EnvEditor typing during a save (agent-os-3761)', () => {
 
     // Only the locked-again alert was up; once unlocked nothing is, and the edit stays.
     await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument())
+    expect(portInput().value).toBe('9191')
+  })
+
+  it('3761: after a FAILED save (outcome failed), a later change equal to the failed body is not taken for that save', async () => {
+    mockUpdateEnv.mockResolvedValue({ outcome: 'failed', reason: 'disk full' })
+    await startSave('9090')
+    await waitFor(() => expect(saveButton()).not.toBeDisabled())
+    fireEvent.change(portInput(), { target: { value: '9191' } })
+
+    // Another tab writes the very text the failed save tried to write.
+    await external(envFile('9090'))
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    expect(portInput().value).toBe('9191')
+  })
+
+  it('3761: after a REJECTED save, a later change equal to the failed body is not taken for that save', async () => {
+    mockUpdateEnv.mockRejectedValue(new Error('network down'))
+    await startSave('9090')
+    await waitFor(() => expect(saveButton()).not.toBeDisabled())
+    fireEvent.change(portInput(), { target: { value: '9191' } })
+
+    await external(envFile('9090'))
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    expect(portInput().value).toBe('9191')
+  })
+
+  it('3761: after a save that stayed dirty the raw text follows the file, so a pull equal to the edited rows raises no notice', async () => {
+    await startSave('9090')
+    fireEvent.change(portInput(), { target: { value: '9191' } })
+    await finishAndRefetch()
+    await waitFor(() => expect(saveButton()).not.toBeDisabled())
+
+    // The pull brings exactly what the editor shows: nothing to warn about.
+    await external(envFile('9191'))
+
+    await waitFor(() => expect(saveButton()).toBeDisabled())
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     expect(portInput().value).toBe('9191')
   })
 })

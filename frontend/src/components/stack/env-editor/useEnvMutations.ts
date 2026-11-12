@@ -76,8 +76,13 @@ export function useEnvMutations({
           setSent(null)
           resetHistory(body.entries || snapshot.entries, body.raw || snapshot.rawContent)
         }
+      } else {
+        // failed / partial: the file is not what was sent, so a later payload
+        // that happens to equal it is not this save coming back.
+        setSent(null)
       }
     },
+    onError: () => setSent(null),
   })
 
   const createEnvMutation = useActionMutation<void>({

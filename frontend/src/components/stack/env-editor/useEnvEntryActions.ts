@@ -89,7 +89,15 @@ export function useEnvEntryActions({
 
   const handleUnlocked = () => {
     if (pendingRevealIndex !== null) {
-      applyVisibilityToggle(pendingRevealIndex)
+      // The dialog calls this after awaiting the refetch, from the render that
+      // submitted, so `entries` here is the pre-unlock list with the blanks. A
+      // functional update acts on the latest rows whichever of the refetch and
+      // this call reaches React first (agent-os-vqf5): applyVisibilityToggle's
+      // setEntries([...entries]) would put the blanks back over the filled rows.
+      // The reveal is display state and is not pushed to the undo history here,
+      // for the same reason (pushToHistory closes over the stale stack).
+      const index = pendingRevealIndex
+      setEntries((prev) => prev.map((e, i) => (i === index ? { ...e, sensitive: !e.sensitive } : e)))
     }
     setPendingRevealIndex(null)
   }
