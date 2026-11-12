@@ -6,7 +6,8 @@ import { useExternalFileChange } from '@/hooks/useExternalFileChange'
 import { presentError } from '@/lib/error-handler'
 import { fillRedactedBlanks } from '@/lib/env-unlock-rebase'
 import { isSensitiveKey } from './sensitiveKey'
-import type { EnvVar, IndexedEnvVar } from './types'
+import { useNextRowId } from '@/components/stack/env-editor/useRowId'
+import type { EnvRow, EnvVar, IndexedEnvVar } from './types'
 
 const ENV_SEARCH_FIELDS = [
   (e: IndexedEnvVar) => e.key,
@@ -24,14 +25,17 @@ export function useGlobalEnvVars(setVisible: Dispatch<SetStateAction<Record<numb
   const { data, isPending, isLoadingError, isRefetchError, refetch } = useGlobalEnv()
   const updateGlobalEnv = useUpdateGlobalEnv()
 
-  const [vars, setVars] = useState<EnvVar[]>([])
+  const nextRowId = useNextRowId()
+  const [vars, setVars] = useState<EnvRow[]>([])
   const [dirty, setDirty] = useState(false)
   // The list as last loaded or saved: what a kept edit is compared against.
-  const [loaded, setLoaded] = useState<EnvVar[]>([])
+  const [loaded, setLoaded] = useState<EnvRow[]>([])
 
   // The list a save last sent. Its own refetch comes back carrying exactly this,
-  // which must not read as a change made elsewhere (agent-os-lqcw).
-  const savedRef = useRef<EnvVar[] | null>(null)
+  // which must not read as a change made elsewhere (agent-os-lqcw). State, not a
+  // ref, because isOwnSave reads it while rendering. It is dropped once that
+  // refetch is consumed, the form is clean again, or the save failed.
+  const [sent, setSent] = useState<EnvRow[] | null>(null)
   const varsRef = useRef(vars)
   useEffect(() => {
     varsRef.current = vars
@@ -46,8 +50,10 @@ export function useGlobalEnvVars(setVisible: Dispatch<SetStateAction<Record<numb
   const { changedOnDisk, reload } = useExternalFileChange(data, {
     isDirty: dirty,
     hydrate: (next) => {
-      setVars(next.vars ?? [])
-      setLoaded(next.vars ?? [])
+      const rows = (next.vars ?? []).map((v) => ({ ...v, _rowId: nextRowId() }))
+      setVars(rows)
+      setLoaded(rows)
+      setSent(null)
       setVisible({})
       setDirty(false)
     },
@@ -69,7 +75,8 @@ export function useGlobalEnvVars(setVisible: Dispatch<SetStateAction<Record<numb
       return sameVars(nextVars, baseline)
     },
     canHydrateWhileDirty: (next) => sameVars(next.vars ?? [], vars),
-    isOwnSave: (next) => savedRef.current !== null && sameVars(next.vars ?? [], savedRef.current),
+    isOwnSave: (next) => sent !== null && sameVars(next.vars ?? [], sent),
+    onOwnSave: () => setSent(null),
   })
 
   // Wrap vars with their original index so filtered results can route edits correctly.
@@ -89,7 +96,8 @@ export function useGlobalEnvVars(setVisible: Dispatch<SetStateAction<Record<numb
   }
 
   const handleAdd = () => {
-    setVars((prev) => [...prev, { key: '', value: '' }])
+    const row = { key: '', value: '', _rowId: nextRowId() }
+    setVars((prev) => [...prev, row])
     setDirty(true)
   }
 
@@ -104,18 +112,23 @@ export function useGlobalEnvVars(setVisible: Dispatch<SetStateAction<Record<numb
   }
 
   const handleSave = () => {
-    const cleaned = cleanVars(vars)
-    savedRef.current = cleaned
-    updateGlobalEnv.mutate(cleaned, {
+    const rows = cleanRows(vars)
+    setSent(rows)
+    // The wire format has no row id.
+    updateGlobalEnv.mutate(rows.map(({ key, value }) => ({ key, value })), {
       onSuccess: () => {
         toast.success('Global environment variables saved')
         // Typing that landed while the save was in flight is not on the server:
         // stay dirty, and the refetch is then recognised as this save's own
         // (agent-os-lqcw, the same rule as agent-os-3761).
-        setLoaded(cleaned)
-        if (sameVars(cleanVars(varsRef.current), cleaned)) setDirty(false)
+        setLoaded(rows)
+        if (sameVars(cleanRows(varsRef.current), rows)) {
+          setDirty(false)
+          setSent(null)
+        }
       },
       onError: (err) => {
+        setSent(null)
         presentError(err, { fallback: 'Failed to save global environment variables' })
       },
     })
@@ -156,8 +169,8 @@ export function useGlobalEnvVars(setVisible: Dispatch<SetStateAction<Record<numb
 }
 
 /** What a save sends: keys trimmed, rows without a key dropped. */
-function cleanVars(vars: EnvVar[]): EnvVar[] {
-  return vars.map((v) => ({ key: v.key.trim(), value: v.value })).filter((v) => v.key !== '')
+function cleanRows(vars: EnvRow[]): EnvRow[] {
+  return vars.map((v) => ({ ...v, key: v.key.trim() })).filter((v) => v.key !== '')
 }
 
 /** Two lists say the same variables, in the same order. */

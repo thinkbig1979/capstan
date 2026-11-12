@@ -147,3 +147,77 @@ describe('global env form across a lock change (agent-os-vqf5)', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 })
+
+const dupLocked: Payload = {
+  locked: true,
+  vars: [
+    { key: 'API_KEY', value: '' },
+    { key: 'FOO', value: 'bar' },
+    { key: 'API_KEY', value: '' },
+  ],
+}
+const dupUnlocked: Payload = {
+  vars: [
+    { key: 'API_KEY', value: 'one' },
+    { key: 'FOO', value: 'bar' },
+    { key: 'API_KEY', value: 'two' },
+  ],
+}
+
+const keyInput = (n: number) => screen.getAllByLabelText(`Global env key ${n}`)[0] as HTMLInputElement
+
+async function saveNow() {
+  fireEvent.click(screen.getByText('Save'))
+  await waitFor(() => expect(mockUpdateGlobalEnv).toHaveBeenCalledTimes(1))
+}
+
+describe('global env rows edited while locked follow their identity (agent-os-vqf5, review MUST-2)', () => {
+  it('vqf5: renaming a redacted row while locked, then unlock: the secret follows the row', async () => {
+    server = lockedPayload
+    renderForm()
+    await waitFor(() => expect(value(1).value).toBe('bar'))
+    fireEvent.change(keyInput(2), { target: { value: 'API_KEY_V2' } })
+
+    await serve(unlockedPayload)
+
+    await waitFor(() => expect(value(2).value).toBe('real-secret'))
+    await saveNow()
+    expect(mockUpdateGlobalEnv).toHaveBeenCalledWith([
+      { key: 'FOO', value: 'bar' },
+      { key: 'API_KEY_V2', value: 'real-secret' },
+    ])
+  })
+
+  it('vqf5: deleting the first of two same-key redacted rows while locked: the survivor gets its own secret', async () => {
+    server = dupLocked
+    renderForm()
+    await waitFor(() => expect(value(2).value).toBe('bar'))
+    fireEvent.click(screen.getAllByLabelText('Remove global env 1')[0])
+
+    await serve(dupUnlocked)
+
+    await waitFor(() => expect(value(2).value).toBe('two'))
+    await saveNow()
+    expect(mockUpdateGlobalEnv).toHaveBeenCalledWith([
+      { key: 'FOO', value: 'bar' },
+      { key: 'API_KEY', value: 'two' },
+    ])
+  })
+
+  it('vqf5: a row renamed onto an existing redacted key does not take that secret from the original', async () => {
+    server = lockedPayload
+    renderForm()
+    await waitFor(() => expect(value(1).value).toBe('bar'))
+    fireEvent.change(keyInput(1), { target: { value: 'API_KEY' } })
+
+    await serve(unlockedPayload)
+
+    await waitFor(() => expect(value(2).value).toBe('real-secret'))
+    expect(value(1).value).toBe('bar')
+    await saveNow()
+    expect(mockUpdateGlobalEnv).toHaveBeenCalledWith([
+      { key: 'API_KEY', value: 'bar' },
+      { key: 'API_KEY', value: 'real-secret' },
+    ])
+  })
+})

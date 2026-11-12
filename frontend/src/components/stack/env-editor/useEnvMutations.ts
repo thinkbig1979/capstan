@@ -1,4 +1,4 @@
-import { useEffect, useRef, type Dispatch, type SetStateAction } from 'react'
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import { stacksApi } from '@/lib/api'
 import { useActionMutation } from '@/hooks/useActionMutation'
 import type { EnvEntryRow } from './types'
@@ -32,17 +32,19 @@ export function useEnvMutations({
   setShowEnvSection,
   resetHistory,
 }: UseEnvMutationsArgs) {
-  // What the editor held when Save was clicked, and what was sent. onResult
-  // closes over the render that clicked, so "does the editor still hold the
-  // saved text" needs the latest render's state, read through a ref.
+  // What the editor held when Save was clicked. onResult closes over the render
+  // that clicked, so "does the editor still hold the saved text" needs the
+  // latest render's state, read through a ref (only ever inside the callback).
   const latest = useRef({ entries, rawContent })
   useEffect(() => {
     latest.current = { entries, rawContent }
   })
-  const savedRef = useRef<{
-    body: { entries?: EnvEntryRow[]; raw?: string }
-    snapshot: { entries: EnvEntryRow[]; rawContent: string }
-  } | null>(null)
+  const snapshotRef = useRef<{ entries: EnvEntryRow[]; rawContent: string } | null>(null)
+  // What the last save sent, as state because EnvEditor reads it while
+  // rendering (isOwnSave). It is dropped once its refetch is consumed, or once
+  // the editor is clean again, so a later change that happens to equal an old
+  // save is not taken for that save (agent-os-3761).
+  const [sent, setSent] = useState<{ entries?: EnvEntryRow[]; raw?: string } | null>(null)
 
   const saveMutation = useActionMutation({
     mutationFn: async (body: { entries?: EnvEntryRow[]; raw?: string }) => {
@@ -58,20 +60,21 @@ export function useEnvMutations({
     },
     invalidate: [queryKeys.stack.detail(stackId)],
     successTitle: 'Environment variables saved',
-    onResult: (result) => {
+    onResult: (result, body) => {
       if (result.outcome === 'success' || result.outcome === 'no_change') {
         // Clean only if neither the rows nor the raw text moved since Save was
         // clicked (agent-os-3761). Typing that landed while the save was in
         // flight is not on disk: the editor stays dirty, and the save's own
-        // refetch is then recognised through savedRef (EnvEditor.tsx).
-        const saved = savedRef.current
+        // refetch is then recognised through `sent` (EnvEditor.tsx).
+        const snapshot = snapshotRef.current
         if (
-          saved &&
-          latest.current.entries === saved.snapshot.entries &&
-          latest.current.rawContent === saved.snapshot.rawContent
+          snapshot &&
+          latest.current.entries === snapshot.entries &&
+          latest.current.rawContent === snapshot.rawContent
         ) {
           setHasUnsavedChanges(false)
-          resetHistory(saved.body.entries || saved.snapshot.entries, saved.body.raw || saved.snapshot.rawContent)
+          setSent(null)
+          resetHistory(body.entries || snapshot.entries, body.raw || snapshot.rawContent)
         }
       }
     },
@@ -95,14 +98,16 @@ export function useEnvMutations({
   })
 
   const handleSaveTable = () => {
-    savedRef.current = { body: { entries }, snapshot: { entries, rawContent } }
+    snapshotRef.current = { entries, rawContent }
+    setSent({ entries })
     saveMutation.mutate({ entries })
   }
 
   const handleSaveRaw = () => {
-    savedRef.current = { body: { raw: rawContent }, snapshot: { entries, rawContent } }
+    snapshotRef.current = { entries, rawContent }
+    setSent({ raw: rawContent })
     saveMutation.mutate({ raw: rawContent })
   }
 
-  return { saveMutation, createEnvMutation, handleSaveTable, handleSaveRaw, savedRef }
+  return { saveMutation, createEnvMutation, handleSaveTable, handleSaveRaw, sent, clearSent: () => setSent(null) }
 }

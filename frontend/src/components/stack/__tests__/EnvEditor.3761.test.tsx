@@ -4,14 +4,16 @@
  * hydrates it, so before the fix the newer typing was wiped with no notice.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { screen, waitFor, fireEvent } from '@testing-library/react'
+import { screen, waitFor, fireEvent, act } from '@testing-library/react'
 import { renderWithProviders } from '../../../test/utils'
+import { queryKeys } from '@/lib/query-keys'
 
 type Payload = {
   hasEnvFile: true
   filename: string
   entries: Array<{ key: string; value: string; sensitive: boolean; comment: boolean; line: number }>
-  raw: string
+  raw?: string
+  locked?: boolean
 }
 
 const envFile = (port: string): Payload => ({
@@ -60,8 +62,31 @@ beforeEach(() => {
   })
 })
 
+let queryClient: ReturnType<typeof renderWithProviders>['queryClient']
+
+/** A file that also holds a secret, as the backend sends it locked or unlocked. */
+const secretFile = (port: string, locked = false): Payload => ({
+  hasEnvFile: true,
+  filename: '.env',
+  ...(locked ? { locked: true } : { raw: `PORT=${port}\nAPI_KEY=real\n` }),
+  entries: [
+    { key: 'PORT', value: port, sensitive: false, comment: false, line: 1 },
+    { key: 'API_KEY', value: locked ? '' : 'real', sensitive: true, comment: false, line: 2 },
+  ],
+})
+
+/** The file changes on disk (a pull, another tab), then the editor's query refetches. */
+async function external(next: Payload) {
+  disk = next
+  const calls = mockGetEnv.mock.calls.length
+  await act(async () => {
+    await queryClient.invalidateQueries({ queryKey: queryKeys.stack.env('s1') })
+  })
+  await waitFor(() => expect(mockGetEnv.mock.calls.length).toBeGreaterThan(calls))
+}
+
 async function startSave(value: string) {
-  renderWithProviders(<EnvEditor stackId="s1" />)
+  ;({ queryClient } = renderWithProviders(<EnvEditor stackId="s1" />))
   await waitFor(() => expect(portInput().value).toBe('8080'))
   fireEvent.change(portInput(), { target: { value } })
   fireEvent.click(saveButton())
@@ -107,5 +132,45 @@ describe('EnvEditor typing during a save (agent-os-3761)', () => {
     await waitFor(() => expect(saveButton()).toBeDisabled())
     expect(portInput().value).toBe('9090')
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('3761: once a save\'s refetch is consumed, a later change that equals that save is not taken for it', async () => {
+    await startSave('9090')
+    await finishAndRefetch()
+    await waitFor(() => expect(saveButton()).toBeDisabled())
+    expect(portInput().value).toBe('9090')
+    await external(envFile('7070'))
+    await waitFor(() => expect(portInput().value).toBe('7070'))
+    fireEvent.change(portInput(), { target: { value: '6060' } })
+
+    // Another tab puts back the very text the earlier save wrote.
+    await external(envFile('9090'))
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    expect(portInput().value).toBe('6060')
+  })
+
+  it('3761: a save that stayed dirty moves the baseline, so a later lock and unlock raise no changed-on-disk notice', async () => {
+    disk = secretFile('8080')
+    mockUpdateEnv.mockImplementation((_id: string, body: { entries?: Array<{ value: string }> }) => {
+      return new Promise((resolve) => {
+        finishSave = () => {
+          disk = secretFile(body.entries?.[0]?.value ?? '')
+          resolve({ outcome: 'success', reason: 'Saved' })
+        }
+      })
+    })
+    await startSave('9090')
+    fireEvent.change(portInput(), { target: { value: '9191' } })
+    await finishAndRefetch()
+    await waitFor(() => expect(saveButton()).not.toBeDisabled())
+
+    await external(secretFile('9090', true))
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    await external(secretFile('9090'))
+
+    // Only the locked-again alert was up; once unlocked nothing is, and the edit stays.
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument())
+    expect(portInput().value).toBe('9191')
   })
 })

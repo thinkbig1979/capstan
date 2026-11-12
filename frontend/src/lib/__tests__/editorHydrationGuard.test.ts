@@ -23,7 +23,10 @@
  *    `data` is treated as one, and a query whose result is renamed through a
  *    prop or a context is not followed.
  *  - The check is per file: importing useExternalFileChange clears every hit in
- *    that file, including an unrelated effect added later.
+ *    that file, including an unrelated effect added later. A new data-driven
+ *    `useEffect(setX)` added to ComposeEditor, EnvEditor or useGlobalEnvVars, which
+ *    already import it, is therefore invisible. Known limit, accepted: narrowing
+ *    the exemption to the data name passed to the hook call is the way to close it.
  *  - A setter is any callee named `set[A-Z]...`; a state update spelled another
  *    way (a store action, `dispatch`) is not seen.
  *  - Initial state from data (`useState(data.x)`) and a `key={data.id}` remount
