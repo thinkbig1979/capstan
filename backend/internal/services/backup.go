@@ -1786,8 +1786,11 @@ func (s *BackupService) runRestore(
 	}
 	restic := s.newResticMgr(bc)
 
-	// Validate that the snapshot is tagged with the stack ID.
-	if err := s.validateSnapshotBelongsToStack(ctx, restic, snapshotID, stackID); err != nil {
+	// Validate that the snapshot is tagged with the stack ID, and read the
+	// path it holds. Before the stop: a snapshot that cannot be restored is
+	// refused with the stack untouched (agent-os-jkyn).
+	snapPath, err := s.validateSnapshotBelongsToStack(ctx, restic, snapshotID, stackID)
+	if err != nil {
 		return fmt.Errorf("snapshot validation: %w", err)
 	}
 
@@ -1835,7 +1838,7 @@ func (s *BackupService) runRestore(
 		return fmt.Errorf("restore refused: could not read whether snapshot %s is partial: %w", snapshotID, itemErr)
 	case item.UnreadableCount != nil:
 		var note string
-		rels, placed := unreadableRestoreExcludes(stackDir, item.UnreadablePaths)
+		rels, placed := unreadableRestoreExcludes(snapPath, item.UnreadablePaths)
 		if placed && *item.UnreadableCount > 0 && len(item.UnreadablePaths) >= *item.UnreadableCount {
 			protected = append(protected, rels...)
 			note = fmt.Sprintf("partial snapshot: its backup could not read %d path(s); they are left as they are in %s", len(rels), stackDir)
@@ -1919,9 +1922,11 @@ func (s *BackupService) runRestore(
 	stopApplied = true
 
 	stream(out, "info", fmt.Sprintf("[%s] restoring snapshot %s to %s", stackID, snapshotID, stackDir))
-	// stackDir is the snapshot's stored source path; pass it so restic strips that
-	// prefix and restores contents into stackDir rather than nesting them.
-	if err := restic.Restore(ctx, snapshotID, stackDir, stackDir, protected, deleteExtra, out); err != nil {
+	// snapPath is the path the snapshot holds; restic strips that prefix and
+	// restores its contents into stackDir rather than nesting them. It is not
+	// stackDir: after a stacks-dir move, or on DR to another path, older
+	// snapshots still hold the old path (agent-os-jkyn).
+	if err := restic.Restore(ctx, snapshotID, snapPath, stackDir, protected, deleteExtra, out); err != nil {
 		return fmt.Errorf("restic restore: %w", err)
 	}
 
@@ -2233,24 +2238,31 @@ func (s *BackupService) resolveTargetPolicies(stackIDs []string) ([]models.Backu
 }
 
 // validateSnapshotBelongsToStack checks that the given snapshot has a tag
-// matching stackID. This prevents cross-stack restore mistakes.
+// matching stackID, which prevents cross-stack restore mistakes, and returns
+// the one absolute path the snapshot holds. Backup writes each snapshot from
+// a single absolute stack directory, so any other shape cannot be restored
+// by subfolder and is refused (agent-os-jkyn).
 func (s *BackupService) validateSnapshotBelongsToStack(
 	ctx context.Context,
 	restic *ResticManager,
 	snapshotID string,
 	stackID string,
-) error {
+) (string, error) {
 	// List all snapshots for this stack (limit=0 = all) and look for snapshotID.
 	snaps, err := restic.ListSnapshots(ctx, stackID, 0)
 	if err != nil {
-		return fmt.Errorf("list snapshots for stack %s: %w", stackID, err)
+		return "", fmt.Errorf("list snapshots for stack %s: %w", stackID, err)
 	}
 	for _, snap := range snaps {
-		if snap.ID == snapshotID || snap.ShortID == snapshotID {
-			return nil
+		if snap.ID != snapshotID && snap.ShortID != snapshotID {
+			continue
 		}
+		if len(snap.Paths) != 1 || !filepath.IsAbs(snap.Paths[0]) {
+			return "", fmt.Errorf("snapshot %s does not hold exactly one absolute path (it holds %q), so it cannot be restored into the stack directory", snapshotID, snap.Paths)
+		}
+		return filepath.Clean(snap.Paths[0]), nil
 	}
-	return fmt.Errorf("snapshot %s does not belong to stack %s", snapshotID, stackID)
+	return "", fmt.Errorf("snapshot %s does not belong to stack %s", snapshotID, stackID)
 }
 
 // runItemOutcome is what one stack's backup records in its run item.
