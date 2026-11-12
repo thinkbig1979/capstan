@@ -1,8 +1,11 @@
+import type { ReactNode } from 'react'
 import { AlertTriangle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
 interface FileChangedNoticeProps {
   onReload: () => void
+  /** What changed and what saving does, for a source that is not a file. */
+  children?: ReactNode
 }
 
 /**
@@ -10,7 +13,7 @@ interface FileChangedNoticeProps {
  * (agent-os-umig, see hooks/useExternalFileChange.ts). The edits stay; this
  * says that saving will overwrite the newer file and offers to load it.
  */
-export function FileChangedNotice({ onReload }: FileChangedNoticeProps) {
+export function FileChangedNotice({ onReload, children }: FileChangedNoticeProps) {
   return (
     <div
       // role="alert" for the reason RefreshFailedNotice gives: the element and
@@ -20,7 +23,9 @@ export function FileChangedNotice({ onReload }: FileChangedNoticeProps) {
     >
       <div className="flex items-center gap-2">
         <AlertTriangle className="h-4 w-4 shrink-0 text-warning" aria-hidden="true" />
-        <span>This file changed on disk. Reload to see the new version; saving now overwrites it.</span>
+        <span>
+          {children ?? 'This file changed on disk. Reload to see the new version; saving now overwrites it.'}
+        </span>
       </div>
       <Button type="button" variant="outline" size="sm" onClick={onReload}>
         Reload

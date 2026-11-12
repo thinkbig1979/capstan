@@ -47,6 +47,19 @@ export function useEnvHistory({ setEntries, setRawContent, setHasUnsavedChanges 
     setHistoryIndex(0)
   }, [])
 
+  /**
+   * Rewrites every snapshot in place, keeping the stack and the position. The
+   * unlock puts real values into rows that held the redacted blank, and an
+   * Undo or Redo that restored an old snapshot would bring the blank back
+   * (agent-os-vqf5).
+   */
+  const rebaseHistory = useCallback(
+    (fn: (snapshot: { entries: EnvEntryRow[]; raw: string }) => { entries: EnvEntryRow[]; raw: string }) => {
+      setHistory((prev) => prev.map(fn))
+    },
+    [],
+  )
+
   const handleUndo = useCallback(() => {
     if (historyIndex > 0) {
       const prev = history[historyIndex - 1]
@@ -99,5 +112,6 @@ export function useEnvHistory({ setEntries, setRawContent, setHasUnsavedChanges 
     handleUndo,
     handleRedo,
     resetHistory,
+    rebaseHistory,
   }
 }

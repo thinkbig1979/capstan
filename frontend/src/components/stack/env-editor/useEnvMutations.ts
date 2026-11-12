@@ -1,4 +1,4 @@
-import type { Dispatch, SetStateAction } from 'react'
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import { stacksApi } from '@/lib/api'
 import { useActionMutation } from '@/hooks/useActionMutation'
 import type { EnvEntryRow } from './types'
@@ -32,6 +32,20 @@ export function useEnvMutations({
   setShowEnvSection,
   resetHistory,
 }: UseEnvMutationsArgs) {
+  // What the editor held when Save was clicked. onResult closes over the render
+  // that clicked, so "does the editor still hold the saved text" needs the
+  // latest render's state, read through a ref (only ever inside the callback).
+  const latest = useRef({ entries, rawContent })
+  useEffect(() => {
+    latest.current = { entries, rawContent }
+  })
+  const snapshotRef = useRef<{ entries: EnvEntryRow[]; rawContent: string } | null>(null)
+  // What the last save sent, as state because EnvEditor reads it while
+  // rendering (isOwnSave). It is dropped once its refetch is consumed, or once
+  // the editor is clean again, so a later change that happens to equal an old
+  // save is not taken for that save (agent-os-3761).
+  const [sent, setSent] = useState<{ entries?: EnvEntryRow[]; raw?: string } | null>(null)
+
   const saveMutation = useActionMutation({
     mutationFn: async (body: { entries?: EnvEntryRow[]; raw?: string }) => {
       // _rowId is a client-only synthetic key for React row identity (see
@@ -46,15 +60,29 @@ export function useEnvMutations({
     },
     invalidate: [queryKeys.stack.detail(stackId)],
     successTitle: 'Environment variables saved',
-    onResult: (result) => {
+    onResult: (result, body) => {
       if (result.outcome === 'success' || result.outcome === 'no_change') {
-        setHasUnsavedChanges(false)
-        const body = saveMutation.variables
-        if (body) {
-          resetHistory(body.entries || entries, body.raw || rawContent)
+        // Clean only if neither the rows nor the raw text moved since Save was
+        // clicked (agent-os-3761). Typing that landed while the save was in
+        // flight is not on disk: the editor stays dirty, and the save's own
+        // refetch is then recognised through `sent` (EnvEditor.tsx).
+        const snapshot = snapshotRef.current
+        if (
+          snapshot &&
+          latest.current.entries === snapshot.entries &&
+          latest.current.rawContent === snapshot.rawContent
+        ) {
+          setHasUnsavedChanges(false)
+          setSent(null)
+          resetHistory(body.entries || snapshot.entries, body.raw || snapshot.rawContent)
         }
+      } else {
+        // failed / partial: the file is not what was sent, so a later payload
+        // that happens to equal it is not this save coming back.
+        setSent(null)
       }
     },
+    onError: () => setSent(null),
   })
 
   const createEnvMutation = useActionMutation<void>({
@@ -75,12 +103,16 @@ export function useEnvMutations({
   })
 
   const handleSaveTable = () => {
+    snapshotRef.current = { entries, rawContent }
+    setSent({ entries })
     saveMutation.mutate({ entries })
   }
 
   const handleSaveRaw = () => {
+    snapshotRef.current = { entries, rawContent }
+    setSent({ raw: rawContent })
     saveMutation.mutate({ raw: rawContent })
   }
 
-  return { saveMutation, createEnvMutation, handleSaveTable, handleSaveRaw }
+  return { saveMutation, createEnvMutation, handleSaveTable, handleSaveRaw, sent, clearSent: () => setSent(null) }
 }

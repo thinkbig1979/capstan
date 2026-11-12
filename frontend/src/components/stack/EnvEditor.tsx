@@ -20,6 +20,7 @@ import { classifyError } from '@/lib/error-handler'
 import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 import { FileChangedNotice } from '@/components/FileChangedNotice'
 import { useExternalFileChange } from '@/hooks/useExternalFileChange'
+import { fillRedactedBlanks } from '@/lib/env-unlock-rebase'
 import type { EnvEntryDraft, EnvFileResponse } from '@/types'
 
 interface EnvEditorProps {
@@ -37,11 +38,11 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   // The rows and raw text as last loaded. Table and raw are edited
   // independently, so this is what tells which of them the user changed.
-  const [loadedEnv, setLoadedEnv] = useState<{ rows: EnvEntryDraft[]; raw: string }>({ rows: [], raw: '' })
+  const [loadedEnv, setLoadedEnv] = useState<{ rows: EnvEntryRow[]; raw: string }>({ rows: [], raw: '' })
   const [showEnvSection, setShowEnvSection] = useState(false)
   const nextRowId = useNextRowId()
 
-  const { historyIndex, historyLength, pushToHistory, handleUndo, handleRedo, resetHistory } =
+  const { historyIndex, historyLength, pushToHistory, handleUndo, handleRedo, resetHistory, rebaseHistory } =
     useEnvHistory({ setEntries, setRawContent, setHasUnsavedChanges })
 
   // Re-masks sensitive-by-name entries when the unlock session ends (manual
@@ -81,7 +82,19 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
     queryFn: () => stacksApi.getEnv(stackId),
   })
 
+  const { saveMutation, createEnvMutation, handleSaveTable, handleSaveRaw, sent, clearSent } = useEnvMutations({
+    stackId,
+    entries,
+    rawContent,
+    setEntries,
+    setRawContent,
+    setHasUnsavedChanges,
+    setShowEnvSection,
+    resetHistory,
+  })
+
   const hydrate = (next: EnvFileResponse) => {
+    clearSent()
     if (next.hasEnvFile) {
       // A reveal is stored as `sensitive: false` on the row itself, so a refetch
       // would silently re-mask whatever the user had uncovered. That refetch is
@@ -110,17 +123,61 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
     }
   }
 
-  // Unsaved edits survive a new payload (agent-os-umig), except across a lock
-  // change or the file appearing or going away, which keep the plain hydrate:
-  // rows edited while locked hold blanked secrets (Save is only disabled,
-  // EnvTableView.tsx), and carrying them over an unlock would let a save write
-  // the blanks. The edits a lock change still discards are agent-os-vqf5.
+
+  // Unsaved edits survive a new payload (agent-os-umig), and a lock change
+  // too (agent-os-vqf5): a lock keeps them on screen (Save stays disabled while
+  // locked, EnvTableView.tsx), and an unlock puts the real value back into any
+  // row that only held the redacted blank, so a save can never write a blank
+  // over a secret. A file appearing or going away keeps the plain hydrate.
   const { changedOnDisk, reload } = useExternalFileChange(envData, {
     isDirty: hasUnsavedChanges,
     hydrate,
+    rebaseWhileDirty: (next, prev) => {
+      if (!next.hasEnvFile || !prev?.hasEnvFile) return false
+      if (Boolean(next.locked) === Boolean(prev.locked)) return false
+      // Locked: the payload is redacted and carries nothing to rebase onto.
+      if (next.locked) return true
+      const redacted = new Set(
+        prev.entries.filter((e) => prev.locked && e.sensitive && e.value === '').map((e) => e.key),
+      )
+      const fill = (rows: EnvEntryRow[]) =>
+        fillRedactedBlanks(rows, loadedEnv.rows, redacted, next.entries)
+      const baseRows = fill(loadedEnv.rows)
+      // A raw text the user did not touch (absent while locked) follows the file.
+      const nextRaw = next.raw ?? ''
+      const rawEdited = rawContent !== loadedEnv.raw
+      const baseRaw = rawEdited ? loadedEnv.raw : nextRaw
+      setEntries(fill(entries))
+      if (!rawEdited) setRawContent(nextRaw)
+      // Undo and Redo restore old snapshots, which still hold the blanks (and the
+      // empty locked raw): fill them too, or one keystroke brings a blank back.
+      rebaseHistory((snapshot) => ({
+        entries: fill(snapshot.entries),
+        raw: !rawEdited && snapshot.raw === loadedEnv.raw ? nextRaw : snapshot.raw,
+      }))
+      setLoadedEnv({ rows: baseRows, raw: baseRaw })
+      // Nothing else changed on disk since the baseline: the edits stay, no
+      // notice. Otherwise the standard rule below decides.
+      return sameEntries(next.entries, baseRows) && nextRaw === baseRaw
+    },
+    // The refetch after a save brings back what was sent. An editor that kept
+    // typing past that save stays dirty and takes it without a notice
+    // (agent-os-3761); the baseline moves to what was saved, so a later lock
+    // change compares against the file as it now is.
+    isOwnSave: (next) => {
+      if (!sent || !next.hasEnvFile) return false
+      return sent.entries ? sameEntries(next.entries, sent.entries) : next.raw === sent.raw
+    },
+    onOwnSave: (next) => {
+      const savedRaw = next.hasEnvFile ? next.raw : undefined
+      // The raw text the user never touched follows the file, as the baseline
+      // does; otherwise rawContent !== loadedEnv.raw would read as a raw edit.
+      if (savedRaw !== undefined && rawContent === loadedEnv.raw) setRawContent(savedRaw)
+      setLoadedEnv((prev) => ({ rows: sent?.entries ?? prev.rows, raw: savedRaw ?? prev.raw }))
+      clearSent()
+    },
     canHydrateWhileDirty: (next, prev) => {
       if (!next.hasEnvFile || !prev?.hasEnvFile) return true
-      if (Boolean(next.locked) !== Boolean(prev.locked)) return true
       // Every representation the user edited must already equal the new
       // file. Matching only one of them hydrates over edits in the other.
       const rawEdited = rawContent !== loadedEnv.raw
@@ -129,21 +186,14 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
     },
   })
 
-  const { saveMutation, createEnvMutation, handleSaveTable, handleSaveRaw } = useEnvMutations({
-    stackId,
-    entries,
-    rawContent,
-    setEntries,
-    setRawContent,
-    setHasUnsavedChanges,
-    setShowEnvSection,
-    resetHistory,
-  })
 
   // The backend redacted this payload: sensitive values arrived blank and there
   // is no raw file. Editing is therefore off the table until the unlock window
   // opens — saving would persist the blanks, and the backend 403s the write.
   const locked = envData?.hasEnvFile === true && envData.locked === true
+  // The Raw tab and its view go away while locked. Showing the table then keeps
+  // the edits the user kept visible, whichever view the lock found them in.
+  const activeView = locked ? 'table' : view
 
   // agent-os-wczm. The ISERROR guard is the one that was broken: this component
   // hydrates `entries`, `rawContent` and `hasUnsavedChanges` from the payload
@@ -194,7 +244,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   return (
     <div className="space-y-4">
       <EnvEditorToolbar
-        view={view}
+        view={activeView}
         onViewChange={setView}
         canUndo={historyIndex > 0}
         canRedo={historyIndex < historyLength - 1}
@@ -209,7 +259,12 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
         onUnlocked={handleUnlocked}
       />
 
-      {locked && <EnvLockedNotice onUnlock={() => handleUnlockDialogOpenChange(true)} />}
+      {locked && (
+        <EnvLockedNotice
+          onUnlock={() => handleUnlockDialogOpenChange(true)}
+          hasUnsavedEdits={hasUnsavedChanges}
+        />
+      )}
 
       {/* Above the editor, where EnvLockedNotice already puts "editing is
           constrained" messaging — both save controls (the table's and the raw
@@ -228,7 +283,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
       {changedOnDisk && <FileChangedNotice onReload={reload} />}
 
       <EnvTableView
-        visible={view === 'table'}
+        visible={activeView === 'table'}
         entries={entries}
         onEntryChange={handleEntryChange}
         onDeleteEntry={handleDeleteEntry}

@@ -3,6 +3,11 @@ import { Lock } from 'lucide-react'
 
 interface EnvLockedNoticeProps {
   onUnlock: () => void
+  /**
+   * The editor kept unsaved edits across a lock (agent-os-vqf5). They are still
+   * on screen but cannot be saved until the password is entered again.
+   */
+  hasUnsavedEdits?: boolean
 }
 
 /**
@@ -10,14 +15,20 @@ interface EnvLockedNoticeProps {
  * re-entered its password. It says editing is unavailable rather than letting the
  * user type into a form whose save the backend will refuse (agent-os-7o5s).
  */
-export function EnvLockedNotice({ onUnlock }: EnvLockedNoticeProps) {
+export function EnvLockedNotice({ onUnlock, hasUnsavedEdits = false }: EnvLockedNoticeProps) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm">
+    <div
+      // role="alert" only when it reports something that just happened to the
+      // user's edits, for the reason FileChangedNotice gives.
+      role={hasUnsavedEdits ? 'alert' : undefined}
+      className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm"
+    >
       <div className="flex items-center gap-2">
         <Lock className="h-4 w-4 shrink-0 text-warning" />
         <span>
-          Values that look like secrets are hidden and editing is disabled. Enter your password
-          to reveal and edit them.
+          {hasUnsavedEdits
+            ? 'Values locked again; unlock to save your edits.'
+            : 'Values that look like secrets are hidden and editing is disabled. Enter your password to reveal and edit them.'}
         </span>
       </div>
       <Button type="button" variant="outline" size="sm" onClick={onUnlock}>

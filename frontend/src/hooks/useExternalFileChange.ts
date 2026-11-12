@@ -12,6 +12,19 @@ interface UseExternalFileChangeOptions<T> {
   canHydrateWhileDirty?: (next: T, prev: T | undefined) => boolean
   /** True when `next` is the editor's own last save coming back. */
   isOwnSave?: (next: T) => boolean
+  /**
+   * Called once when `isOwnSave` matched, so the caller can drop what it
+   * remembered about the save and move its baseline. It may set state: it runs
+   * during render, like `hydrate`.
+   */
+  onOwnSave?: (next: T) => void
+  /**
+   * Called first for a dirty editor. True when the caller kept the edits and
+   * moved its own baseline to `next`, so there is nothing to hydrate and no
+   * notice to raise (a lock change, agent-os-vqf5). It may set state: it runs
+   * during render, like `hydrate`.
+   */
+  rebaseWhileDirty?: (next: T, prev: T | undefined) => boolean
 }
 
 /**
@@ -28,7 +41,7 @@ interface UseExternalFileChangeOptions<T> {
  */
 export function useExternalFileChange<T>(
   data: T | undefined,
-  { isDirty, hydrate, canHydrateWhileDirty, isOwnSave }: UseExternalFileChangeOptions<T>,
+  { isDirty, hydrate, canHydrateWhileDirty, isOwnSave, onOwnSave, rebaseWhileDirty }: UseExternalFileChangeOptions<T>,
 ) {
   const [prevData, setPrevData] = useState<T | undefined>(undefined)
   const [pending, setPending] = useState<{ value: T } | null>(null)
@@ -36,11 +49,19 @@ export function useExternalFileChange<T>(
   if (data !== prevData) {
     setPrevData(data)
     if (data !== undefined) {
-      if (!isDirty || canHydrateWhileDirty?.(data, prevData)) {
+      if (!isDirty) {
+        setPending(null)
+        hydrate(data)
+      } else if (rebaseWhileDirty?.(data, prevData)) {
+        // Newer data supersedes a held one: a pending value from before a lock
+        // would load plaintext the lock just dropped.
+        setPending(null)
+      } else if (canHydrateWhileDirty?.(data, prevData)) {
         setPending(null)
         hydrate(data)
       } else if (isOwnSave?.(data)) {
         setPending(null)
+        onOwnSave?.(data)
       } else {
         // A second change while the notice is up replaces the first, so
         // Reload always loads the newest version.

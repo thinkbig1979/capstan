@@ -1,9 +1,9 @@
 /**
  * agent-os-umig, env half: a git pull rewrites the .env file on disk. A clean
  * env editor shows the pulled values; one with unsaved edits keeps them and
- * offers Reload. A lock-state change keeps the plain reload (agent-os-vqf5
- * owns the edits that still discards). Table mode only: the raw view is
- * hydrated by the same block in EnvEditor.tsx.
+ * offers Reload. A lock-state change keeps the edits too (agent-os-vqf5, see
+ * EnvEditor.vqf5.test.tsx). Table mode only: the raw view is hydrated by the
+ * same block in EnvEditor.tsx.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { screen, waitFor, fireEvent } from '@testing-library/react'
@@ -242,14 +242,17 @@ describe('EnvEditor after a git pull (agent-os-umig)', () => {
     expect(portInput().value).toBe('7070')
   })
 
-  it('a lock-state change keeps the plain reload (no notice; agent-os-vqf5)', async () => {
+  it('a lock-state change keeps the unsaved edits and says so (no changed-on-disk notice; agent-os-vqf5)', async () => {
     renderEditor()
     await loaded()
     edit('9090')
 
     await pullTo(envFile('7070', { locked: true, raw: undefined }))
 
-    await waitFor(() => expect(portInput().value).toBe('7070'))
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('Unlock')
     expect(screen.queryByText(NOTICE)).not.toBeInTheDocument()
+    expect(portInput().value).toBe('9090')
+    expect(screen.getByText('Save')).toBeDisabled()
   })
 })
