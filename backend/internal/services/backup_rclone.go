@@ -102,7 +102,7 @@ func (m *RcloneManager) TestConnectivity(ctx context.Context, remote string) err
 	args := []string{"lsd", "--max-depth", "1", "--", remote + ":"}
 
 	if err := runDrained(ctx, m.runner, "rclone", args, nil); err != nil {
-		return fmt.Errorf("cannot connect to remote %q: %w", remote, timeoutError(ctx, err, "rclone lsd"))
+		return fmt.Errorf("cannot connect to remote %q: %w", RedactRcloneRemote(remote), timeoutError(ctx, err, "rclone lsd"))
 	}
 	return nil
 }
@@ -219,7 +219,7 @@ func (m *RcloneManager) syncPreflight(ctx context.Context, repoPath, remote, pat
 		if isExitCode(err, 3) {
 			return pf, nil
 		}
-		return SyncPreflight{}, fmt.Errorf("could not list %s to count the files a sync would delete: %w", target, timeoutError(ctx, err, "rclone lsf"))
+		return SyncPreflight{}, fmt.Errorf("could not list %s to count the files a sync would delete: %w", rcloneTargetForDisplay(remote, path), timeoutError(ctx, err, "rclone lsf"))
 	}
 	for _, key := range strings.Split(string(raw), "\n") {
 		if key == "" {
@@ -296,7 +296,7 @@ func (m *RcloneManager) Sync(ctx context.Context, repoPath, remote, path string,
 	}
 
 	destination := fmt.Sprintf("%s:%s", remote, path)
-	m.logger.Info("Starting rclone sync", "source", RedactURLUserinfo(repoPath), "destination", destination, "transfers", transfers, "remote_only", pf.RemoteOnly, "max_delete", limit)
+	m.logger.Info("Starting rclone sync", "source", RedactURLUserinfo(repoPath), "destination", rcloneTargetForDisplay(remote, path), "transfers", transfers, "remote_only", pf.RemoteOnly, "max_delete", limit)
 
 	args := append([]string{"sync"}, syncOptions(transfers)...)
 	args = append(args, "--max-delete", strconv.Itoa(limit))
@@ -308,9 +308,12 @@ func (m *RcloneManager) Sync(ctx context.Context, repoPath, remote, path string,
 	defer cancel()
 
 	var lastErr error
+	// rclone echoes a connection-string remote in its own output; the
+	// scrubbing runner masks it before the stream and run log (agent-os-qnso).
+	runner := scrubRcloneRunner(m.runner, remote)
 	for attempt := 1; attempt <= retries; attempt++ {
 		m.logger.Info("Sync attempt", "attempt", attempt, "of", retries)
-		if err := m.runner.Run(ctx, "rclone", args, nil, out); err != nil {
+		if err := runner.Run(ctx, "rclone", args, nil, out); err != nil {
 			if commandTimedOut(ctx) {
 				return timeoutError(ctx, err, "rclone sync")
 			}
@@ -421,10 +424,10 @@ func (m *RcloneManager) probeRestoreSource(ctx context.Context, remote, path str
 
 	raw, err := m.runner.Output(ctx, "rclone", []string{"lsf", "--", target}, nil)
 	if err != nil {
-		return fmt.Errorf("refusing DR restore: %s does not look like a restic repository (no config object found): %w", target, timeoutError(ctx, err, "rclone lsf"))
+		return fmt.Errorf("refusing DR restore: %s does not look like a restic repository (no config object found): %w", rcloneTargetForDisplay(remote, configPath), timeoutError(ctx, err, "rclone lsf"))
 	}
 	if got := strings.TrimSpace(string(raw)); got != "config" {
-		return fmt.Errorf("refusing DR restore: %s does not look like a restic repository (expected to list exactly \"config\", got %q)", target, got)
+		return fmt.Errorf("refusing DR restore: %s does not look like a restic repository (expected to list exactly \"config\", got %q)", rcloneTargetForDisplay(remote, configPath), got)
 	}
 	return nil
 }
@@ -496,7 +499,7 @@ func (m *RcloneManager) remoteHasSnapshots(ctx context.Context, remote, path str
 			// failure to refuse on.
 			return false, nil
 		}
-		return false, fmt.Errorf("could not list %s to check for existing snapshots: %w", target, timeoutError(ctx, err, "rclone lsf"))
+		return false, fmt.Errorf("could not list %s to check for existing snapshots: %w", rcloneTargetForDisplay(remote, snapshotsPath), timeoutError(ctx, err, "rclone lsf"))
 	}
 	return len(strings.TrimSpace(string(raw))) > 0, nil
 }
@@ -579,7 +582,7 @@ func (m *RcloneManager) RestoreRepo(ctx context.Context, remote, path, localPath
 	}
 
 	source := fmt.Sprintf("%s:%s", remote, path)
-	m.logger.Info("Starting rclone restore", "source", source, "destination", RedactURLUserinfo(localPath))
+	m.logger.Info("Starting rclone restore", "source", rcloneTargetForDisplay(remote, path), "destination", RedactURLUserinfo(localPath))
 
 	args := append([]string{"sync"}, syncOptions(transfers)...)
 	if backupDir != "" {
@@ -592,9 +595,12 @@ func (m *RcloneManager) RestoreRepo(ctx context.Context, remote, path, localPath
 	defer cancel()
 
 	var lastErr error
+	// rclone echoes a connection-string remote in its own output; the
+	// scrubbing runner masks it before the stream and run log (agent-os-qnso).
+	runner := scrubRcloneRunner(m.runner, remote)
 	for attempt := 1; attempt <= retries; attempt++ {
 		m.logger.Info("Restore attempt", "attempt", attempt, "of", retries)
-		if err := m.runner.Run(ctx, "rclone", args, nil, out); err != nil {
+		if err := runner.Run(ctx, "rclone", args, nil, out); err != nil {
 			if commandTimedOut(ctx) {
 				return timeoutError(ctx, err, "rclone sync")
 			}

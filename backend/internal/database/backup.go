@@ -1,6 +1,8 @@
 package database
 
 import (
+	"database/sql"
+	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
@@ -354,10 +356,19 @@ func (d *DB) SweepInterruptedBackupRuns() (int, error) {
 // --- Backup Run Items ---
 
 func (d *DB) AddBackupRunItem(item *models.BackupRunItem) error {
-	query := `INSERT INTO backup_run_items (id, run_id, stack_id, status, snapshot_id, stop_applied, duration_ms, error_message)
-	          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+	query := `INSERT INTO backup_run_items (id, run_id, stack_id, status, snapshot_id, stop_applied, duration_ms, error_message,
+	                                        unreadable_count, unreadable_paths, partial_marked)
+	          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	var paths any // NULL when none were stored
+	if len(item.UnreadablePaths) > 0 {
+		raw, err := json.Marshal(item.UnreadablePaths)
+		if err != nil {
+			return fmt.Errorf("encode unreadable paths: %w", err)
+		}
+		paths = string(raw)
+	}
 	_, err := d.db.Exec(query, item.ID, item.RunID, item.StackID, item.Status, item.SnapshotID,
-		item.StopApplied, item.DurationMs, item.ErrorMessage)
+		item.StopApplied, item.DurationMs, item.ErrorMessage, item.UnreadableCount, paths, item.PartialMarked)
 	return err
 }
 
@@ -368,15 +379,33 @@ func (d *DB) AddBackupRunItem(item *models.BackupRunItem) error {
 // status and error_message columns.
 const backupRunItemColumns = `backup_run_items.id, backup_run_items.run_id, backup_run_items.stack_id, ` +
 	`backup_run_items.status, COALESCE(backup_run_items.snapshot_id, ''), backup_run_items.stop_applied, ` +
-	`COALESCE(backup_run_items.duration_ms, 0), COALESCE(backup_run_items.error_message, '')`
+	`COALESCE(backup_run_items.duration_ms, 0), COALESCE(backup_run_items.error_message, ''), ` +
+	`backup_run_items.unreadable_count, backup_run_items.unreadable_paths, backup_run_items.partial_marked`
 
 // scanBackupRunItem reads one row selected with backupRunItemColumns, from
 // *sql.Row or *sql.Rows.
 func scanBackupRunItem(row interface{ Scan(dest ...any) error }) (models.BackupRunItem, error) {
-	var item models.BackupRunItem
-	err := row.Scan(&item.ID, &item.RunID, &item.StackID, &item.Status, &item.SnapshotID,
-		&item.StopApplied, &item.DurationMs, &item.ErrorMessage)
-	return item, err
+	var (
+		item  models.BackupRunItem
+		count sql.NullInt64
+		paths sql.NullString
+	)
+	if err := row.Scan(&item.ID, &item.RunID, &item.StackID, &item.Status, &item.SnapshotID,
+		&item.StopApplied, &item.DurationMs, &item.ErrorMessage, &count, &paths, &item.PartialMarked); err != nil {
+		return item, err
+	}
+	if count.Valid {
+		n := int(count.Int64)
+		item.UnreadableCount = &n
+	}
+	if paths.Valid && paths.String != "" {
+		// Refused, not dropped: restore reads these to keep --delete off
+		// files the snapshot lacks, and an empty list there means "none".
+		if err := json.Unmarshal([]byte(paths.String), &item.UnreadablePaths); err != nil {
+			return item, fmt.Errorf("decode unreadable paths of backup item %s: %w", item.ID, err)
+		}
+	}
+	return item, nil
 }
 
 func (d *DB) GetBackupRunItems(runID string) ([]models.BackupRunItem, error) {
@@ -399,6 +428,101 @@ func (d *DB) GetBackupRunItems(runID string) ([]models.BackupRunItem, error) {
 		return nil, fmt.Errorf("reading backup run items: %w", err)
 	}
 	return items, nil
+}
+
+// GetPartialSnapshotIDs returns the snapshot ids of the stack's successful
+// backup items that recorded a partial snapshot (agent-os-95dk). They mark
+// partial snapshots written before PartialSnapshotTag existed; history
+// pruning removes them with their runs.
+func (d *DB) GetPartialSnapshotIDs(stackID string) ([]string, error) {
+	rows, err := d.db.Query(`SELECT snapshot_id FROM backup_run_items
+	          WHERE stack_id = ? AND status = 'success'
+	            AND COALESCE(snapshot_id, '') <> '' AND unreadable_count IS NOT NULL`, stackID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading partial snapshot ids: %w", err)
+	}
+	return ids, nil
+}
+
+// GetUnmarkedPartialItems returns up to limit of the stack's successful
+// partial items whose snapshot may still be untagged in the repository
+// (partial_marked 0), oldest run first (agent-os-95dk heal pass).
+func (d *DB) GetUnmarkedPartialItems(stackID string, limit int) ([]models.BackupRunItem, error) {
+	rows, err := d.db.Query(`SELECT `+backupRunItemColumns+`
+	          FROM backup_run_items
+	          JOIN backup_runs br ON br.id = backup_run_items.run_id
+	          WHERE backup_run_items.stack_id = ? AND backup_run_items.status = 'success'
+	            AND COALESCE(backup_run_items.snapshot_id, '') <> ''
+	            AND backup_run_items.unreadable_count IS NOT NULL
+	            AND backup_run_items.partial_marked = 0
+	          ORDER BY br.started_at, backup_run_items.rowid
+	          LIMIT ?`, stackID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []models.BackupRunItem
+	for rows.Next() {
+		item, err := scanBackupRunItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading unmarked partial items: %w", err)
+	}
+	return items, nil
+}
+
+// MarkPartialItem records that item itemID's partial snapshot is settled in
+// the repository, under snapshotID (its id after tagging, or its last known
+// id when it is gone).
+func (d *DB) MarkPartialItem(itemID, snapshotID string) error {
+	res, err := d.db.Exec(`UPDATE backup_run_items SET snapshot_id = ?, partial_marked = 1 WHERE id = ?`, snapshotID, itemID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("count marked partial items: %w", err)
+	}
+	if n != 1 {
+		return fmt.Errorf("mark partial item %s: %d rows matched", itemID, n)
+	}
+	return nil
+}
+
+// GetRunItemForSnapshot returns the stack's newest successful backup item
+// that recorded snapshotID, matched as the stored short id or a prefix of a
+// full one (agent-os-fmeu). ErrNotFound-shaped when no item recorded it.
+func (d *DB) GetRunItemForSnapshot(stackID, snapshotID string) (*models.BackupRunItem, error) {
+	query := `SELECT ` + backupRunItemColumns + `
+	          FROM backup_run_items
+	          JOIN backup_runs br ON br.id = backup_run_items.run_id
+	          WHERE backup_run_items.stack_id = ?
+	            AND backup_run_items.status = 'success'
+	            AND COALESCE(backup_run_items.snapshot_id, '') <> ''
+	            AND (backup_run_items.snapshot_id = ? OR substr(?, 1, length(backup_run_items.snapshot_id)) = backup_run_items.snapshot_id)
+	          ORDER BY br.started_at DESC, backup_run_items.rowid DESC
+	          LIMIT 1`
+	item, err := scanBackupRunItem(d.db.QueryRow(query, stackID, snapshotID, snapshotID))
+	if err != nil {
+		return nil, notFound(err, "backup item for snapshot", snapshotID)
+	}
+	return &item, nil
 }
 
 func (d *DB) GetLatestRunItemForStack(stackID string) (*models.BackupRunItem, error) {

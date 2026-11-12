@@ -28,6 +28,14 @@ export interface Draft {
   syncAfterBackup: boolean
   verifyWeekly: boolean
   rcloneRemote: string
+  /**
+   * Display-only, like serverTimezone: the remote as the server sent it and
+   * whether its keys were masked (agent-os-qnso). CloudSection shows the
+   * "stored, hidden" hint while the field still holds that value. Never edited,
+   * and buildPayload never emits them.
+   */
+  savedRcloneRemote: string
+  rcloneRemoteHasCredential: boolean
   rclonePath: string
   rcloneTransfers: number | null
 }

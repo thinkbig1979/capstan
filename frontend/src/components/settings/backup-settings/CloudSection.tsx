@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { KeyRound } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { NumericField } from '../NumericField'
@@ -72,6 +73,11 @@ export function CloudSection({
   const syncBlocked = syncBlockedReason(rcloneAvailable, draft.rcloneRemote, isDirty)
   const restoreBlocked = restoreBlockedReason(rcloneAvailable, isDirty, backupRunning)
   const [restoreOpen, setRestoreOpen] = useState(false)
+  // Gated on the field still holding the value the server sent: once the
+  // operator types a new remote, the masked keys are no longer in it
+  // (agent-os-qnso, as RepositorySection does for the repository).
+  const showCredentialHint =
+    draft.rcloneRemoteHasCredential && draft.rcloneRemote === draft.savedRcloneRemote
   return (
     <div className="space-y-4 pt-4 border-t">
       <div className="flex items-center gap-1.5">
@@ -99,10 +105,28 @@ export function CloudSection({
           value={draft.rcloneRemote}
           onChange={(e) => onChange('rcloneRemote', e.target.value)}
           className="max-w-md"
+          aria-describedby={
+            showCredentialHint
+              ? 'backup-rclone-remote-credential-hint backup-rclone-remote-hint'
+              : 'backup-rclone-remote-hint'
+          }
         />
-        <p className="text-xs text-muted-foreground">
+        <p id="backup-rclone-remote-hint" className="text-xs text-muted-foreground">
           Name of the rclone remote as configured in your rclone config.
         </p>
+        {showCredentialHint && (
+          <p
+            id="backup-rclone-remote-credential-hint"
+            className="flex items-start gap-1.5 text-xs text-warning"
+          >
+            <KeyRound className="h-3.5 w-3.5 mt-0.5 shrink-0" aria-hidden="true" />
+            <span>
+              The keys in this remote are stored, hidden: they are shown here as <code>***</code>.
+              To change any part of it, re-enter the full remote including its keys. Saving while{' '}
+              <code>***</code> is still in the field is rejected, so the stored keys stay intact.
+            </span>
+          </p>
+        )}
       </div>
 
       <div className="space-y-2">

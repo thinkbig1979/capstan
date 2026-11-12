@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
@@ -107,6 +108,8 @@ const (
 	// is running or was killed. The network and the credential are fine. The
 	// probe runs outside the global backup lock, so it never unlocks; the next
 	// backup, retention, check or restore clears a stale lock (runLocking).
+	// Since agent-os-avat the probe runs with --no-lock and cannot exit 11,
+	// so CheckRepository no longer produces this state; it stays defined.
 	RepoStateLocked RepoState = "locked"
 )
 
@@ -194,6 +197,13 @@ type BackupService struct {
 
 	// busy is 1 while a global operation (backup/sync/restore/dr) is running.
 	busy atomic.Int32
+
+	// lastRepoProbe and lastRepoSize hold the last answers of the status
+	// probes (CheckRepository's restic probe, RepoSizeBytes). While busy, the
+	// status poll is answered from them rather than reading a repository a
+	// forget or prune is rewriting (agent-os-avat).
+	lastRepoProbe atomic.Pointer[BackupAvailability]
+	lastRepoSize  atomic.Pointer[int64]
 
 	// schedulerActive tracks whether the periodic backup scheduler is currently
 	// started. It reflects StartScheduler/StopScheduler rather than the busy flag
@@ -603,6 +613,10 @@ func (s *BackupService) RepoSizeBytes(ctx context.Context) *int64 {
 	if err != nil {
 		return nil
 	}
+	if cached := s.lastRepoSize.Load(); cached != nil && s.IsBusy() {
+		size := *cached
+		return &size
+	}
 	restic := s.newResticMgr(bc)
 
 	size, err := restic.Stats(ctx)
@@ -610,6 +624,8 @@ func (s *BackupService) RepoSizeBytes(ctx context.Context) *int64 {
 		s.logger.Debug("RepoSizeBytes: stats failed", "error", err)
 		return nil
 	}
+	stored := size
+	s.lastRepoSize.Store(&stored)
 	return &size
 }
 
@@ -722,6 +738,21 @@ func (s *BackupService) CheckRepository(ctx context.Context) BackupAvailability 
 		return av
 	}
 
+	// Busy: a global operation holds the repository, and a forget or prune
+	// may be rewriting its index, so a --no-lock read could see it half done
+	// and report a fault that is not there. Answer from the last probe; with
+	// none on record, probe anyway (agent-os-avat).
+	if cached := s.lastRepoProbe.Load(); cached != nil && s.IsBusy() {
+		return *cached
+	}
+	av = s.probeRepository(ctx, bc, av)
+	s.lastRepoProbe.Store(&av)
+	return av
+}
+
+// probeRepository runs CheckRepository's restic probe and classifies its
+// answer into av.
+func (s *BackupService) probeRepository(ctx context.Context, bc BackupConfig, av BackupAvailability) BackupAvailability {
 	restic := s.newResticMgr(bc)
 	if err := restic.CheckRepository(ctx); err != nil {
 		av.RepoReachable = false
@@ -762,7 +793,9 @@ func (s *BackupService) CheckRepository(ctx context.Context) BackupAvailability 
 		// Exit 11 is "repository is already locked": the repository answered,
 		// so unreachable's hint (check the network, the mount) is wrong.
 		// No unlock here: this runs outside the global backup lock
-		// (agent-os-zg60).
+		// (agent-os-zg60). Unreachable from the real probe since it runs
+		// with --no-lock (agent-os-avat); kept so the state, and its wire
+		// value, stay defined if a lock probe is added back.
 		if isExitCode(err, resticExitRepoLocked) {
 			av.RepoState = RepoStateLocked
 			av.Message = "the repository is locked by another restic operation; if none is running, the lock is stale and the next backup clears it"
@@ -949,8 +982,8 @@ func (s *BackupService) executeBackupRun(
 			notStarted = append(notStarted, stackID)
 			// recordItem and finaliseRun write through the database handle and
 			// take no context, so this write cannot fail on the dead one.
-			s.recordItem(run.ID, stackID, "skipped", "", false, 0,
-				fmt.Sprintf("not started: the run's context ended (%v)", ctxErr))
+			s.recordItem(run.ID, stackID, runItemOutcome{status: "skipped",
+				message: fmt.Sprintf("not started: the run's context ended (%v)", ctxErr)})
 			stream(out, "info", fmt.Sprintf("stack %s not started: the run's context ended (%v)", stackID, ctxErr))
 			continue
 		}
@@ -1343,6 +1376,11 @@ func (s *BackupService) backupStack(
 		snapshotID  string
 		stopApplied bool
 		notes       []string
+		// unreadable is set for a partial snapshot (agent-os-95dk): the item
+		// records it, so later retention and restores can tell it apart.
+		unreadable *ResticBackupSummary
+		// marked is set once that snapshot carries PartialSnapshotTag.
+		marked bool
 	)
 	defer func() {
 		status := "success"
@@ -1350,8 +1388,15 @@ func (s *BackupService) backupStack(
 			status = "failed"
 			notes = append([]string{retErr.Error()}, notes...)
 		}
-		s.recordItem(runID, stackID, status, snapshotID, stopApplied, time.Since(startedAt),
-			strings.Join(notes, "; "))
+		item := runItemOutcome{status: status, snapshotID: snapshotID, stopApplied: stopApplied,
+			duration: time.Since(startedAt), message: strings.Join(notes, "; ")}
+		if unreadable != nil && status == "success" {
+			n := unreadable.UnreadableCount
+			item.unreadableCount = &n
+			item.unreadablePaths = unreadable.Unreadable
+			item.partialMarked = marked
+		}
+		s.recordItem(runID, stackID, item)
 	}()
 	// warn reports a non-fatal problem live and keeps it for the run item.
 	warn := func(msg string) {
@@ -1438,9 +1483,14 @@ func (s *BackupService) backupStack(
 		// it is verified and retained like a complete one (agent-os-sufn).
 		res.partial = true
 		res.unreadable = summary.UnreadableCount
+		unreadable = summary
 		warn(unreadableNote(summary))
+		// The log names at most maxUnreadableListed paths, as the note does;
+		// summary.Unreadable holds up to maxUnreadableStored for the item.
+		listed := summary.Unreadable[:min(len(summary.Unreadable), maxUnreadableListed)]
 		s.logger.Warn("backup snapshot saved without unreadable files",
-			"stack", stackID, "count", summary.UnreadableCount, "listed", summary.Unreadable)
+			"stack", stackID, "count", summary.UnreadableCount, "listed", listed,
+			"not_listed", summary.UnreadableCount-len(listed))
 	}
 	if summary != nil {
 		res.bytesAdded = summary.BytesAdded
@@ -1464,21 +1514,38 @@ func (s *BackupService) backupStack(
 		}
 	}
 
-	// Apply retention policy, for a partial snapshot too: skipping it is what
-	// let a stack with one permanently unreadable file grow its repository
-	// forever (agent-os-sufn). restic's keep-* policy keeps the latest
-	// snapshot per daily/weekly/monthly/yearly bucket and cannot tell a
-	// partial snapshot from a complete one (marking it needs `restic tag`,
-	// which rewrites it under a new id). Two costs follow. A later partial
-	// snapshot replaces an earlier complete one in the same bucket. And if
-	// the unreadable set GROWS (a permission change, a failing disk), every
-	// bucket fills with partial snapshots while each run reads "partial" as
-	// before, so the newest complete snapshot ages out: after the keep-daily
-	// days, then the keep-weekly weeks, then the keep-monthly months. No
-	// guard exists for that yet; see the follow-up bead.
-	if retentionErr := restic.ApplyRetention(ctx, stackID, out); retentionErr != nil {
-		warn(fmt.Sprintf("retention warning: %v", retentionErr))
-		res.retentionFailed = true
+	// A partial snapshot is marked in the repository itself, so retention
+	// and restore can tell it from a complete one whatever the run history
+	// still holds (agent-os-95dk review MUST-1). The tag rewrites its id; the
+	// item records the new one. Marking failed: retention is skipped for this
+	// stack tonight, because without the mark it would read this partial
+	// snapshot as the newest complete one.
+	if res.partial {
+		newID, tagErr := restic.TagPartial(ctx, stackID, summary.SnapshotID, out)
+		if tagErr != nil {
+			warn(fmt.Sprintf("retention skipped: snapshot %s could not be marked %s, so retention could not tell it from a complete one: %v",
+				snapshotID, PartialSnapshotTag, tagErr))
+			res.retentionFailed = true
+		} else {
+			stream(out, "info", fmt.Sprintf("[%s] marked snapshot %s %s; its id is now %s", stackID, snapshotID, PartialSnapshotTag, shortSnapshotID(newID)))
+			snapshotID = shortSnapshotID(newID)
+			marked = true
+			if s.healOrSkipRetention(ctx, restic, stackID, newID, true, warn, &res, out) {
+				s.applyStackRetention(ctx, restic, stackID, newID, warn, &res, out)
+			}
+		}
+	} else {
+		currentID := ""
+		if summary != nil {
+			currentID = summary.SnapshotID
+		}
+		s.healOrSkipRetention(ctx, restic, stackID, currentID, false, warn, &res, out)
+		// Apply retention policy, for a partial snapshot too: skipping it is
+		// what let a stack with one permanently unreadable file grow its
+		// repository forever (agent-os-sufn). After a complete backup the
+		// newest snapshot is complete and every keep-* n >= 1 keeps it, so
+		// the plain policy is safe.
+		s.applyStackRetention(ctx, restic, stackID, "", warn, &res, out)
 	}
 
 	if res.partial {
@@ -1492,6 +1559,146 @@ func (s *BackupService) backupStack(
 	return res, nil
 }
 
+// healPartialMarksPerRun caps how many earlier partial snapshots one backup
+// of a stack tags, so a backlog heals over several runs instead of holding
+// the global lock for one long one.
+const healPartialMarksPerRun = 20
+
+// healOrSkipRetention runs healPartialMarks for the run that wrote
+// currentID and reports whether retention may run. A fault skips retention
+// after a PARTIAL backup, where retention must tell partial from complete. After
+// a complete backup it does not: the newest snapshot is complete and the plain
+// policy keeps it (review SH3); the fault is still reported and the unmarked
+// items wait for the next run.
+func (s *BackupService) healOrSkipRetention(ctx context.Context, restic *ResticManager, stackID, currentID string, partial bool, warn func(string), res *stackResult, out chan<- StreamLine) bool {
+	err := s.healPartialMarks(ctx, restic, stackID, currentID, out)
+	if err == nil {
+		return true
+	}
+	if !partial {
+		warn(fmt.Sprintf("earlier partial snapshots could not be marked %s; retried next run: %v", PartialSnapshotTag, err))
+		return true
+	}
+	warn(fmt.Sprintf("retention skipped: earlier partial snapshots could not be marked %s: %v", PartialSnapshotTag, err))
+	res.retentionFailed = true
+	return false
+}
+
+// healPartialMarks tags the stack's earlier partial snapshots that run items
+// record but the repository does not mark (agent-os-95dk review MUST-D1):
+// partials written before PartialSnapshotTag existed, and nights whose
+// TagPartial failed. Once history pruning deletes their items they would read
+// as complete, so they are marked while the items still exist. At most
+// healPartialMarksPerRun per run.
+//
+// Per item, against one listing of the stack's snapshots:
+//   - the snapshot carries the tag: the item is marked settled;
+//   - it does not: it is tagged and the item records its new id;
+//   - it is gone, but a tagged snapshot records it as "original" (restic tag
+//     rewrote it and TagPartial's lookup then failed, review SD1): the item
+//     records that snapshot's id;
+//   - it is gone with no such snapshot (forgotten): logged and settled.
+//
+// With nothing recorded unmarked, it makes no restic call at all.
+//
+// "Gone" is only believed from a listing that is shown to be complete: it
+// must contain currentID, the snapshot this run just wrote. An empty, null or
+// partial listing fails closed and marks nothing (review SH1), because
+// settling an item as gone without tagging it is exactly the MUST-D1 hole.
+func (s *BackupService) healPartialMarks(ctx context.Context, restic *ResticManager, stackID, currentID string, out chan<- StreamLine) error {
+	items, err := s.db.GetUnmarkedPartialItems(stackID, healPartialMarksPerRun)
+	if err != nil {
+		return fmt.Errorf("read partial snapshots still to mark: %w", err)
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	snaps, err := restic.ListForPartialMarks(ctx, stackID)
+	if err != nil {
+		return err
+	}
+	if currentID == "" || !slices.ContainsFunc(snaps, func(snap resticSnapshot) bool { return snapshotIDMatches(snap, currentID) }) {
+		return fmt.Errorf("the snapshot listing (%d snapshots) does not include snapshot %s, which this run wrote, so it cannot show which earlier snapshots are gone", len(snaps), shortSnapshotID(currentID))
+	}
+	for _, item := range items {
+		id := item.SnapshotID
+		var direct, rewritten *resticSnapshot
+		for i := range snaps {
+			snap := &snaps[i]
+			if snapshotIDMatches(*snap, id) {
+				direct = snap
+			}
+			if snap.Original != "" && strings.HasPrefix(snap.Original, id) && slices.Contains(snap.Tags, PartialSnapshotTag) {
+				rewritten = snap
+			}
+		}
+		settledAs := id
+		switch {
+		case direct != nil && slices.Contains(direct.Tags, PartialSnapshotTag):
+		case direct != nil:
+			newID, tagErr := restic.TagPartial(ctx, stackID, direct.ID, out)
+			if tagErr != nil {
+				return fmt.Errorf("mark earlier partial snapshot %s: %w", id, tagErr)
+			}
+			settledAs = shortSnapshotID(newID)
+			stream(out, "info", fmt.Sprintf("[%s] marked earlier partial snapshot %s %s; its id is now %s", stackID, id, PartialSnapshotTag, settledAs))
+		case rewritten != nil:
+			settledAs = shortSnapshotID(rewritten.ID)
+			stream(out, "info", fmt.Sprintf("[%s] earlier partial snapshot %s is marked %s under id %s; its record now says so", stackID, id, PartialSnapshotTag, settledAs))
+		default:
+			s.logger.Info("earlier partial snapshot is no longer in the repository; nothing to mark", "stack", stackID, "snapshot", id)
+		}
+		if err := s.db.MarkPartialItem(item.ID, settledAs); err != nil {
+			return fmt.Errorf("record the mark of partial snapshot %s: %w", id, err)
+		}
+	}
+	return nil
+}
+
+// applyStackRetention runs the stack's retention after its backup.
+// partialID is the id of the partial snapshot this backup wrote, or "" after
+// a complete one. After a partial snapshot it never forgets the stack's newest
+// complete snapshot (agent-os-95dk), read from the repository's
+// PartialSnapshotTag marks plus, for snapshots written before the mark
+// existed, the run items that recorded them partial. Fails closed: when those
+// items cannot be read, or the repository's answer cannot be trusted,
+// retention is skipped and the run says so.
+func (s *BackupService) applyStackRetention(
+	ctx context.Context,
+	restic *ResticManager,
+	stackID string,
+	partialID string,
+	warn func(string),
+	res *stackResult,
+	out chan<- StreamLine,
+) {
+	if partialID == "" {
+		if err := restic.ApplyRetention(ctx, stackID, out); err != nil {
+			warn(fmt.Sprintf("retention warning: %v", err))
+			res.retentionFailed = true
+		}
+		return
+	}
+	recorded, err := s.db.GetPartialSnapshotIDs(stackID)
+	if err != nil {
+		warn(fmt.Sprintf("retention skipped: the stack's partial snapshots on record could not be read, so the newest complete one could not be told apart: %v", err))
+		res.retentionFailed = true
+		return
+	}
+	knownPartial := func(snap resticSnapshot) bool {
+		return slices.ContainsFunc(recorded, func(id string) bool { return snapshotIDMatches(snap, id) })
+	}
+	keptID, err := restic.ApplyRetentionAfterPartial(ctx, stackID, partialID, knownPartial, out)
+	if err != nil {
+		warn(fmt.Sprintf("retention skipped: could not check that it keeps the stack's newest complete snapshot: %v", err))
+		res.retentionFailed = true
+		return
+	}
+	if keptID != "" {
+		warn(fmt.Sprintf("retention kept snapshot %s, the stack's newest complete snapshot; the policy would have forgotten it because newer snapshots are partial", keptID))
+	}
+}
+
 // maxNotedPathBytes caps each path in the note: 20 paths at PATH_MAX would
 // make one item note about 80 KB.
 const maxNotedPathBytes = 200
@@ -1503,8 +1710,9 @@ func unreadableNote(summary *ResticBackupSummary) string {
 	if summary.UnreadableCount == 0 {
 		return "snapshot saved, but restic could not read some files and named none"
 	}
-	quoted := make([]string, len(summary.Unreadable))
-	for i, p := range summary.Unreadable {
+	listed := summary.Unreadable[:min(len(summary.Unreadable), maxUnreadableListed)]
+	quoted := make([]string, len(listed))
+	for i, p := range listed {
 		if len(p) > maxNotedPathBytes {
 			p = p[:maxNotedPathBytes] + "..."
 		}
@@ -1512,7 +1720,7 @@ func unreadableNote(summary *ResticBackupSummary) string {
 	}
 	note := fmt.Sprintf("snapshot saved without %d unreadable path(s): %s",
 		summary.UnreadableCount, strings.Join(quoted, ", "))
-	if more := summary.UnreadableCount - len(summary.Unreadable); more > 0 {
+	if more := summary.UnreadableCount - len(listed); more > 0 {
 		note += fmt.Sprintf(" (and %d more, not listed)", more)
 	}
 	return note
@@ -1706,8 +1914,11 @@ func (s *BackupService) runRestore(
 	}
 	restic := s.newResticMgr(bc)
 
-	// Validate that the snapshot is tagged with the stack ID.
-	if err := s.validateSnapshotBelongsToStack(ctx, restic, snapshotID, stackID); err != nil {
+	// Validate that the snapshot is tagged with the stack ID, and read the
+	// path it holds. Before the stop: a snapshot that cannot be restored is
+	// refused with the stack untouched (agent-os-jkyn).
+	snap, err := s.validateSnapshotBelongsToStack(ctx, restic, snapshotID, stackID)
+	if err != nil {
 		return fmt.Errorf("snapshot validation: %w", err)
 	}
 
@@ -1740,6 +1951,51 @@ func (s *BackupService) runRestore(
 	protected, scanErr := restoreProtectedPaths(stackDir)
 	if scanErr != nil {
 		return fmt.Errorf("restore refused: %w", scanErr)
+	}
+
+	// A partial snapshot lacks the files its backup could not read, and
+	// --delete would remove their live copies (agent-os-fmeu). Decided before
+	// the stop, like the scan above.
+	deleteExtra := true
+	//
+	// The repository's PartialSnapshotTag says WHETHER it is partial and
+	// outlives the run history; the run item says WHICH paths it lacks:
+	//   tagged, item with paths  -> exclude them from --delete
+	//   tagged, no usable item   -> no --delete (history pruned, DR to a new DB)
+	//   untagged, item partial   -> as tagged (written before the tag existed)
+	//   untagged, no item        -> complete, --delete
+	// (agent-os-95dk review MUST-1).
+	tagged := slices.Contains(snap.Tags, PartialSnapshotTag)
+	item, itemErr := s.db.GetRunItemForSnapshot(stackID, snapshotID)
+	if itemErr != nil && !errors.Is(itemErr, errdefs.ErrNotFound) {
+		return fmt.Errorf("restore refused: could not read whether snapshot %s is partial: %w", snapshotID, itemErr)
+	}
+	var recorded *int
+	if itemErr == nil {
+		recorded = item.UnreadableCount
+	}
+	if tagged || recorded != nil {
+		var note string
+		var rels []string
+		placed := false
+		if recorded != nil {
+			rels, placed = unreadableRestoreExcludes(snap.Paths[0], item.UnreadablePaths)
+		}
+		switch {
+		case placed && *recorded > 0 && len(item.UnreadablePaths) >= *recorded:
+			protected = append(protected, rels...)
+			note = fmt.Sprintf("partial snapshot: its backup could not read %d path(s); they are left as they are in %s", len(rels), stackDir)
+		case recorded == nil:
+			deleteExtra = false
+			note = fmt.Sprintf("partial snapshot (%s) whose unreadable paths are no longer on record, so it is restored without --delete: files added since the snapshot stay in %s", PartialSnapshotTag, stackDir)
+		default:
+			deleteExtra = false
+			note = fmt.Sprintf("partial snapshot: its backup could not read %d path(s) and not all of them are on record, so it is restored without --delete: files added since the snapshot stay in %s", *recorded, stackDir)
+		}
+		stream(out, "error", fmt.Sprintf("[%s] %s", stackID, note))
+		if notes != nil {
+			*notes = append(*notes, note)
+		}
 	}
 
 	// Determine if the stack was running. As in backupStack, a failed read is a
@@ -1812,9 +2068,11 @@ func (s *BackupService) runRestore(
 	stopApplied = true
 
 	stream(out, "info", fmt.Sprintf("[%s] restoring snapshot %s to %s", stackID, snapshotID, stackDir))
-	// stackDir is the snapshot's stored source path; pass it so restic strips that
-	// prefix and restores contents into stackDir rather than nesting them.
-	if err := restic.Restore(ctx, snapshotID, stackDir, stackDir, protected, out); err != nil {
+	// snap.Paths[0] is the path the snapshot holds; restic strips that prefix and
+	// restores its contents into stackDir rather than nesting them. It is not
+	// stackDir: after a stacks-dir move, or on DR to another path, older
+	// snapshots still hold the old path (agent-os-jkyn).
+	if err := restic.Restore(ctx, snapshotID, snap.Paths[0], stackDir, protected, deleteExtra, out); err != nil {
 		return fmt.Errorf("restic restore: %w", err)
 	}
 
@@ -1826,6 +2084,34 @@ func (s *BackupService) runRestore(
 	})
 
 	return nil
+}
+
+// unreadableRestoreExcludes maps the unreadable paths a backup recorded,
+// absolute as restic reported them, to excludes relative to source, the
+// snapshot's stored path (agent-os-fmeu). placed is false when any of them
+// does not sit strictly under source, and then the caller must not --delete.
+//
+// Lexical on purpose: these are names inside the snapshot, not host paths.
+// pathutil.IsContained resolves symlinks on the live filesystem, which says
+// nothing about a snapshot, and source may not exist on the host at all after
+// a stacks-dir move. A wrong answer can only drop --delete (allowlisted in
+// scripts/check-path-containment.sh).
+func unreadableRestoreExcludes(source string, paths []string) (rels []string, placed bool) {
+	for _, p := range paths {
+		if !filepath.IsAbs(p) {
+			return nil, false
+		}
+		rel, err := filepath.Rel(source, p)
+		if err != nil {
+			// Rel could not relate them: the path cannot be excluded.
+			return nil, false
+		}
+		if rel == "." || rel == ".." || strings.HasPrefix(rel, "../") || filepath.IsAbs(rel) {
+			return nil, false
+		}
+		rels = append(rels, rel)
+	}
+	return rels, true
 }
 
 // --- RunDRRestore ---
@@ -1891,7 +2177,7 @@ func (s *BackupService) RunDRRestore(ctx context.Context, out chan<- StreamLine)
 	rclone := s.newRcloneMgr(bc)
 
 	stream(out, "info", fmt.Sprintf("Starting DR restore from %s:%s to %s (any local-only files the restore would otherwise delete will be preserved in %s)",
-		bc.RcloneRemote, bc.RclonePath, localRepoPath, backupDir))
+		RedactRcloneRemote(bc.RcloneRemote), bc.RclonePath, localRepoPath, backupDir))
 
 	if err := rclone.RestoreRepo(ctx, bc.RcloneRemote, bc.RclonePath, localRepoPath, backupDir, 3, out); err != nil {
 		return fmt.Errorf("rclone restore repo: %w", err)
@@ -2102,46 +2388,62 @@ func (s *BackupService) resolveTargetPolicies(stackIDs []string) ([]models.Backu
 }
 
 // validateSnapshotBelongsToStack checks that the given snapshot has a tag
-// matching stackID. This prevents cross-stack restore mistakes.
+// matching stackID, which prevents cross-stack restore mistakes, and returns
+// the snapshot, its one absolute path cleaned in Paths[0]. Backup writes each snapshot from
+// a single absolute stack directory, so any other shape cannot be restored
+// by subfolder and is refused (agent-os-jkyn).
 func (s *BackupService) validateSnapshotBelongsToStack(
 	ctx context.Context,
 	restic *ResticManager,
 	snapshotID string,
 	stackID string,
-) error {
+) (models.BackupSnapshot, error) {
 	// List all snapshots for this stack (limit=0 = all) and look for snapshotID.
 	snaps, err := restic.ListSnapshots(ctx, stackID, 0)
 	if err != nil {
-		return fmt.Errorf("list snapshots for stack %s: %w", stackID, err)
+		return models.BackupSnapshot{}, fmt.Errorf("list snapshots for stack %s: %w", stackID, err)
 	}
 	for _, snap := range snaps {
-		if snap.ID == snapshotID || snap.ShortID == snapshotID {
-			return nil
+		if snap.ID != snapshotID && snap.ShortID != snapshotID {
+			continue
 		}
+		if len(snap.Paths) != 1 || !filepath.IsAbs(snap.Paths[0]) {
+			return models.BackupSnapshot{}, fmt.Errorf("snapshot %s does not hold exactly one absolute path (it holds %q), so it cannot be restored into the stack directory", snapshotID, snap.Paths)
+		}
+		snap.Paths = []string{filepath.Clean(snap.Paths[0])}
+		return snap, nil
 	}
-	return fmt.Errorf("snapshot %s does not belong to stack %s", snapshotID, stackID)
+	return models.BackupSnapshot{}, fmt.Errorf("snapshot %s does not belong to stack %s", snapshotID, stackID)
+}
+
+// runItemOutcome is what one stack's backup records in its run item.
+type runItemOutcome struct {
+	status      string
+	snapshotID  string
+	stopApplied bool
+	duration    time.Duration
+	message     string
+	// unreadableCount is nil for a complete snapshot (agent-os-95dk).
+	unreadableCount *int
+	unreadablePaths []string
+	partialMarked   bool
 }
 
 // recordItem writes a BackupRunItem to the DB, ignoring errors (they are
 // logged but do not affect the backup result).
-func (s *BackupService) recordItem(
-	runID string,
-	stackID string,
-	status string,
-	snapshotID string,
-	stopApplied bool,
-	duration time.Duration,
-	message string,
-) {
+func (s *BackupService) recordItem(runID, stackID string, o runItemOutcome) {
 	item := &models.BackupRunItem{
-		ID:           uuid.New().String(),
-		RunID:        runID,
-		StackID:      stackID,
-		Status:       status,
-		SnapshotID:   snapshotID,
-		StopApplied:  stopApplied,
-		DurationMs:   duration.Milliseconds(),
-		ErrorMessage: message,
+		ID:              uuid.New().String(),
+		RunID:           runID,
+		StackID:         stackID,
+		Status:          o.status,
+		SnapshotID:      o.snapshotID,
+		StopApplied:     o.stopApplied,
+		DurationMs:      o.duration.Milliseconds(),
+		ErrorMessage:    o.message,
+		UnreadableCount: o.unreadableCount,
+		UnreadablePaths: o.unreadablePaths,
+		PartialMarked:   o.partialMarked,
 	}
 	if err := s.db.AddBackupRunItem(item); err != nil {
 		s.logger.Error("failed to record backup run item", "stack", stackID, "error", err)

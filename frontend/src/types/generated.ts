@@ -1134,6 +1134,12 @@ export interface BackupRunItem {
   stopApplied: boolean;
   durationMs: number /* int64 */;
   errorMessage?: string;
+  /**
+   * UnreadableCount is nil for a complete snapshot. A number marks a partial
+   * one: restic wrote it without that many unreadable paths, 0 when restic
+   * named none (agent-os-95dk).
+   */
+  unreadableCount?: number /* int */;
 }
 export interface BackupSnapshot {
   id: string;

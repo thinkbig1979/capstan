@@ -91,6 +91,8 @@ export function toDraft(s: BackupSettings): Draft {
     syncAfterBackup: s.syncAfterBackup,
     verifyWeekly: s.verifyWeekly,
     rcloneRemote: s.rcloneRemote ?? '',
+    savedRcloneRemote: s.rcloneRemote ?? '',
+    rcloneRemoteHasCredential: s.rcloneRemoteHasCredential === true,
     rclonePath: s.rclonePath ?? '',
     rcloneTransfers: s.rcloneTransfers ?? 4,
   }

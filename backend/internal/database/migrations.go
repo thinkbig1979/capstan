@@ -939,6 +939,55 @@ ALTER TABLE docker_cleanup_runs ADD COLUMN other_bytes_reclaimed INTEGER NOT NUL
 ALTER TABLE directories ADD COLUMN git_push_enabled INTEGER NOT NULL DEFAULT 0;
 `,
 	},
+	{
+		Version: 26,
+		Name:    "backup_run_items_unreadable",
+		SQL: `
+-- A backup item records whether its snapshot is partial (agent-os-95dk,
+-- agent-os-fmeu). unreadable_count NULL means a complete snapshot; a number
+-- means restic wrote the snapshot without that many unreadable paths (0 when
+-- restic named none). unreadable_paths is a JSON array of the paths, as restic
+-- reported them, up to a cap; NULL when none were stored. Retention uses the
+-- count to keep the newest complete snapshot; restore uses the paths to keep
+-- --delete off files the snapshot never held.
+ALTER TABLE backup_run_items ADD COLUMN unreadable_count INTEGER;
+ALTER TABLE backup_run_items ADD COLUMN unreadable_paths TEXT;
+-- partial_marked is 1 once the repository holds no UNTAGGED copy of the
+-- item's partial snapshot: it carries the capstan-partial tag, or it is gone.
+-- 0 means the self-healing pass still has to tag it (review MUST-D1). Every
+-- backfilled sufn-era partial starts at 0.
+ALTER TABLE backup_run_items ADD COLUMN partial_marked INTEGER NOT NULL DEFAULT 0;
+
+-- Backfill items written since agent-os-sufn from their note, and ONLY when a
+-- note segment (notes are joined with "; ") is one of the two exact sentences
+-- unreadableNote writes. Anything else stays NULL, read as complete: before
+-- sufn a partial backup failed its item, so a success item without the
+-- sentence is a complete snapshot. The paths stay NULL: the note quotes and
+-- truncates them, so they cannot be read back exactly.
+UPDATE backup_run_items
+SET unreadable_count = CAST(substr(
+		substr(error_message, instr('; ' || error_message, '; snapshot saved without ') + 23),
+		1,
+		instr(substr(error_message, instr('; ' || error_message, '; snapshot saved without ') + 23), ' unreadable path(s): ') - 1
+	) AS INTEGER)
+WHERE status = 'success'
+  AND COALESCE(snapshot_id, '') <> ''
+  AND instr('; ' || error_message, '; snapshot saved without ') > 0
+  AND instr(substr(error_message, instr('; ' || error_message, '; snapshot saved without ') + 23), ' unreadable path(s): ') > 1
+  AND substr(
+		substr(error_message, instr('; ' || error_message, '; snapshot saved without ') + 23),
+		1,
+		instr(substr(error_message, instr('; ' || error_message, '; snapshot saved without ') + 23), ' unreadable path(s): ') - 1
+	) NOT GLOB '*[^0-9]*';
+
+UPDATE backup_run_items
+SET unreadable_count = 0
+WHERE status = 'success'
+  AND COALESCE(snapshot_id, '') <> ''
+  AND unreadable_count IS NULL
+  AND instr('; ' || error_message || '; ', '; snapshot saved, but restic could not read some files and named none; ') > 0;
+`,
+	},
 }
 
 // ReencryptSecrets rewrites every stored secret that is not yet in the v2

@@ -108,7 +108,24 @@ func (r *sufnRunner) Run(_ context.Context, _ string, args []string, _ []string,
 	return nil
 }
 
-func (r *sufnRunner) Output(_ context.Context, _ string, _ []string, _ []string) ([]byte, error) {
+// sufnTaggedID is the id `restic tag` gives sufnSnapshotID (agent-os-95dk).
+const sufnTaggedID = "eeeeeeee55555555555555555555555555555555555555555555555555555555"
+
+// Output plays the listing TagPartial reads (the snapshot rewritten under
+// sufnTaggedID, recording its original) and the forget dry-run retention
+// reads after a partial backup (that snapshot alone, kept).
+func (r *sufnRunner) Output(_ context.Context, _ string, args []string, _ []string) ([]byte, error) {
+	r.mu.Lock()
+	r.calls = append(r.calls, slices.Clone(args))
+	r.mu.Unlock()
+	tagged := fmt.Sprintf(`{"id":%q,"short_id":%q,"time":"2026-11-01T02:00:00Z","tags":[%q,%q],"paths":[%q],"original":%q}`,
+		sufnTaggedID, sufnTaggedID[:8], sufnStack, PartialSnapshotTag, sufnSource, sufnSnapshotID)
+	switch {
+	case args[0] == "snapshots" && slices.Contains(args, "--no-lock") && argPairContains(args, "--tag", sufnStack) && slices.Contains(args, "--json"):
+		return []byte("[" + tagged + "]"), nil
+	case args[0] == "forget":
+		return []byte(`[{"keep":[` + tagged + `],"remove":[]}]`), nil
+	}
 	return snapshotJSON(sufnSnapshotID, sufnSnapshotID[:8], sufnStack), nil
 }
 
@@ -166,9 +183,11 @@ func sufnRunPolicy(t *testing.T, runner *sufnRunner, stopPolicy string) sufnResu
 func assertPartial(t *testing.T, runner *sufnRunner, r sufnResult) {
 	t.Helper()
 	assert.Equal(t, "success", r.item.Status, "the snapshot was written; the item note: %q", r.item.ErrorMessage)
-	assert.Equal(t, sufnSnapshotID[:8], r.item.SnapshotID, "the item must record the snapshot restic reported")
+	assert.Equal(t, sufnTaggedID[:8], r.item.SnapshotID, "the item must record the snapshot restic reported, under the id its partial mark gave it (agent-os-95dk)")
 	assert.Equal(t, 1, runner.callsOf("ls", ""), "a partial snapshot is verified like a complete one")
-	assert.Equal(t, 1, runner.callsOf("forget", sufnStack), "a partial snapshot runs the stack's retention")
+	assert.Equal(t, 1, runner.callsOf("tag", ""), "a partial snapshot is marked "+PartialSnapshotTag)
+	assert.Equal(t, 1, runner.callsOf("forget", sufnStack), "a partial snapshot runs the stack's retention (its dry-run)")
+	assert.NotContains(t, r.item.ErrorMessage, "retention skipped")
 	assert.Equal(t, "partial", r.status, "a run with unreadable files must not read as success")
 	assert.Equal(t, 1, r.ok)
 	assert.Equal(t, 0, r.failed)

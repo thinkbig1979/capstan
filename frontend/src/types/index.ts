@@ -409,6 +409,12 @@ export interface BackupSettings {
   /** The weekly repository check after a scheduled backup (default on). */
   verifyWeekly: boolean
   rcloneRemote: string
+  /**
+   * True when `rcloneRemote` above is a connection string whose parameter
+   * values were masked as `***` (agent-os-qnso). Optional because a server
+   * predating the field omits it; absent reads as false.
+   */
+  rcloneRemoteHasCredential?: boolean
   rclonePath: string
   rcloneTransfers: number
   hostname: string

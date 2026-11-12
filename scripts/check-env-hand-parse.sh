@@ -67,6 +67,8 @@ backend/internal/services/redact_compose.go|sensitiveEnvValues
 backend/internal/services/compose_env.go|resolveComposeEnv
 backend/internal/services/exec_env.go|stripCapstanSecrets
 backend/internal/services/redact_url.go|parseRcloneConnectionString
+backend/internal/services/backup_rclone_redact.go|RedactRcloneRemote
+backend/internal/services/backup_rclone_redact.go|rcloneSecrets
 "
 # Why each entry is allowed:
 #   handlers/env.go parseEnvFile: the env table's own line parser; it keys rows
@@ -92,6 +94,9 @@ backend/internal/services/redact_url.go|parseRcloneConnectionString
 #     which hold no quotes or comments, not .env text.
 #   services/redact_url.go parseRcloneConnectionString: rclone's inline
 #     key=value option grammar in a remote string, not .env text.
+#   services/backup_rclone_redact.go RedactRcloneRemote, rcloneSecrets: the same
+#     rclone key=value option grammar, split to mask or collect a remote's
+#     credential values (agent-os-qnso), not .env text.
 
 # The awk program receives the pattern through -v, so no regex escapes are
 # needed: bracket expressions only, which gawk and mawk read alike.
@@ -258,6 +263,20 @@ func parseRcloneConnectionString(opaque string) ([]rcloneParam, bool) {
 	return nil, false
 }
 EOF
+  cat > "$d/backend/internal/services/backup_rclone_redact.go" <<'EOF'
+package services
+
+func RedactRcloneRemote(remote string) string {
+	key, _, hasValue := strings.Cut(param, "=")
+	return remote
+}
+
+func rcloneSecrets(remote string) []string {
+	if _, v, hasValue := strings.Cut(param, "="); hasValue {
+	}
+	return nil
+}
+EOF
   cat > "$d/backend/internal/handlers/settings.go" <<'EOF'
 package handlers
 
@@ -315,7 +334,7 @@ self_test() {
 
   local d="$tmp/clean"
   write_base "$d"
-  selftest_case "clean tree" 0 '0 violations in 7 files [(]10 allowlisted splits[)]' "$d"
+  selftest_case "clean tree" 0 '0 violations in 8 files [(]12 allowlisted splits[)]' "$d"
 
   d="$tmp/planted"
   write_base "$d"

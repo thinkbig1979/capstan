@@ -522,6 +522,18 @@ type BackupRunItem struct {
 	StopApplied  bool   `json:"stopApplied"`
 	DurationMs   int64  `json:"durationMs"`
 	ErrorMessage string `json:"errorMessage,omitempty"`
+	// UnreadableCount is nil for a complete snapshot. A number marks a partial
+	// one: restic wrote it without that many unreadable paths, 0 when restic
+	// named none (agent-os-95dk).
+	UnreadableCount *int `json:"unreadableCount,omitempty"`
+	// UnreadablePaths are those paths as restic reported them (absolute, under
+	// the backed-up directory), up to a cap; empty when none were stored. Read
+	// by restore to keep --delete off them (agent-os-fmeu). Not sent to clients:
+	// the item note already names the first ones.
+	UnreadablePaths []string `json:"-"`
+	// PartialMarked is true once the repository holds no untagged copy of
+	// this partial snapshot (agent-os-95dk heal pass). Not sent to clients.
+	PartialMarked bool `json:"-"`
 }
 
 type BackupSnapshot struct {

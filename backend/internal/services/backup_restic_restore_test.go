@@ -71,7 +71,7 @@ func TestResticManager_Restore_RealRestic_MatchesSnapshot(t *testing.T) {
 	excludes, err := restoreProtectedPaths(stack)
 	require.NoError(t, err)
 	out, closeOut = drainStream()
-	err = m.Restore(ctx, summary.SnapshotID, stack, stack, excludes, out)
+	err = m.Restore(ctx, summary.SnapshotID, stack, stack, excludes, true, out)
 	closeOut()
 	require.NoError(t, err)
 
@@ -202,7 +202,7 @@ func TestResticManager_Restore_ExcludesAreAnchoredAndEscaped(t *testing.T) {
 	m := newResticManagerWithRunner(testBackupConfig(), runner, nil)
 	out, closeOut := drainStream()
 	err := m.Restore(context.Background(), "abc123", "/orig/src", "/orig/src",
-		[]string{"mnt", filepath.Join("sub", "cache"), `c[1]*?\x`}, out)
+		[]string{"mnt", filepath.Join("sub", "cache"), `c[1]*?\x`}, true, out)
 	closeOut()
 	require.NoError(t, err)
 
