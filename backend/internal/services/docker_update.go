@@ -61,6 +61,7 @@ type containerUpdateAPI interface {
 	ContainerCreate(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, networkingConfig *dockernet.NetworkingConfig, platform *ocispec.Platform, containerName string) (container.CreateResponse, error)
 	ContainerStart(ctx context.Context, containerID string, options container.StartOptions) error
 	ContainerRename(ctx context.Context, containerID, newContainerName string) error
+	ContainerUpdate(ctx context.Context, containerID string, updateConfig container.UpdateConfig) (container.UpdateResponse, error)
 }
 
 // updateAPI returns the Docker API the container-update paths call: the fake a
@@ -578,15 +579,18 @@ func (s *DockerService) updateComposeContainer(ctx context.Context, stack models
 	return nil
 }
 
-// standaloneRollbackTimeout bounds the restore of the old container after a
-// failed recreate. The restore runs on a context detached from the update's,
-// because the update's deadline ending is one of the ways the create or start
-// fails, and a restore on that same ended context would fail at once and leave
-// no container at all (agent-os-ohiy).
+// standaloneRollbackTimeout bounds each cleanup step after the new container's
+// create or start: the restore of the old container after a failure, and the
+// removal of the old one after a success. Those steps run on a context
+// detached from the update's, because the update's deadline ending is one of
+// the ways the create or start fails, or can end just after the start
+// succeeded, and a step on that ended context would fail at once: no container
+// at all after a failure, a leftover old one after a success (agent-os-ohiy).
 const standaloneRollbackTimeout = time.Minute
 
-// oldContainerSuffix marks the previous container while its replacement is
-// created. A leftover one (see recreateStandaloneContainer) is found by it.
+// oldContainerSuffix is appended to the previous container's name while its
+// replacement is created. Nothing in code looks a leftover up by it; it is
+// there so an operator who sees one can tell what it is.
 const oldContainerSuffix = "-capstan-old-"
 
 // withoutImageDefaults returns a copy of a container's Config with every value
@@ -603,7 +607,12 @@ const oldContainerSuffix = "-capstan-old-"
 // Cmd is dropped only together with Entrypoint. Docker clears the image's Cmd
 // when a container sets its own Entrypoint, so dropping a default Cmd beside a
 // custom Entrypoint would start the container with no command.
-func withoutImageDefaults(cfg *container.Config, oldImage image.InspectResponse) *container.Config {
+//
+// An exposed port the container publishes (a HostConfig.PortBindings key) is
+// kept even when the old image declared it: the CLI writes a published port
+// into ExposedPorts too, so it is the user's as much as the image's, and a new
+// image that no longer EXPOSEs it must not lose the binding.
+func withoutImageDefaults(cfg *container.Config, hostCfg *container.HostConfig, oldImage image.InspectResponse) *container.Config {
 	out := *cfg
 	img := oldImage.Config
 	if img == nil {
@@ -625,9 +634,15 @@ func withoutImageDefaults(cfg *container.Config, oldImage image.InspectResponse)
 		v, ok := img.Labels[k]
 		return ok && v == cfg.Labels[k]
 	})
+	published := map[string]bool{}
+	if hostCfg != nil {
+		for p := range hostCfg.PortBindings {
+			published[string(p)] = true
+		}
+	}
 	out.ExposedPorts = dropKeys(cfg.ExposedPorts, func(p string) bool {
 		_, ok := img.ExposedPorts[p]
-		return ok
+		return ok && !published[p]
 	})
 	out.Volumes = dropKeys(cfg.Volumes, func(v string) bool {
 		_, ok := img.Volumes[v]
@@ -726,7 +741,7 @@ func (s *DockerService) recreateStandaloneContainer(
 	if err != nil {
 		return "", fmt.Errorf("inspecting the current image: %w", err)
 	}
-	config := withoutImageDefaults(inspect.Config, oldImage)
+	config := withoutImageDefaults(inspect.Config, inspect.HostConfig, oldImage)
 
 	setStatus(StatusRecreating)
 	say(StreamStatus, "==> Recreating "+name)
@@ -775,20 +790,41 @@ func (s *DockerService) recreateStandaloneContainer(
 	}
 
 	if kept != "" {
-		// The update has happened; a leftover old container does not undo it,
-		// so this is a warning, not a failure. It is stopped, but one with a
-		// restart policy of "always" starts again when the Docker daemon
-		// restarts, beside its replacement.
-		if err := api.ContainerRemove(ctx, kept, container.RemoveOptions{}); err != nil {
-			slog.Warn("Standalone update: the old container could not be removed; remove it by hand",
-				"container", keptName, "id", kept, "error", err)
-			say(StreamStderr, "Warning: the old container "+keptName+" could not be removed ("+err.Error()+"); remove it by hand")
-		} else {
-			say(StreamStdout, "Old container removed")
-		}
+		s.removeOld(ctx, kept, keptName, say)
 	}
 
 	return newContainer.ID, nil
+}
+
+// removeOld removes the old container once its replacement has started, on the
+// same detached deadline as the rollback: the update's own context can end
+// right after the start (agent-os-ohiy).
+//
+// The update has happened; a leftover old container does not undo it, so a
+// failed remove is a warning, not a failure. The leftover is stopped, but one
+// with a restart policy of "always" starts again when the Docker daemon
+// restarts, beside its replacement: it can take a published port first, or run
+// as a second writer on the same volumes. So its restart policy is set to "no"
+// before the warning, best effort.
+func (s *DockerService) removeOld(ctx context.Context, kept, keptName string, say func(Stream, string)) {
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), standaloneRollbackTimeout)
+	defer cancel()
+	api := s.updateAPI()
+
+	err := api.ContainerRemove(rctx, kept, container.RemoveOptions{})
+	if err == nil {
+		say(StreamStdout, "Old container removed")
+		return
+	}
+	restart := "its restart policy is now \"no\", so it stays stopped"
+	if _, uerr := api.ContainerUpdate(rctx, kept, container.UpdateConfig{
+		RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyDisabled},
+	}); uerr != nil {
+		restart = "its restart policy could not be cleared (" + uerr.Error() + "), so a Docker restart may start it beside the new one"
+	}
+	slog.Warn("Standalone update: the old container could not be removed; remove it by hand",
+		"container", keptName, "id", kept, "error", err, "restart_policy", restart)
+	say(StreamStderr, "Warning: the old container "+keptName+" could not be removed ("+err.Error()+"); "+restart+"; remove it by hand")
 }
 
 // restoreOld undoes a failed recreate: it removes the new container (if one was
@@ -796,30 +832,38 @@ func (s *DockerService) recreateStandaloneContainer(
 // running. It runs on its own deadline, detached from ctx; see
 // standaloneRollbackTimeout. kept is empty when there is no old container to
 // restore. It returns what could not be undone, or nil.
+//
+// Every step is tried even when an earlier one failed: an old container
+// started under its set-aside name still serves, which beats leaving nothing
+// running because the new container could not be removed or the name was taken
+// meanwhile (agent-os-ohiy).
 func (s *DockerService) restoreOld(ctx context.Context, newID, kept, name string, wasRunning bool, say func(Stream, string)) error {
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), standaloneRollbackTimeout)
 	defer cancel()
 	api := s.updateAPI()
 
+	var errs []error
 	if newID != "" {
 		if err := api.ContainerRemove(rctx, newID, container.RemoveOptions{Force: true}); err != nil {
-			return fmt.Errorf("rollback: removing the new container: %w", err)
+			errs = append(errs, fmt.Errorf("rollback: removing the new container: %w", err))
 		}
 	}
 	if kept == "" {
-		return nil
+		return errors.Join(errs...)
 	}
 	if err := api.ContainerRename(rctx, kept, name); err != nil {
-		return fmt.Errorf("rollback: renaming the old container back to %s: %w", name, err)
+		errs = append(errs, fmt.Errorf("rollback: renaming the old container back to %s: %w", name, err))
+	} else {
+		say(StreamStdout, "Old container restored")
 	}
-	say(StreamStdout, "Old container restored")
 	if wasRunning {
 		if err := api.ContainerStart(rctx, kept, container.StartOptions{}); err != nil {
-			return fmt.Errorf("rollback: starting the old container: %w", err)
+			errs = append(errs, fmt.Errorf("rollback: starting the old container: %w", err))
+		} else {
+			say(StreamStdout, "Old container started")
 		}
-		say(StreamStdout, "Old container started")
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // restartOld starts the old container again when the update stopped it and

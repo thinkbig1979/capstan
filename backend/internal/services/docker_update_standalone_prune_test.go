@@ -193,3 +193,8 @@ func TestStandaloneUpdate_RemoveNotFoundAfterOwnStop(t *testing.T) {
 		})
 	}
 }
+
+func (f *qags20Fake) ContainerUpdate(context.Context, string, container.UpdateConfig) (container.UpdateResponse, error) {
+	f.record("ContainerUpdate")
+	return container.UpdateResponse{}, nil
+}

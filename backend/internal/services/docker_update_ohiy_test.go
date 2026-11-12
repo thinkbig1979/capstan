@@ -52,7 +52,9 @@ type ohiyCtr struct {
 	name    string
 	image   string
 	config  container.Config
+	host    container.HostConfig
 	running bool
+	restart container.RestartPolicyMode
 }
 
 type ohiyDocker struct {
@@ -62,10 +64,18 @@ type ohiyDocker struct {
 	tag        string // the image id ohiyRef points at
 	created    int
 
-	createErr    error              // ContainerCreate fails
-	startNewErr  error              // ContainerStart fails for a container the update created
-	cancelOnNew  context.CancelFunc // called when the new container is started, before failing
-	removeOldErr error              // ContainerRemove fails for the original container
+	createErr      error              // ContainerCreate fails
+	startNewErr    error              // ContainerStart fails for a container the update created
+	cancelOnNew    context.CancelFunc // called when the new container is started, before failing
+	cancelAfterNew context.CancelFunc // called when the new container is started, which then SUCCEEDS
+	removeOldErr   error              // ContainerRemove fails for the original container
+	removeNewErr   error              // ContainerRemove fails for a container the update created
+	renameAsideErr error              // ContainerRename of the original to a different name fails
+	renameBackErr  error              // ContainerRename of the original back to its own name fails
+	oldImageErr    error              // ImageInspect of the old image fails
+	updateErr      error              // ContainerUpdate fails
+
+	createdConfigs []container.Config // the Config each ContainerCreate received, before the merge
 }
 
 // ohiyImages builds the two image versions from JSON, the shape the daemon
@@ -81,8 +91,13 @@ func ohiyImages() map[string]image.InspectResponse {
 		}
 		return r
 	}
+	old := cfg("/old-entrypoint", "old-cmd", "old", "1", "/srv/old")
+	// The old image EXPOSEs two ports; the new one EXPOSEs none.
+	if err := json.Unmarshal([]byte(`{"80/tcp":{},"9000/tcp":{}}`), &old.Config.ExposedPorts); err != nil {
+		panic(err)
+	}
 	return map[string]image.InspectResponse{
-		ohiyOldImg: cfg("/old-entrypoint", "old-cmd", "old", "1", "/srv/old"),
+		ohiyOldImg: old,
 		ohiyNewImg: cfg("/new-entrypoint", "new-cmd", "new", "2", "/srv/new"),
 	}
 }
@@ -93,7 +108,9 @@ func newOhiyDocker(t *testing.T, own container.Config) *ohiyDocker {
 	t.Helper()
 	d := &ohiyDocker{containers: map[string]*ohiyCtr{}, images: ohiyImages(), tag: ohiyOldImg}
 	own.Image = ohiyRef
-	d.containers[ohiyOldID] = &ohiyCtr{id: ohiyOldID, name: ohiyOldName, image: ohiyOldImg, config: d.merge(own, ohiyOldImg), running: true}
+	d.containers[ohiyOldID] = &ohiyCtr{id: ohiyOldID, name: ohiyOldName, image: ohiyOldImg, config: d.merge(own, ohiyOldImg), running: true,
+		restart: container.RestartPolicyAlways,
+		host:    container.HostConfig{RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyAlways}}}
 	return d
 }
 
@@ -153,10 +170,12 @@ func (d *ohiyDocker) ContainerInspect(ctx context.Context, id string) (container
 		return container.InspectResponse{}, ohiyNotFound(id)
 	}
 	cfg := c.config
+	host := c.host
 	return container.InspectResponse{
 		ContainerJSONBase: &container.ContainerJSONBase{
 			ID: c.id, Name: "/" + c.name, Image: c.image,
-			State: &container.State{Running: c.running},
+			State:      &container.State{Running: c.running},
+			HostConfig: &host,
 		},
 		Config: &cfg,
 	}, nil
@@ -171,6 +190,9 @@ func (d *ohiyDocker) ImageInspect(ctx context.Context, ref string, _ ...dockercl
 	id := ref
 	if ref == ohiyRef {
 		id = d.tag
+	}
+	if id == ohiyOldImg && d.oldImageErr != nil {
+		return image.InspectResponse{}, d.oldImageErr
 	}
 	img, ok := d.images[id]
 	if !ok {
@@ -222,6 +244,9 @@ func (d *ohiyDocker) ContainerRemove(ctx context.Context, id string, opts contai
 	if id == ohiyOldID && d.removeOldErr != nil {
 		return d.removeOldErr
 	}
+	if id != ohiyOldID && d.removeNewErr != nil {
+		return d.removeNewErr
+	}
 	if c.running && !opts.Force {
 		return errors.New("ohiy fake: cannot remove a running container")
 	}
@@ -239,6 +264,12 @@ func (d *ohiyDocker) ContainerRename(ctx context.Context, id, name string) error
 	if !ok {
 		return ohiyNotFound(id)
 	}
+	if id == ohiyOldID && name != ohiyOldName && d.renameAsideErr != nil {
+		return d.renameAsideErr
+	}
+	if id == ohiyOldID && name == ohiyOldName && d.renameBackErr != nil {
+		return d.renameBackErr
+	}
 	if other := d.byName(name); other != nil && other != c {
 		return fmt.Errorf("ohiy fake: name %s is in use", name)
 	}
@@ -246,12 +277,13 @@ func (d *ohiyDocker) ContainerRename(ctx context.Context, id, name string) error
 	return nil
 }
 
-func (d *ohiyDocker) ContainerCreate(ctx context.Context, cfg *container.Config, _ *container.HostConfig, _ *dockernet.NetworkingConfig, _ *ocispec.Platform, name string) (container.CreateResponse, error) {
+func (d *ohiyDocker) ContainerCreate(ctx context.Context, cfg *container.Config, host *container.HostConfig, _ *dockernet.NetworkingConfig, _ *ocispec.Platform, name string) (container.CreateResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return container.CreateResponse{}, err
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.createdConfigs = append(d.createdConfigs, *cfg)
 	if d.createErr != nil {
 		return container.CreateResponse{}, d.createErr
 	}
@@ -264,7 +296,12 @@ func (d *ohiyDocker) ContainerCreate(ctx context.Context, cfg *container.Config,
 	}
 	d.created++
 	id := fmt.Sprintf("ohiy%04dnew0000container", d.created)
-	d.containers[id] = &ohiyCtr{id: id, name: name, image: imageID, config: d.merge(*cfg, imageID)}
+	c := &ohiyCtr{id: id, name: name, image: imageID, config: d.merge(*cfg, imageID)}
+	if host != nil {
+		c.host = *host
+		c.restart = host.RestartPolicy.Name
+	}
+	d.containers[id] = c
 	return container.CreateResponse{ID: id}, nil
 }
 
@@ -283,12 +320,32 @@ func (d *ohiyDocker) ContainerStart(ctx context.Context, id string, _ container.
 			d.cancelOnNew()
 			return context.Canceled
 		}
+		if d.cancelAfterNew != nil {
+			d.cancelAfterNew()
+		}
 		if d.startNewErr != nil {
 			return d.startNewErr
 		}
 	}
 	c.running = true
 	return nil
+}
+
+func (d *ohiyDocker) ContainerUpdate(ctx context.Context, id string, upd container.UpdateConfig) (container.UpdateResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return container.UpdateResponse{}, err
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	c, ok := d.containers[id]
+	if !ok {
+		return container.UpdateResponse{}, ohiyNotFound(id)
+	}
+	if d.updateErr != nil {
+		return container.UpdateResponse{}, d.updateErr
+	}
+	c.restart = upd.RestartPolicy.Name
+	return container.UpdateResponse{}, nil
 }
 
 func (d *ohiyDocker) snapshot() map[string]ohiyCtr {
@@ -478,4 +535,177 @@ func TestStandaloneUpdateIsOneFunctionOhiy(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, []string{"docker_update.go:recreateStandaloneContainer"}, callers)
+}
+
+// ohiyRecreate drives recreateStandaloneContainer directly, from the fake's own
+// inspect of the running original, so a test can end ctx after the new
+// container started without the caller's post-update verification failing
+// first on that same ctx.
+func ohiyRecreate(t *testing.T, d *ohiyDocker, ctx context.Context) (string, []string, error) {
+	t.Helper()
+	inspect, err := d.ContainerInspect(context.Background(), ohiyOldID)
+	require.NoError(t, err)
+	var lines []string
+	id, err := (&DockerService{updateClient: d}).recreateStandaloneContainer(ctx, inspect, true,
+		func(l LogLine) { lines = append(lines, l.Text) }, func(Status) {})
+	return id, lines, err
+}
+
+var ohiyLeftover = ohiyOldName + "-capstan-old-" + ohiyOldID[:12]
+
+// TestStandaloneUpdateRemovesOldAfterLateDeadlineOhiy: the update's context
+// ends right after the new container started. The old container is still
+// removed: the removal runs on its own deadline, like the rollback.
+func TestStandaloneUpdateRemovesOldAfterLateDeadlineOhiy(t *testing.T) {
+	d := newOhiyDocker(t, container.Config{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d.cancelAfterNew = cancel
+
+	id, _, err := ohiyRecreate(t, d, ctx)
+	require.NoError(t, err)
+	require.Error(t, ctx.Err(), "the fixture must have ended ctx before the removal")
+
+	got := d.snapshot()
+	require.Len(t, got, 1, "no leftover old container: %v", got)
+	assert.Equal(t, id, got[ohiyOldName].id)
+	assert.True(t, got[ohiyOldName].running)
+}
+
+// TestStandaloneUpdateLeftoverStaysStoppedOhiy: when the old container cannot
+// be removed, its restart policy is set to "no", so a Docker daemon restart
+// cannot start it beside its replacement; the warning says which happened.
+func TestStandaloneUpdateLeftoverStaysStoppedOhiy(t *testing.T) {
+	t.Run("restart policy cleared", func(t *testing.T) {
+		d := newOhiyDocker(t, container.Config{})
+		d.removeOldErr = errOhiyDaemon
+
+		_, lines, err := ohiyRecreate(t, d, context.Background())
+		require.NoError(t, err)
+
+		got := d.snapshot()
+		require.Contains(t, got, ohiyLeftover)
+		assert.Equal(t, container.RestartPolicyDisabled, got[ohiyLeftover].restart)
+		assert.Equal(t, container.RestartPolicyAlways, got[ohiyOldName].restart, "the new container keeps the user's policy")
+		assert.True(t, slices.ContainsFunc(lines, func(l string) bool {
+			return strings.Contains(l, ohiyLeftover) && strings.Contains(l, `restart policy is now "no"`)
+		}), "%q", lines)
+	})
+
+	t.Run("restart policy could not be cleared", func(t *testing.T) {
+		d := newOhiyDocker(t, container.Config{})
+		d.removeOldErr = errOhiyDaemon
+		d.updateErr = errOhiyDaemon
+
+		_, lines, err := ohiyRecreate(t, d, context.Background())
+		require.NoError(t, err, "the update still happened")
+
+		assert.Equal(t, container.RestartPolicyAlways, d.snapshot()[ohiyLeftover].restart)
+		assert.True(t, slices.ContainsFunc(lines, func(l string) bool {
+			return strings.Contains(l, ohiyLeftover) && strings.Contains(l, "could not be cleared")
+		}), "%q", lines)
+	})
+}
+
+// TestStandaloneUpdateRollbackTriesEveryStepOhiy: a rollback step that fails
+// does not stop the next one. The old container is started again even when
+// the new one cannot be removed or the old name cannot be given back, and the
+// error names every step that failed.
+func TestStandaloneUpdateRollbackTriesEveryStepOhiy(t *testing.T) {
+	t.Run("removing the new container fails", func(t *testing.T) {
+		d := newOhiyDocker(t, container.Config{})
+		d.startNewErr = errOhiyDaemon
+		d.removeNewErr = errOhiyDaemon
+
+		_, _, err := ohiyRecreate(t, d, context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "rollback: removing the new container")
+		assert.Contains(t, err.Error(), "rollback: renaming the old container back", "the new one still holds the name")
+
+		got := d.snapshot()
+		old, ok := got[ohiyLeftover]
+		require.True(t, ok, "%v", got)
+		assert.Equal(t, ohiyOldID, old.id)
+		assert.True(t, old.running, "the old container serves again under its set-aside name")
+	})
+
+	t.Run("renaming the old container back fails", func(t *testing.T) {
+		d := newOhiyDocker(t, container.Config{})
+		d.startNewErr = errOhiyDaemon
+		d.renameBackErr = errOhiyDaemon
+
+		_, _, err := ohiyRecreate(t, d, context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "rollback: renaming the old container back")
+		assert.NotContains(t, err.Error(), "rollback: starting the old container")
+
+		got := d.snapshot()
+		require.Len(t, got, 1, "the new container was removed: %v", got)
+		assert.True(t, got[ohiyLeftover].running)
+	})
+}
+
+// TestStandaloneUpdateFailsBeforeTouchingOhiy: failures before the recreate
+// leave the original as it was, running under its own name. Setting it aside
+// failing restarts it (restartOld); the old image being unreadable stops
+// nothing at all.
+func TestStandaloneUpdateFailsBeforeTouchingOhiy(t *testing.T) {
+	cases := []struct {
+		name    string
+		setup   func(*ohiyDocker)
+		wantErr string
+	}{
+		{"setting the old container aside fails", func(d *ohiyDocker) { d.renameAsideErr = errOhiyDaemon }, "renaming container"},
+		{"the old image cannot be inspected", func(d *ohiyDocker) { d.oldImageErr = errOhiyDaemon }, "inspecting the current image"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := newOhiyDocker(t, container.Config{})
+			tc.setup(d)
+
+			_, _, err := ohiyRecreate(t, d, context.Background())
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+
+			got := d.snapshot()
+			require.Len(t, got, 1, "%v", got)
+			c := got[ohiyOldName]
+			assert.Equal(t, ohiyOldID, c.id)
+			assert.True(t, c.running, "the original runs again")
+			assert.Empty(t, d.createdConfigs, "nothing was created")
+		})
+	}
+}
+
+// TestStandaloneUpdateKeepsPublishedPortsExposedOhiy: a port the container
+// publishes stays in ExposedPorts even though the old image declared it and
+// the new one does not; an exposed port nothing publishes follows the image.
+func TestStandaloneUpdateKeepsPublishedPortsExposedOhiy(t *testing.T) {
+	d := newOhiyDocker(t, container.Config{})
+	var own container.Config
+	require.NoError(t, json.Unmarshal([]byte(`{"ExposedPorts":{"80/tcp":{},"9000/tcp":{}}}`), &own))
+	var host container.HostConfig
+	require.NoError(t, json.Unmarshal([]byte(`{"PortBindings":{"80/tcp":[{"HostPort":"8080"}]}}`), &host))
+	d.mu.Lock()
+	d.containers[ohiyOldID].config.ExposedPorts = own.ExposedPorts
+	d.containers[ohiyOldID].host = host
+	d.mu.Unlock()
+
+	_, _, err := ohiyRecreate(t, d, context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, d.createdConfigs, 1)
+	assert.Equal(t, []string{"80/tcp"}, ohiyKeys(d.createdConfigs[0].ExposedPorts),
+		"80/tcp is published, so kept; 9000/tcp is the old image's and unpublished, so dropped")
+}
+
+// ohiyKeys lists a map's keys as strings, sorted; the port type lives in a
+// module go.mod lists as indirect, so the test does not name it.
+func ohiyKeys[K ~string, V any](m map[K]V) []string {
+	var out []string
+	for k := range m {
+		out = append(out, string(k))
+	}
+	slices.Sort(out)
+	return out
 }

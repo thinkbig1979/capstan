@@ -279,3 +279,8 @@ func TestBx43FakeSatisfiesTruthImageInspector(t *testing.T) {
 		t.Fatalf("ResolveContainerImage: got ref=%q imageID=%q, want the fake's %q / %q", ref, imgID, bx43ImageRef, bx43ImageID)
 	}
 }
+
+func (f *bx43FakeDocker) ContainerUpdate(_ context.Context, _ string, _ container.UpdateConfig) (container.UpdateResponse, error) {
+	f.record("ContainerUpdate")
+	return container.UpdateResponse{}, errBx43Apply
+}

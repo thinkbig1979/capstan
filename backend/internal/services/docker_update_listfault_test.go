@@ -166,3 +166,8 @@ func TestUpdateComposeServiceStreaming_ListFaultIsNotReportedAsAbsence(t *testin
 		t.Fatalf("empty arm: Err = %v, want nil (nothing failed; the service simply has no container)", emptyAR.Err)
 	}
 }
+
+func (f *qyg72ListFake) ContainerUpdate(_ context.Context, _ string, _ container.UpdateConfig) (container.UpdateResponse, error) {
+	f.beyond = append(f.beyond, "ContainerUpdate")
+	return container.UpdateResponse{}, errQyg72Beyond
+}
