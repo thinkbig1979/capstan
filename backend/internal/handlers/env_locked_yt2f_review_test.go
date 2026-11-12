@@ -111,12 +111,16 @@ func TestEnvLocked_Yt2f_OpaqueURLCredentialHidden(t *testing.T) {
 // S7: without the raw text the body rows cannot be located, so every row
 // after a sensitive one is hidden rather than none.
 func TestEnvLocked_Yt2f_BodiesWithoutRawFailClosed(t *testing.T) {
-	entries := (&EnvHandler{}).parseEnvFile("API_TOKEN=\"yt2fopen\nyt2fbodynoraw\n\"\n")
+	entries := (&EnvHandler{}).parseEnvFile("TZ=Europe/Amsterdam\nAPI_TOKEN=\"yt2fopen\nyt2fbodynoraw\n\"\n")
 	resp := EnvResponse{Entries: entries}
 	redactEnvResponse(&resp)
 	for _, e := range resp.Entries {
 		assert.NotContains(t, e.Key+e.Value, "yt2fbodynoraw")
 	}
+	// The other side (review DS5): a row before the secret is untouched, so a
+	// mutant that blanks every row does not pass.
+	assert.Equal(t, "TZ", resp.Entries[0].Key)
+	assert.Equal(t, "Europe/Amsterdam", resp.Entries[0].Value)
 }
 
 // S2's fail-closed arm: rows that do not match the file text (it changed

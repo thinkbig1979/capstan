@@ -60,7 +60,7 @@ backend/internal/handlers/env.go|composeLineKey
 backend/internal/handlers/env.go|opensMultilineValue
 backend/internal/handlers/env.go|commentedSecretEnd
 backend/internal/handlers/env.go|redactGlobalEnvVars
-backend/internal/handlers/settings.go|parseEnvFile
+backend/internal/handlers/settings.go|parseGlobalEnvText
 backend/internal/services/redact_compose.go|sensitiveEnvValues
 backend/internal/services/compose_env.go|resolveComposeEnv
 backend/internal/services/exec_env.go|stripCapstanSecrets
@@ -74,10 +74,11 @@ backend/internal/services/redact_url.go|parseRcloneConnectionString
 #     ":" (mirrors compose-go dotenv/parser.go locateKeyName). opensMultilineValue
 #     and commentedSecretEnd use the same rule to find where a value starts, for
 #     the locked view's masking (agent-os-yt2f); they do not read the value.
-#   handlers/env.go redactGlobalEnvVars: mirrors settings.go parseEnvFile's row
-#     rule (a line holding "=") to match its rows to lines for the locked view.
+#   handlers/env.go redactGlobalEnvVars: mirrors settings.go
+#     parseGlobalEnvText's row rule (a line holding "=") to match its rows to
+#     lines for the locked view.
 #     agent-os-rd1l, which replaces that parser, removes it; delete with it.
-#   handlers/settings.go parseEnvFile: the global env page's parser.
+#   handlers/settings.go parseGlobalEnvText: the global env page's parser.
 #     agent-os-rd1l removes it; delete this entry with it.
 #   services/redact_compose.go sensitiveEnvValues: redaction's fallback parser,
 #     kept on purpose so a file compose-go rejects is still masked
@@ -256,9 +257,9 @@ EOF
   cat > "$d/backend/internal/handlers/settings.go" <<'EOF'
 package handlers
 
-func parseEnvFile(path string) ([]map[string]string, error) {
+func parseGlobalEnvText(text string) []map[string]string {
 	parts := strings.SplitN(line, "=", 2)
-	return nil, nil
+	return nil
 }
 EOF
   cat > "$d/backend/internal/services/redact_compose.go" <<'EOF'
@@ -364,8 +365,8 @@ self_test() {
 
   d="$tmp/stale"
   write_base "$d"
-  printf 'package handlers\n\nfunc parseEnvFile(path string) ([]map[string]string, error) {\n\treturn nil, nil\n}\n' > "$d/backend/internal/handlers/settings.go"
-  selftest_case "stale allowlist entry" 1 'backend/internal/handlers/settings.go[|]parseEnvFile' "$d"
+  printf 'package handlers\n\nfunc parseGlobalEnvText(text string) []map[string]string {\n\treturn nil\n}\n' > "$d/backend/internal/handlers/settings.go"
+  selftest_case "stale allowlist entry" 1 'backend/internal/handlers/settings.go[|]parseGlobalEnvText' "$d"
 
   d="$tmp/empty"
   mkdir -p "$d/backend/internal/x"

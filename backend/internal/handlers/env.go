@@ -282,19 +282,20 @@ func redactEnvCommentRow(e *EnvEntry) {
 	}
 }
 
-// redactGlobalEnvVars masks the global env rows (settings.go parseEnvFile) for
+// redactGlobalEnvVars masks the global env rows (settings.go parseGlobalEnvText) for
 // a locked session with the stack env's redaction, line by line (agent-os-yt2f
 // review S2). That parser drops comment lines and lines with no "=", and splits
 // every other line at its first "=", so a multi-line secret's body lines that
 // hold "=" (base64 padding) came back as rows whose KEY was secret text, and
 // "KEY: a=b" as a key holding part of the value; only values were masked.
 //
-// Each row is matched to the line it came from in raw by that parser's own
-// rule, and the stack env's verdict on the line decides: a sensitive line keeps
-// only the key compose reads (none for a body line) and no value. If the rows
-// do not match raw's lines (the file changed between the two reads), every key
-// and value is blanked: fail closed. agent-os-rd1l, which replaces that
-// parser, can drop the matching.
+// raw must be the text the rows were parsed from; GetGlobalEnv passes the one
+// read it parsed (review DS1). Each row is matched to the line it came from by
+// that parser's own rule, and the stack env's verdict on the line decides: a
+// sensitive line keeps only the key compose reads (none for a body line) and
+// no value. If the rows do not match raw's lines (a caller passed other text),
+// every key and value is blanked: fail closed. agent-os-rd1l, which replaces
+// that parser, can drop the matching.
 func redactGlobalEnvVars(vars []map[string]string, raw string) {
 	resp := EnvResponse{Raw: raw, Entries: (&EnvHandler{}).parseEnvFile(raw)}
 	redactEnvResponse(&resp)
@@ -753,7 +754,13 @@ func (h *EnvHandler) parseEnvFile(content string) []EnvEntry {
 			entry := EnvEntry{Value: trimmedLine, Line: lineNum, Comment: true}
 			if key, ok := composeLineKey(trimmedLine); ok {
 				entry.Key = key
-				entry.Sensitive = services.IsSensitiveEnvVar(key, trimmedLine)
+				// The value, not the whole line: an opaque credential is
+				// only recognised as a whole value (review DS3).
+				value := ""
+				if colonIndex != -1 {
+					value = trimmedLine[colonIndex+1:]
+				}
+				entry.Sensitive = services.IsSensitiveEnvVar(key, value)
 			}
 			entries = append(entries, entry)
 			continue
