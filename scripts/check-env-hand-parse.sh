@@ -38,7 +38,9 @@
 # recognised by its position (after "(" or ",", before ")" or ","), so a
 # literal holding "=" that sits elsewhere on the line, such as a comparison
 # after the call, is not mistaken for one. A nested first argument
-# (strings.Cut(strings.TrimSpace(s), "=")) IS seen.
+# (strings.Cut(strings.TrimSpace(s), "=")) and a raw-string literal
+# (strings.Cut(s, `=`)) ARE seen. A key-specific lookup such as
+# strings.TrimPrefix(line, "PASSWORD=") is not in the call families.
 #
 # USAGE
 #   check-env-hand-parse.sh              scan this repo
@@ -73,7 +75,9 @@ backend/internal/services/redact_url.go|parseRcloneConnectionString
 #   handlers/env.go composeLineKey: where compose ends a key, the first "=" or
 #     ":" (mirrors compose-go dotenv/parser.go locateKeyName). opensMultilineValue
 #     and commentedSecretEnd use the same rule to find where a value starts, for
-#     the locked view's masking (agent-os-yt2f); they do not read the value.
+#     the locked view's masking (agent-os-yt2f). They read only where the
+#     value starts, whether its quote closes, and (commentedSecretEnd) the URL
+#     check on a commented value; they never return the value.
 #   handlers/env.go redactGlobalEnvVars: mirrors settings.go
 #     parseGlobalEnvText's row rule (a line holding "=") to match its rows to
 #     lines for the locked view.
@@ -91,7 +95,7 @@ backend/internal/services/redact_url.go|parseRcloneConnectionString
 
 # The awk program receives the pattern through -v, so no regex escapes are
 # needed: bracket expressions only, which gawk and mawk read alike.
-SPLIT_RE="(strings|bytes)[.](Cut|SplitAfterN|SplitAfterSeq|SplitAfter|SplitN|SplitSeq|Split|IndexAny|IndexByte|IndexRune|IndexFunc|Index|LastIndexAny|LastIndexByte|LastIndexFunc|LastIndex|ContainsAny|ContainsRune|ContainsFunc|Contains|Count|FieldsFuncSeq|FieldsFunc)[(].*([(,][ \t]*\"[^\"]*=[^\"]*\"[ \t]*[),]|'=')"
+SPLIT_RE="(strings|bytes)[.](Cut|SplitAfterN|SplitAfterSeq|SplitAfter|SplitN|SplitSeq|Split|IndexAny|IndexByte|IndexRune|IndexFunc|Index|LastIndexAny|LastIndexByte|LastIndexFunc|LastIndex|ContainsAny|ContainsRune|ContainsFunc|Contains|Count|FieldsFuncSeq|FieldsFunc)[(].*([(,][ \t]*(\"[^\"]*=[^\"]*\"|\`[^\`]*=[^\`]*\`)[ \t]*[),]|'=')"
 
 usage() {
   echo "Usage: $(basename "$0") [DIR | --self-test]" >&2
@@ -347,6 +351,11 @@ self_test() {
   write_base "$d"
   printf "\nfunc fields(s string) []string {\n\treturn strings.FieldsFunc(s, func(r rune) bool { return r == '=' })\n}\n" >> "$d/backend/internal/services/exec_env.go"
   selftest_case "FieldsFunc closure on '='" 1 'exec_env.go:[0-9]+: .*FieldsFunc' "$d"
+
+  d="$tmp/backtick"
+  write_base "$d"
+  printf '\nfunc rawLiteral(line string) {\n\tk, v, _ := strings.Cut(line, `=`)\n}\n' >> "$d/backend/internal/services/exec_env.go"
+  selftest_case "raw-string literal" 1 'exec_env.go:[0-9]+: .*Cut[(]line, `=`[)]' "$d"
 
   d="$tmp/nested"
   write_base "$d"
