@@ -5,7 +5,7 @@ import { useGlobalEnv, useUpdateGlobalEnv } from '@/hooks/useResources'
 import { useExternalFileChange } from '@/hooks/useExternalFileChange'
 import { presentError } from '@/lib/error-handler'
 import { fillRedactedBlanks } from '@/lib/env-unlock-rebase'
-import { isSensitiveKey } from './sensitiveKey'
+import { isSensitiveKey } from '@/components/stack/env-editor/sensitiveKey'
 import { useNextRowId } from '@/components/stack/env-editor/useRowId'
 import type { EnvRow, EnvVar, IndexedEnvVar } from './types'
 
