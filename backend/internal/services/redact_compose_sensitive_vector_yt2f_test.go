@@ -37,11 +37,14 @@ func TestSensitiveVar_Yt2f_URLUserinfo(t *testing.T) {
 	for _, v := range []string{
 		"postgres://u:pw@db/app", "redis://:pw@cache:6379", "https://ghp_token@github.com/o/r.git",
 		"jdbc:mysql://u:pw@h/db",
+		// Opaque forms RedactURLUserinfo reads with no "://" (review S3).
+		"sftp:u:pw@backup.example.com:/r", "s3:https://key:sec@h/bucket",
 	} {
 		assert.True(t, IsSensitiveEnvVar("DATABASE_URL", v), "%q carries a credential", v)
 	}
 	for _, v := range []string{
 		"postgres://db/app", "https://example.com/a@b", "user@example.com", "Europe/Amsterdam", "",
+		"git@github.com:org/repo.git", "admin@localhost",
 	} {
 		assert.False(t, IsSensitiveEnvVar("DATABASE_URL", v), "%q carries no credential", v)
 	}

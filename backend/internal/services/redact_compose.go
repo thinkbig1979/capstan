@@ -56,10 +56,15 @@ func IsSensitiveEnvVar(key, value string) bool {
 	return IsSensitiveEnvKey(key) || HasURLUserinfo(value)
 }
 
-// HasURLUserinfo reports whether any scheme://... token in s carries a
+// HasURLUserinfo reports whether s, or any scheme://... token in it, carries a
 // credential, by asking RedactURLUserinfo: it returns a URL without one
-// byte-for-byte, so any change means it found userinfo to star.
+// byte-for-byte, so any change means it found userinfo to star. The whole
+// value is asked too, because the token scan needs "://" and RedactURLUserinfo
+// also reads opaque forms such as sftp:user:pw@host:/path (review S3).
 func HasURLUserinfo(s string) bool {
+	if t := strings.TrimSpace(s); RedactURLUserinfo(t) != t {
+		return true
+	}
 	for _, tok := range urlTokenRe.FindAllString(s, -1) {
 		if RedactURLUserinfo(tok) != tok {
 			return true

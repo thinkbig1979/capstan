@@ -305,11 +305,13 @@ func (h *SettingsHandler) GetGlobalEnv(c *gin.Context) {
 	// hole one endpoint sideways.
 	locked := !envUnlocked(c)
 	if locked {
-		for i := range envVars {
-			if services.IsSensitiveEnvVar(envVars[i]["key"], envVars[i]["value"]) {
-				envVars[i]["value"] = ""
-			}
+		// The rows carry no line numbers, so the masking reads the text again.
+		//nolint:gosec // the same config-derived path parseEnvFile read above
+		raw, err := os.ReadFile(globalEnvPath)
+		if err != nil {
+			raw = nil // rows that match no text are all blanked: fail closed
 		}
+		redactGlobalEnvVars(envVars, string(raw))
 	}
 
 	c.JSON(http.StatusOK, gin.H{

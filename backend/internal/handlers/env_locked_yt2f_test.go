@@ -61,8 +61,9 @@ func TestEnvLocked_Yt2f_HidesURLCommentedAndMultilineSecrets(t *testing.T) {
 	assert.Contains(t, locked, "# mirror at https://***@git.example.com/repo")
 }
 
-// A quote that never closes makes compose read to the end of the file, so the
-// locked view hides every row after it rather than guess where it ends.
+// A quote that never closes makes compose reject the file ("unterminated
+// quoted value"), so where the value ends is unknown: the locked view hides
+// every row after it rather than guess.
 func TestEnvLocked_Yt2f_UnclosedMultilineSecretFailsClosed(t *testing.T) {
 	const content = "TZ=Europe/Amsterdam\n" +
 		"API_TOKEN='yt2fopening\n" +

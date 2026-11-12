@@ -188,14 +188,21 @@ func redactEnvResponse(resp *EnvResponse) {
 	}
 }
 
-// hideMultilineBodies blanks the rows after a sensitive variable whose quoted
-// value is still open at the end of its line. compose reads a ' or " quoted
-// value across newlines to its closing quote (compose-go v2 dotenv/parser.go,
-// extractVarValue), so those rows are the secret's body: a PEM key's base64
-// lines, say. They are blanked up to and including the line that closes the
-// quote; with no closing quote, compose reads to the end of the file, and so
-// does this, failing closed. raw is the file text the entries were parsed
-// from; Line numbers index it.
+// hideMultilineBodies blanks the rows after a sensitive variable, or a
+// commented-out secret assignment, whose quoted value is still open at the end
+// of its line. compose reads a ' or " quoted value across newlines to its
+// closing quote (compose-go v2 dotenv/parser.go, extractVarValue), so those
+// rows are the secret's body: a PEM key's base64 lines, say. They are blanked
+// up to and including the line that closes the quote. With no closing quote,
+// compose rejects the whole file ("unterminated quoted value", parser.go
+// extractVarValue), so where the value ends is unknown and every following row
+// is blanked: fail closed. A commented-out opener is followed the same way,
+// although compose never reads it, because its body lines are the same secret
+// whether they are commented out too or not.
+//
+// raw is the file text the entries were parsed from; Line numbers index it.
+// Without it the body cannot be located, so every row after a sensitive one
+// is blanked.
 func hideMultilineBodies(entries []EnvEntry, raw string) {
 	lines := strings.Split(raw, "\n")
 	lineText := func(e EnvEntry) string {
@@ -205,10 +212,14 @@ func hideMultilineBodies(entries []EnvEntry, raw string) {
 		return lines[e.Line-1]
 	}
 	for i := 0; i < len(entries); i++ {
-		if !entries[i].Sensitive {
+		e := entries[i]
+		if !e.Sensitive && !(e.Comment && e.Key == "" && commentedSecretEnd(e.Value) != -1) {
 			continue
 		}
-		q, open := opensMultilineValue(lineText(entries[i]))
+		q, open := opensMultilineValue(lineText(e))
+		if raw == "" {
+			open = true
+		}
 		if !open {
 			continue
 		}
@@ -239,22 +250,83 @@ func opensMultilineValue(line string) (quote byte, open bool) {
 	return rest[0], end == -1
 }
 
+// commentedSecretEnd reports whether a comment row is a commented-out
+// assignment whose key or value is sensitive. If so it returns the index in
+// value just past the separator ("#OLD_SECRET=" has 12), else -1. The key is
+// read as compose would read it uncommented (composeLineKey).
+func commentedSecretEnd(value string) int {
+	body := strings.TrimLeftFunc(value, func(r rune) bool { return r == '#' || unicode.IsSpace(r) })
+	sep := strings.IndexAny(body, "=:")
+	if sep == -1 {
+		return -1
+	}
+	if key, ok := composeLineKey(body); ok && services.IsSensitiveEnvVar(key, body[sep+1:]) {
+		return len(value) - len(body) + sep + 1
+	}
+	return -1
+}
+
 // redactEnvCommentRow masks a comment row for a locked session. A commented-
 // out assignment whose key or value is sensitive keeps its text up to the
 // separator ("#OLD_SECRET="), so the locked view still shows which variable
 // it was. Otherwise only a URL credential in the text is starred.
 func redactEnvCommentRow(e *EnvEntry) {
-	body := strings.TrimLeftFunc(e.Value, func(r rune) bool { return r == '#' || unicode.IsSpace(r) })
-	if sep := strings.IndexAny(body, "=:"); sep != -1 {
-		if key, ok := composeLineKey(body); ok && services.IsSensitiveEnvVar(key, body[sep+1:]) {
-			e.Value = e.Value[:len(e.Value)-len(body)+sep+1]
-			e.Sensitive = true
-			return
-		}
+	if end := commentedSecretEnd(e.Value); end != -1 {
+		e.Value = e.Value[:end]
+		e.Sensitive = true
+		return
 	}
 	if services.HasURLUserinfo(e.Value) {
 		e.Value = services.RedactURLUserinfoInText(e.Value)
 		e.Sensitive = true
+	}
+}
+
+// redactGlobalEnvVars masks the global env rows (settings.go parseEnvFile) for
+// a locked session with the stack env's redaction, line by line (agent-os-yt2f
+// review S2). That parser drops comment lines and lines with no "=", and splits
+// every other line at its first "=", so a multi-line secret's body lines that
+// hold "=" (base64 padding) came back as rows whose KEY was secret text, and
+// "KEY: a=b" as a key holding part of the value; only values were masked.
+//
+// Each row is matched to the line it came from in raw by that parser's own
+// rule, and the stack env's verdict on the line decides: a sensitive line keeps
+// only the key compose reads (none for a body line) and no value. If the rows
+// do not match raw's lines (the file changed between the two reads), every key
+// and value is blanked: fail closed. agent-os-rd1l, which replaces that
+// parser, can drop the matching.
+func redactGlobalEnvVars(vars []map[string]string, raw string) {
+	resp := EnvResponse{Raw: raw, Entries: (&EnvHandler{}).parseEnvFile(raw)}
+	redactEnvResponse(&resp)
+	byLine := map[int]EnvEntry{}
+	for _, e := range resp.Entries {
+		byLine[e.Line] = e
+	}
+
+	lineOf := make([]int, len(vars))
+	n := 0
+	for i, l := range strings.Split(raw, "\n") {
+		t := strings.TrimSpace(l)
+		if t == "" || strings.HasPrefix(t, "#") || !strings.Contains(t, "=") {
+			continue
+		}
+		if n == len(vars) || !strings.HasPrefix(t, vars[n]["key"]) {
+			n = -1
+			break
+		}
+		lineOf[n] = i + 1
+		n++
+	}
+	aligned := n == len(vars)
+
+	for i, v := range vars {
+		e, found := byLine[lineOf[i]]
+		switch {
+		case !aligned || !found:
+			v["key"], v["value"] = "", ""
+		case e.Sensitive || services.IsSensitiveEnvVar(v["key"], v["value"]):
+			v["key"], v["value"] = e.Key, ""
+		}
 	}
 }
 
