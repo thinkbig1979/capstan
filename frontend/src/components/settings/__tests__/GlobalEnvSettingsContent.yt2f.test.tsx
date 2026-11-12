@@ -9,9 +9,11 @@
  * over parseGlobalEnvText, generated at e9e7c55), not hand-written.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
+import { render, renderHook, screen, fireEvent, waitFor, act } from '@testing-library/react'
+import type { ReactNode } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { GlobalEnvSettingsContent } from '../GlobalEnvSettingsContent'
+import { useGlobalEnvVars } from '../global-env/useGlobalEnvVars'
 import { useEnvUnlockStore } from '@/stores/envUnlockStore'
 import { useAuthStore } from '@/stores/authStore'
 import { queryKeys } from '@/lib/query-keys'
@@ -25,6 +27,10 @@ const lockedPayload: Payload = {"locked":true,"vars":[{"key":"PORT","value":"808
 // that looks like an assignment comes back locked with its key blanked too.
 const pemUnlocked: Payload = {"locked":false,"vars":[{"key":"PORT","value":"8080"},{"key":"SSH_KEY","value":"\"-----BEGIN"},{"key":"AAA","value":"bbb"},{"key":"TZ","value":"UTC"}]}
 const pemLocked: Payload = {"locked":true,"vars":[{"key":"PORT","value":"8080"},{"key":"SSH_KEY","value":""},{"key":"","value":""},{"key":"TZ","value":"UTC"}]}
+// PORT=8080 / DB_PASSWORD=pw / TZ=UTC, locked through redactGlobalEnvVars' fail-closed
+// branch (raw text that does not line up with the vars): every key and value blank.
+const failClosedUnlocked: Payload = {"locked":false,"vars":[{"key":"PORT","value":"8080"},{"key":"DB_PASSWORD","value":"pw"},{"key":"TZ","value":"UTC"}]}
+const failClosedLocked: Payload = {"locked":true,"vars":[{"key":"","value":""},{"key":"","value":""},{"key":"","value":""}]}
 // The same file with NEW=1 appended while the form was locked.
 const plusRowUnlocked: Payload = {"locked":false,"vars":[{"key":"PORT","value":"8080"},{"key":"DATABASE_URL","value":"postgres://u:pw@h/db"},{"key":"API_TOKEN","value":"tok"},{"key":"TZ","value":"UTC"},{"key":"NEW","value":"1"}]}
 
@@ -67,6 +73,23 @@ async function serve(next: Payload) {
     await client.invalidateQueries({ queryKey: queryKeys.settings.globalEnv() })
   })
   await waitFor(() => expect(mockGetGlobalEnv.mock.calls.length).toBeGreaterThan(calls))
+}
+
+/** A mutation calls the API after a tick: let it, so "not called" can fail. */
+async function afterATick() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  })
+}
+
+/** Save is refused with the alert, and clicking it writes nothing. */
+async function expectSaveRefused() {
+  expect(await screen.findByRole('alert')).toHaveTextContent(/can't be saved/)
+  expect(screen.getAllByRole('alert')).toHaveLength(1)
+  expect(saveButton()).toBeDisabled()
+  fireEvent.click(saveButton())
+  await afterATick()
+  expect(mockUpdateGlobalEnv).not.toHaveBeenCalled()
 }
 
 async function save() {
@@ -159,10 +182,7 @@ describe('global env form refuses to save rows it cannot line up (agent-os-yt2f)
     expect(value(1).value).toBe('9090')
     expect(saveButton()).toBeDisabled()
     fireEvent.click(saveButton())
-    // A mutation calls the API after a tick: let it, so "not called" can fail.
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 20))
-    })
+    await afterATick()
     expect(mockUpdateGlobalEnv).not.toHaveBeenCalled()
 
     fireEvent.click(screen.getByRole('button', { name: 'Reload' }))
@@ -177,5 +197,86 @@ describe('global env form refuses to save rows it cannot line up (agent-os-yt2f)
       { key: 'TZ', value: 'UTC' },
       { key: 'NEW', value: '1' },
     ]]])
+  })
+})
+
+describe('global env form refuses to save edits to rows it could not show while locked (agent-os-yt2f review S1, S2)', () => {
+  it('yt2f: a hidden PEM body row deleted while locked: Save is refused, Reload loads the settings', async () => {
+    server = pemLocked
+    renderForm()
+    await waitFor(() => expect(value(1).value).toBe('8080'))
+    fireEvent.click(screen.getAllByLabelText('Remove global env 3')[0])
+    await serve(pemUnlocked)
+
+    await expectSaveRefused()
+    fireEvent.click(screen.getByRole('button', { name: 'Reload' }))
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument())
+    expect(keyInput(3).value).toBe('AAA')
+  })
+
+  it('yt2f: when every key was blanked, a key typed into a row while locked never takes that row\'s secret: Save is refused', async () => {
+    server = failClosedLocked
+    renderForm()
+    await waitFor(() => expect(keyInput(3)).toBeInTheDocument())
+    fireEvent.change(keyInput(2), { target: { value: 'FOO' } })
+    await serve(failClosedUnlocked)
+
+    await expectSaveRefused()
+    expect(value(2).value).toBe('')
+  })
+
+  it('yt2f: when every key was blanked, a value typed into a row while locked: Save is refused', async () => {
+    server = failClosedLocked
+    renderForm()
+    await waitFor(() => expect(keyInput(3)).toBeInTheDocument())
+    fireEvent.change(value(2), { target: { value: 'typed' } })
+    await serve(failClosedUnlocked)
+
+    await expectSaveRefused()
+  })
+
+  it('yt2f: control: blanked rows left alone are refilled, key and value, and a row added while locked is kept', async () => {
+    server = failClosedLocked
+    renderForm()
+    await waitFor(() => expect(keyInput(3)).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Add Variable'))
+    fireEvent.change(keyInput(4), { target: { value: 'NEW' } })
+    fireEvent.change(value(4), { target: { value: '1' } })
+    await serve(failClosedUnlocked)
+    await waitFor(() => expect(saveButton()).not.toBeDisabled())
+
+    await save()
+    expect(mockUpdateGlobalEnv.mock.calls).toEqual([[[
+      { key: 'PORT', value: '8080' },
+      { key: 'DB_PASSWORD', value: 'pw' },
+      { key: 'TZ', value: 'UTC' },
+      { key: 'NEW', value: '1' },
+    ]]])
+  })
+})
+
+describe('useGlobalEnvVars refuses in handleSave itself, not only through the disabled button (agent-os-yt2f review S3)', () => {
+  function renderVars() {
+    client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    )
+    return renderHook(() => useGlobalEnvVars(vi.fn()), { wrapper })
+  }
+
+  it.each([
+    ['the payloads do not line up', lockedPayload, plusRowUnlocked, 0, 'key', 'PORT2'],
+    ['a row hidden while locked was edited', failClosedLocked, failClosedUnlocked, 1, 'key', 'FOO'],
+  ] as const)('yt2f: %s: handleSave writes nothing', async (_name, locked, unlocked, index, field, typed) => {
+    server = locked
+    const { result } = renderVars()
+    await waitFor(() => expect(result.current.vars).toHaveLength(locked.vars.length))
+    act(() => result.current.handleChange(index, field, typed))
+    await serve(unlocked)
+    await waitFor(() => expect(result.current.locked).toBe(false))
+
+    act(() => result.current.handleSave())
+    await afterATick()
+    expect(mockUpdateGlobalEnv).not.toHaveBeenCalled()
   })
 })

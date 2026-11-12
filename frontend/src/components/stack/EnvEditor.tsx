@@ -20,15 +20,25 @@ import { classifyError } from '@/lib/error-handler'
 import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 import { FileChangedNotice } from '@/components/FileChangedNotice'
 import { useExternalFileChange } from '@/hooks/useExternalFileChange'
-import { alignRedactedRows, refillRedactedRows, NO_REDACTED_ROWS } from '@/lib/env-unlock-rebase'
+import {
+  alignRedactedRows,
+  blindEditedRowIds,
+  holdsBlindEdit,
+  refillRedactedRows,
+  NO_REDACTED_ROWS,
+} from '@/lib/env-unlock-rebase'
 import type { EnvEntryDraft, EnvFileResponse } from '@/types'
 
 /** The fields of a row the locked view can hide, so an unlock can put them back. */
 const REDACTABLE_FIELDS = ['key', 'value', 'comment', 'quote', 'inlineComment'] as const
 
 // Placeholder copy (agent-os-yt2f): wording to be confirmed.
-const SAVE_REFUSED_COPY =
-  "The unlocked file does not line up with the rows you edited while locked, so they can't be saved safely. Reload to load the file; your edits will be lost."
+const SAVE_REFUSED_COPY = {
+  unaligned:
+    "The unlocked file does not line up with the rows you edited while locked, so they can't be saved safely. Reload to load the file; your edits will be lost.",
+  blind:
+    "You changed or deleted rows that were hidden while locked, so they can't be saved safely. Undo those changes, or Reload to load the file; your edits will be lost.",
+}
 
 interface EnvEditorProps {
   stackId: string
@@ -56,10 +66,17 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   // locked view (agent-os-yt2f): saving would write rows that hold the locked
   // shapes, so both saves are refused until Reload.
   const [saveRefused, setSaveRefused] = useState(false)
+  // Rows the user edited or deleted while the locked view hid them (agent-os-yt2f
+  // review S1, S2), with the unlocked rows they were lined up with. Save stays
+  // refused while any of them does not hold its real content.
+  const [blindGuard, setBlindGuard] = useState<{
+    ids: ReadonlySet<number>
+    aligned: ReadonlyMap<number, { key: string; value: string }>
+  } | null>(null)
   const [showEnvSection, setShowEnvSection] = useState(false)
   const nextRowId = useNextRowId()
 
-  const { historyIndex, historyLength, pushToHistory, handleUndo, handleRedo, resetHistory, rebaseHistory } =
+  const { historyIndex, historyLength, snapshots, pushToHistory, handleUndo, handleRedo, resetHistory, rebaseHistory } =
     useEnvHistory({ setEntries, setRawContent, setHasUnsavedChanges })
 
   // Re-masks sensitive-by-name entries when the unlock session ends (manual
@@ -135,6 +152,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
           : NO_REDACTED_ROWS,
       })
       setSaveRefused(false)
+      setBlindGuard(null)
       // `raw` is absent while locked — the backend withholds it rather than
       // sending an empty file, so default it instead of writing `undefined` into
       // a textarea (agent-os-7o5s).
@@ -144,6 +162,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
       resetHistory(rows, next.raw ?? '')
     } else {
       setSaveRefused(false)
+      setBlindGuard(null)
       setShowEnvSection(false)
     }
   }
@@ -170,6 +189,12 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
         return false
       }
       setSaveRefused(false)
+      // Only an unlock against a locked baseline lines anything up. A later one
+      // (locked again, unlocked again) keeps the guard it set.
+      if (aligned.size > 0) {
+        const ids = blindEditedRowIds([entries, ...snapshots.map((s) => s.entries)], loadedEnv.rows, aligned)
+        setBlindGuard(ids.size > 0 ? { ids, aligned } : null)
+      }
       const fill = (rows: EnvEntryRow[]) =>
         refillRedactedRows(rows, loadedEnv.rows, aligned, REDACTABLE_FIELDS)
       const baseRows = fill(loadedEnv.rows)
@@ -203,6 +228,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
       // The raw text the user never touched follows the file, as the baseline
       // does; otherwise rawContent !== loadedEnv.raw would read as a raw edit.
       if (savedRaw !== undefined && rawContent === loadedEnv.raw) setRawContent(savedRaw)
+      setBlindGuard(null)
       setLoadedEnv((prev) => ({
         rows: sent?.entries ?? prev.rows,
         raw: savedRaw ?? prev.raw,
@@ -229,12 +255,23 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   // the edits the user kept visible, whichever view the lock found them in.
   const activeView = locked ? 'table' : view
 
+  const refusal = saveRefused
+    ? 'unaligned'
+    : blindGuard && holdsBlindEdit(entries, blindGuard.ids, blindGuard.aligned)
+      ? 'blind'
+      : null
   // Refused in the handlers too, not only by the disabled buttons.
   const saveTable = () => {
-    if (!saveRefused) handleSaveTable()
+    if (!refusal) handleSaveTable()
   }
   const saveRaw = () => {
-    if (!saveRefused) handleSaveRaw()
+    if (!refusal) handleSaveRaw()
+  }
+  // A blind edit can be refused with nothing held back (the unlock lined up), so
+  // Reload loads the payload on screen when no newer one is pending.
+  const reloadFile = () => {
+    if (changedOnDisk) reload()
+    else if (envData) hydrate(envData)
   }
 
   // agent-os-wczm. The ISERROR guard is the one that was broken: this component
@@ -322,8 +359,8 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
         />
       )}
 
-      {saveRefused && !locked ? (
-        <FileChangedNotice onReload={reload}>{SAVE_REFUSED_COPY}</FileChangedNotice>
+      {refusal && !locked ? (
+        <FileChangedNotice onReload={reloadFile}>{SAVE_REFUSED_COPY[refusal]}</FileChangedNotice>
       ) : (
         changedOnDisk && <FileChangedNotice onReload={reload} />
       )}
@@ -339,7 +376,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
         saving={saveMutation.isPending}
         hasUnsavedChanges={hasUnsavedChanges}
         locked={locked}
-        saveRefused={saveRefused}
+        saveRefused={refusal !== null}
       />
 
       {view === 'raw' && !locked && (
@@ -349,7 +386,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
           onSaveRaw={saveRaw}
           saving={saveMutation.isPending}
           hasUnsavedChanges={hasUnsavedChanges}
-          saveRefused={saveRefused}
+          saveRefused={refusal !== null}
         />
       )}
     </div>

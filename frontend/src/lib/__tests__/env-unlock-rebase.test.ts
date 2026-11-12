@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { alignRedactedRows, refillRedactedRows, NO_REDACTED_ROWS } from '../env-unlock-rebase'
+import { alignRedactedRows, blindEditedRowIds, holdsBlindEdit, refillRedactedRows, NO_REDACTED_ROWS } from '../env-unlock-rebase'
 
 type Row = { _rowId: number; key: string; value: string; line?: number; comment?: boolean }
 const row = (_rowId: number, key: string, value: string, extra: Partial<Row> = {}): Row => ({ _rowId, key, value, ...extra })
@@ -114,5 +114,53 @@ describe('alignRedactedRows fails closed (agent-os-yt2f)', () => {
 
   it('yt2f: with nothing redacted there is nothing to line up, whatever the payload', () => {
     expect(alignRedactedRows(baseline, NO_REDACTED_ROWS, [])).toEqual(new Map())
+  })
+})
+
+describe('rows hidden while locked (agent-os-yt2f review S1, S2)', () => {
+  // Locked: PORT, a hidden body row (key and value blank), a commented secret (key blank, value shown).
+  const baseline = [
+    row(1, 'PORT', '8080', { line: 1 }),
+    row(2, '', '', { line: 2 }),
+    row(3, '', '#OLD_SECRET=', { line: 3, comment: true }),
+  ]
+  const next = [
+    { key: 'PORT', value: '8080', line: 1 },
+    { key: 'AAA', value: 'bbb', line: 2 },
+    { key: '', value: '#OLD_SECRET=x', line: 3, comment: true },
+  ]
+  const aligned = alignRedactedRows(baseline, new Set([2, 3]), next)!
+
+  it('yt2f: a key typed into a hidden row takes nothing from it', () => {
+    const kept = [baseline[0], row(2, 'FOO', '', { line: 2 }), baseline[2]]
+
+    expect(refillRedactedRows(kept, baseline, aligned, FIELDS)[1]).toEqual(row(2, 'FOO', '', { line: 2 }))
+  })
+
+  it('yt2f: a hidden row deleted, keyed or valued is a blind edit; a visible commented secret deleted is not', () => {
+    const deletedHidden = [baseline[0], baseline[2]]
+    const keyedHidden = [baseline[0], row(2, 'FOO', '', { line: 2 }), baseline[2]]
+    const valuedHidden = [baseline[0], row(2, '', 'typed', { line: 2 }), baseline[2]]
+    const deletedComment = [baseline[0], baseline[1]]
+
+    expect(blindEditedRowIds([deletedHidden], baseline, aligned)).toEqual(new Set([2]))
+    expect(blindEditedRowIds([keyedHidden], baseline, aligned)).toEqual(new Set([2]))
+    expect(blindEditedRowIds([valuedHidden], baseline, aligned)).toEqual(new Set([2]))
+    expect(blindEditedRowIds([deletedComment], baseline, aligned)).toEqual(new Set())
+    expect(blindEditedRowIds([baseline], baseline, aligned)).toEqual(new Set())
+  })
+
+  it('yt2f: any row list counts, so an edit only an Undo snapshot holds is caught', () => {
+    expect(blindEditedRowIds([baseline, [baseline[0], baseline[2]]], baseline, aligned)).toEqual(new Set([2]))
+  })
+
+  it('yt2f: a blind row is safe again only when it holds the real key and value', () => {
+    const ids = new Set([2])
+    const real = refillRedactedRows(baseline, baseline, aligned, FIELDS)
+
+    expect(holdsBlindEdit(real, ids, aligned)).toBe(false)
+    expect(holdsBlindEdit([real[0], real[2]], ids, aligned)).toBe(true)
+    expect(holdsBlindEdit([real[0], row(2, 'AAA', '', { line: 2 }), real[2]], ids, aligned)).toBe(true)
+    expect(holdsBlindEdit([real[0], row(2, 'FOO', '', { line: 2 })], new Set(), aligned)).toBe(false)
   })
 })

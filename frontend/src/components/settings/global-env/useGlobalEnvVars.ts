@@ -4,7 +4,13 @@ import { useTextFilter } from '@/hooks/useTextFilter'
 import { useGlobalEnv, useUpdateGlobalEnv } from '@/hooks/useResources'
 import { useExternalFileChange } from '@/hooks/useExternalFileChange'
 import { presentError } from '@/lib/error-handler'
-import { alignRedactedRows, refillRedactedRows, NO_REDACTED_ROWS } from '@/lib/env-unlock-rebase'
+import {
+  alignRedactedRows,
+  blindEditedRowIds,
+  holdsBlindEdit,
+  refillRedactedRows,
+  NO_REDACTED_ROWS,
+} from '@/lib/env-unlock-rebase'
 import { useNextRowId } from '@/components/stack/env-editor/useRowId'
 import type { EnvRow, EnvVar, IndexedEnvVar } from './types'
 
@@ -40,6 +46,12 @@ export function useGlobalEnvVars(setVisible: Dispatch<SetStateAction<Record<numb
   // An unlock whose payload could not be lined up with the rows kept from the
   // locked view (agent-os-yt2f): Save is refused until Reload.
   const [saveRefused, setSaveRefused] = useState(false)
+  // Rows the user edited or deleted while the locked view hid them, keys and all
+  // (agent-os-yt2f review S1, S2), with the unlocked rows they were lined up with.
+  // Save stays refused while any of them does not hold its real content.
+  const [blindGuard, setBlindGuard] = useState<{ ids: ReadonlySet<number>; aligned: ReadonlyMap<number, EnvVar> } | null>(
+    null,
+  )
 
   // The list a save last sent. Its own refetch comes back carrying exactly this,
   // which must not read as a change made elsewhere (agent-os-lqcw). State, not a
@@ -59,18 +71,20 @@ export function useGlobalEnvVars(setVisible: Dispatch<SetStateAction<Record<numb
   // every blanked row the user left as it was, so a save never writes a blank.
   // When the two payloads do not line up, nothing is filled and Save is refused
   // until Reload (agent-os-yt2f).
+  const hydrate = (next: NonNullable<typeof data>) => {
+    const rows = (next.vars ?? []).map((v) => ({ ...v, _rowId: nextRowId() }))
+    setVars(rows)
+    setLoaded(rows)
+    setRedacted(next.locked ? new Set(rows.filter((r) => r.value === '').map((r) => r._rowId)) : NO_REDACTED_ROWS)
+    setSaveRefused(false)
+    setBlindGuard(null)
+    setSent(null)
+    setVisible({})
+    setDirty(false)
+  }
   const { changedOnDisk, reload } = useExternalFileChange(data, {
     isDirty: dirty,
-    hydrate: (next) => {
-      const rows = (next.vars ?? []).map((v) => ({ ...v, _rowId: nextRowId() }))
-      setVars(rows)
-      setLoaded(rows)
-      setRedacted(next.locked ? new Set(rows.filter((r) => r.value === '').map((r) => r._rowId)) : NO_REDACTED_ROWS)
-      setSaveRefused(false)
-      setSent(null)
-      setVisible({})
-      setDirty(false)
-    },
+    hydrate,
     rebaseWhileDirty: (next, prev) => {
       if (!prev || Boolean(next.locked) === Boolean(prev.locked)) return false
       // Locked: the payload is redacted and carries nothing to rebase onto.
@@ -82,6 +96,12 @@ export function useGlobalEnvVars(setVisible: Dispatch<SetStateAction<Record<numb
         return false
       }
       setSaveRefused(false)
+      // Only an unlock against a locked baseline lines anything up. A later one
+      // (locked again, unlocked again) keeps the guard it set.
+      if (aligned.size > 0) {
+        const ids = blindEditedRowIds([vars], loaded, aligned)
+        setBlindGuard(ids.size > 0 ? { ids, aligned } : null)
+      }
       const baseline = refillRedactedRows(loaded, loaded, aligned, REDACTABLE_FIELDS)
       setVars(refillRedactedRows(vars, loaded, aligned, REDACTABLE_FIELDS))
       setLoaded(baseline)
@@ -94,6 +114,12 @@ export function useGlobalEnvVars(setVisible: Dispatch<SetStateAction<Record<numb
     isOwnSave: (next) => sent !== null && sameVars(next.vars ?? [], sent),
     onOwnSave: () => setSent(null),
   })
+
+  const refusal = saveRefused
+    ? ('unaligned' as const)
+    : blindGuard && holdsBlindEdit(vars, blindGuard.ids, blindGuard.aligned)
+      ? ('blind' as const)
+      : null
 
   // Wrap vars with their original index so filtered results can route edits correctly.
   const indexedVars = useMemo<IndexedEnvVar[]>(
@@ -129,7 +155,7 @@ export function useGlobalEnvVars(setVisible: Dispatch<SetStateAction<Record<numb
 
   const handleSave = () => {
     // Refused here too, not only by the disabled button.
-    if (saveRefused) return
+    if (refusal) return
     const rows = cleanRows(vars)
     setSent(rows)
     // The wire format has no row id.
@@ -140,6 +166,7 @@ export function useGlobalEnvVars(setVisible: Dispatch<SetStateAction<Record<numb
         // stay dirty, and the refetch is then recognised as this save's own
         // (agent-os-lqcw, the same rule as agent-os-3761).
         setLoaded(rows)
+        setBlindGuard(null)
         if (sameVars(cleanRows(varsRef.current), rows)) {
           setDirty(false)
           setSent(null)
@@ -171,7 +198,9 @@ export function useGlobalEnvVars(setVisible: Dispatch<SetStateAction<Record<numb
     // play. Saving from that state would persist the blanks, and the backend 403s
     // the write, so the panel disables Save until unlocked (agent-os-7o5s).
     locked: data?.locked === true,
-    saveRefused: saveRefused && data?.locked !== true,
+    // Why Save is refused (agent-os-yt2f), or null. Never while locked: the lock
+    // notice and the disabled Save already cover that.
+    saveRefused: data?.locked === true ? null : refusal,
     vars,
     dirty,
     query,
@@ -182,7 +211,12 @@ export function useGlobalEnvVars(setVisible: Dispatch<SetStateAction<Record<numb
     handleDelete,
     handleSave,
     changedElsewhere: changedOnDisk,
-    reloadChanged: reload,
+    // A blind edit can be refused with nothing held back (the unlock lined up),
+    // so Reload loads the payload on screen when no newer one is pending.
+    reloadChanged: () => {
+      if (changedOnDisk) reload()
+      else if (data) hydrate(data)
+    },
     isSaving: updateGlobalEnv.isPending,
   }
 }

@@ -10,6 +10,18 @@ interface Identified {
   _rowId: number
 }
 
+interface Shown {
+  key: string
+  value: string
+}
+
+/**
+ * A row the locked view showed with no key and no value (a multi-line secret's
+ * body row, or any row of a global env payload whose keys were all blanked):
+ * the user could not tell which variable it was (agent-os-yt2f review S1, S2).
+ */
+const isHidden = (row: Shown) => row.key === '' && row.value === ''
+
 /** "Nothing was redacted": the baseline already holds real values. */
 export const NO_REDACTED_ROWS: ReadonlySet<number> = new Set()
 
@@ -56,10 +68,14 @@ export function alignRedactedRows<B extends Lined & Identified, N extends Lined>
  * deleted row takes nothing, and a row added while locked has no baseline row
  * and takes nothing either. Rows are followed by `_rowId`, never by key.
  *
+ * A hidden row the user edited takes nothing at all: they could not see which
+ * variable it was, so a typed key must not inherit its secret. holdsBlindEdit
+ * then refuses the save.
+ *
  * Rows are returned as is when nothing needs filling, so the caller can compare
  * by reference.
  */
-export function refillRedactedRows<T extends Identified>(
+export function refillRedactedRows<T extends Identified & Shown>(
   rows: T[],
   baseline: T[],
   aligned: ReadonlyMap<number, Partial<T>>,
@@ -72,6 +88,7 @@ export function refillRedactedRows<T extends Identified>(
     const was = baselineById.get(row._rowId)
     const now = aligned.get(row._rowId)
     if (!was || !now) return row
+    if (isHidden(was) && (row.key !== was.key || row.value !== was.value)) return row
     let out = row
     for (const field of fields) {
       if (row[field] !== was[field] || now[field] === was[field]) continue
@@ -82,4 +99,49 @@ export function refillRedactedRows<T extends Identified>(
     return out
   })
   return changed ? filled : rows
+}
+
+/**
+ * The ids of the hidden rows the user edited blind while locked (agent-os-yt2f
+ * review S1, S2): deleted, which would cut a line out of a multi-line secret,
+ * or given a typed key or value. Call it at the unlock, before the refill, with
+ * every row list that can come back (the rows on screen and each Undo
+ * snapshot), so a blind edit the user undid and could Redo is caught too.
+ */
+export function blindEditedRowIds<T extends Identified & Shown>(
+  rowLists: T[][],
+  lockedBaseline: T[],
+  aligned: ReadonlyMap<number, Shown>,
+): Set<number> {
+  const ids = new Set<number>()
+  const listsById = rowLists.map((rows) => new Map(rows.map((row) => [row._rowId, row])))
+  for (const was of lockedBaseline) {
+    if (!aligned.has(was._rowId) || !isHidden(was)) continue
+    const edited = listsById.some((byId) => {
+      const row = byId.get(was._rowId)
+      return !row || row.key !== was.key || row.value !== was.value
+    })
+    if (edited) ids.add(was._rowId)
+  }
+  return ids
+}
+
+/**
+ * True while a row edited blind does not hold its real content, so saving would
+ * write over content the user never saw. A row that holds exactly the unlocked
+ * key and value (an Undo back to before the edit) is safe again; a row edited
+ * after the unlock, when it could be seen, is never in `blindIds`.
+ */
+export function holdsBlindEdit<T extends Identified & Shown>(
+  rows: T[],
+  blindIds: ReadonlySet<number>,
+  aligned: ReadonlyMap<number, Shown>,
+): boolean {
+  if (blindIds.size === 0) return false
+  const rowsById = new Map(rows.map((row) => [row._rowId, row]))
+  return [...blindIds].some((id) => {
+    const row = rowsById.get(id)
+    const now = aligned.get(id)
+    return !row || !now || row.key !== now.key || row.value !== now.value
+  })
 }

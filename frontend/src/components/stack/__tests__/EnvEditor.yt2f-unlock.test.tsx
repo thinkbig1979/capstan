@@ -51,7 +51,13 @@ const urlLocked = {"hasEnvFile":true,"filename":".env","entries":[{"key":"PORT",
 // more than the locked baseline, so the two cannot be lined up.
 const pemPlusRowUnlocked = {"hasEnvFile":true,"filename":".env","entries":[{"key":"PORT","value":"8080","line":1,"sensitive":false},{"key":"","value":"#OLD_SECRET=commentedvalue","line":2,"sensitive":false,"comment":true},{"key":"SSH_KEY","value":"\"-----BEGIN","line":3,"sensitive":true},{"key":"bodylineAAAA","value":"bodylineAAAA","line":4,"sensitive":false,"comment":true},{"key":"","value":"-----END\"","line":5,"sensitive":false,"comment":true},{"key":"TZ","value":"UTC","line":6,"sensitive":false},{"key":"NEW","value":"1","line":7,"sensitive":false}],"raw":"PORT=8080\n#OLD_SECRET=commentedvalue\nSSH_KEY=\"-----BEGIN\nbodylineAAAA\n-----END\"\nTZ=UTC\nNEW=1\n"}
 
-type Payload = typeof pemUnlocked | typeof pemLocked | typeof urlUnlocked | typeof urlLocked | typeof pemPlusRowUnlocked
+// PORT=8080 / SSH_KEY="-----BEGIN / AAA=bbb / -----END" / TZ=UTC: the body line
+// holding "=" arrives locked as a plain row with key and value blank, and its
+// key input is editable.
+const aaaUnlocked = {"hasEnvFile":true,"filename":".env","entries":[{"key":"PORT","value":"8080","line":1,"sensitive":false},{"key":"SSH_KEY","value":"\"-----BEGIN","line":2,"sensitive":true},{"key":"AAA","value":"bbb","line":3,"sensitive":false},{"key":"","value":"-----END\"","line":4,"sensitive":false,"comment":true},{"key":"TZ","value":"UTC","line":5,"sensitive":false}],"raw":"PORT=8080\nSSH_KEY=\"-----BEGIN\nAAA=bbb\n-----END\"\nTZ=UTC\n"}
+const aaaLocked = {"hasEnvFile":true,"filename":".env","entries":[{"key":"PORT","value":"8080","line":1,"sensitive":false},{"key":"SSH_KEY","value":"","line":2,"sensitive":true},{"key":"","value":"","line":3,"sensitive":true},{"key":"","value":"","line":4,"sensitive":true,"comment":true},{"key":"TZ","value":"UTC","line":5,"sensitive":false}],"locked":true}
+
+type Payload = typeof aaaUnlocked | typeof aaaLocked | typeof pemUnlocked | typeof pemLocked | typeof urlUnlocked | typeof urlLocked | typeof pemPlusRowUnlocked
 type Entry = { key: string; value: string; comment?: boolean; quote?: string; inlineComment?: string }
 
 let server: Payload
@@ -81,6 +87,23 @@ async function serve(next: Payload) {
     await queryClient.invalidateQueries({ queryKey: queryKeys.stack.env('s1') })
   })
   await waitFor(() => expect(mockGetEnv.mock.calls.length).toBeGreaterThan(calls))
+}
+
+/** A mutation calls the API after a tick: let it, so "not called" can fail. */
+async function afterATick() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  })
+}
+
+/** Save is refused with the alert, and clicking it writes nothing. */
+async function expectSaveRefused() {
+  expect(await screen.findByRole('alert')).toHaveTextContent(/can't be saved/)
+  expect(screen.getAllByRole('alert')).toHaveLength(1)
+  expect(saveButton()).toBeDisabled()
+  fireEvent.click(saveButton())
+  await afterATick()
+  expect(mockUpdateEnv).not.toHaveBeenCalled()
 }
 
 async function save() {
@@ -191,6 +214,7 @@ describe('EnvEditor refuses to save rows it cannot line up (agent-os-yt2f)', () 
     const rawSave = screen.getAllByRole('button', { name: /^Save$/ }).at(-1) as HTMLButtonElement
     expect(rawSave).toBeDisabled()
     fireEvent.click(rawSave)
+    await afterATick()
     expect(mockUpdateEnv).not.toHaveBeenCalled()
 
     fireEvent.click(screen.getByRole('button', { name: 'Reload' }))
@@ -200,6 +224,95 @@ describe('EnvEditor refuses to save rows it cannot line up (agent-os-yt2f)', () 
     fireEvent.change(input(1), { target: { value: '9090' } })
     await save()
     expect(savedRows()).toEqual(realRows(pemPlusRowUnlocked, { 0: { value: '9090' } }))
+  })
+})
+
+describe('EnvEditor refuses to save edits to rows it could not show while locked (agent-os-yt2f review S1, S2)', () => {
+  it('yt2f: a hidden PEM body row deleted while locked: Save is refused, Reload loads the file', async () => {
+    server = pemLocked
+    renderEditor()
+    await waitFor(() => expect(input(1).value).toBe('8080'))
+    fireEvent.click(screen.getAllByLabelText('Delete entry 4')[0])
+    await serve(pemUnlocked)
+
+    await expectSaveRefused()
+    fireEvent.click(screen.getByRole('button', { name: 'Reload' }))
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument())
+    fireEvent.change(input(1), { target: { value: '9090' } })
+    await save()
+    expect(savedRows()).toEqual(realRows(pemUnlocked, { 0: { value: '9090' } }))
+  })
+
+  it('yt2f: a hidden body row holding "=" deleted while locked: Save is refused', async () => {
+    server = aaaLocked
+    renderEditor()
+    await waitFor(() => expect(input(1).value).toBe('8080'))
+    fireEvent.click(screen.getAllByLabelText('Delete entry 3')[0])
+    await serve(aaaUnlocked)
+
+    await expectSaveRefused()
+  })
+
+  it('yt2f: a key typed into a hidden body row while locked never takes its value: Save is refused', async () => {
+    server = aaaLocked
+    renderEditor()
+    await waitFor(() => expect(input(1).value).toBe('8080'))
+    fireEvent.change(keyInput(3), { target: { value: 'FOO' } })
+    await serve(aaaUnlocked)
+
+    await expectSaveRefused()
+    expect(input(3).value).toBe('')
+  })
+
+  it('yt2f: a value typed into a hidden body row while locked: Save is refused', async () => {
+    server = aaaLocked
+    renderEditor()
+    await waitFor(() => expect(input(1).value).toBe('8080'))
+    fireEvent.change(input(3), { target: { value: 'typed' } })
+    await serve(aaaUnlocked)
+
+    await expectSaveRefused()
+  })
+
+  it('yt2f: Undo of the blind edit after the unlock lifts the refusal and saves the real rows', async () => {
+    server = aaaLocked
+    renderEditor()
+    await waitFor(() => expect(input(1).value).toBe('8080'))
+    fireEvent.change(input(1), { target: { value: '9090' } })
+    fireEvent.change(keyInput(3), { target: { value: 'FOO' } })
+    await serve(aaaUnlocked)
+    await expectSaveRefused()
+
+    await userEvent.setup().keyboard('{Control>}z{/Control}')
+
+    await waitFor(() => expect(saveButton()).not.toBeDisabled())
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    await save()
+    expect(savedRows()).toEqual(realRows(aaaUnlocked, { 0: { value: '9090' } }))
+  })
+
+  it('yt2f: a blind edit undone before the unlock and redone after it: Save is refused', async () => {
+    server = aaaLocked
+    renderEditor()
+    await waitFor(() => expect(input(1).value).toBe('8080'))
+    fireEvent.change(keyInput(3), { target: { value: 'FOO' } })
+    const keyboard = userEvent.setup().keyboard
+    await keyboard('{Control>}z{/Control}')
+    await waitFor(() => expect(keyInput(3).value).toBe(''))
+    await serve(aaaUnlocked)
+    await waitFor(() => expect(keyInput(3).value).toBe('AAA'))
+
+    await keyboard('{Control>}y{/Control}')
+
+    await waitFor(() => expect(keyInput(3).value).toBe('FOO'))
+    await expectSaveRefused()
+  })
+
+  it('yt2f: control: hidden rows left alone are refilled and saved as they are', async () => {
+    await editLockedThenUnlock(aaaLocked, aaaUnlocked)
+
+    await save()
+    expect(savedRows()).toEqual(realRows(aaaUnlocked, { 0: { value: '9090' } }))
   })
 })
 

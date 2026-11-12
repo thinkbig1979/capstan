@@ -151,8 +151,9 @@ export function GlobalEnvSettingsContent() {
       {saveRefused ? (
         // Placeholder copy (agent-os-yt2f): wording to be confirmed.
         <FileChangedNotice onReload={reloadChanged}>
-          The unlocked settings do not line up with the variables you edited while locked, so they
-          can&apos;t be saved safely. Reload to load the settings; your edits will be lost.
+          {saveRefused === 'unaligned'
+            ? "The unlocked settings do not line up with the variables you edited while locked, so they can't be saved safely. Reload to load the settings; your edits will be lost."
+            : "You changed or deleted variables that were hidden while locked, so they can't be saved safely. Reload to load the settings; your edits will be lost."}
         </FileChangedNotice>
       ) : (
         changedElsewhere && (
@@ -170,7 +171,7 @@ export function GlobalEnvSettingsContent() {
         <Button
           type="button"
           onClick={handleSave}
-          disabled={isSaving || !dirty || locked || saveRefused}
+          disabled={isSaving || !dirty || locked || saveRefused !== null}
           title={locked ? 'Unlock with your password to edit global environment variables' : undefined}
         >
           {isSaving ? (
