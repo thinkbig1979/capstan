@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -233,4 +234,75 @@ func TestLegacyContainerPolicyRekeyedOnScanTickYgyv(t *testing.T) {
 	p, err := svc.db.GetAutoUpdatePolicy("container", "web")
 	require.NoError(t, err)
 	require.Equal(t, "p-old", p.ID)
+}
+
+// TestLegacyOrphansKeepNewestIntentYgyv: two orphaned ID rows that resolve to
+// the same name. The one the operator changed last wins, whatever the order
+// they were created in, so a policy switched off is not switched back on by
+// an older row for the same container.
+func TestLegacyOrphansKeepNewestIntentYgyv(t *testing.T) {
+	cases := []struct {
+		name              string
+		enabledCreatedAt  string
+		disabledCreatedAt string
+	}{
+		{"the newer row was disabled later", "2026-01-01T00:00:00Z", "2026-02-01T00:00:00Z"},
+		{"an older-created row was disabled later", "2026-02-01T00:00:00Z", "2026-01-01T00:00:00Z"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			enabledID, disabledID := ygyvID("1a"), ygyvID("2b")
+			svc := newApplyFixture(t, &ygyvDocker{live: map[string]string{}})
+			require.NoError(t, svc.db.UpsertAutoUpdatePolicy(&models.AutoUpdatePolicy{
+				ID: "p-enabled", TargetType: "container", TargetID: enabledID, Enabled: true,
+				CreatedAt: tc.enabledCreatedAt, UpdatedAt: "2026-03-01T00:00:00Z",
+			}))
+			require.NoError(t, svc.db.UpsertAutoUpdatePolicy(&models.AutoUpdatePolicy{
+				ID: "p-disabled", TargetType: "container", TargetID: disabledID, Enabled: false,
+				CreatedAt: tc.disabledCreatedAt, UpdatedAt: "2026-04-01T10:00:00+02:00",
+			}))
+			for _, id := range []string{enabledID, disabledID} {
+				require.NoError(t, svc.db.InsertUpdateHistory(&models.UpdateHistoryEntry{
+					ID: "h-" + id[:4], ContainerID: id, ContainerName: "web", Image: "x:latest",
+					Status: "success", Trigger: "auto", StartedAt: time.Now().Format(time.RFC3339),
+				}))
+			}
+
+			svc.RunAutoUpdates(context.Background(), nil)
+
+			got := ygyvPolicies(t, svc)
+			require.Len(t, got, 1, "%v", got)
+			p := got["web"]
+			require.Equal(t, "p-disabled", p.ID, "the operator's last change wins")
+			require.False(t, p.Enabled)
+		})
+	}
+}
+
+// TestUnresolvableLegacyPolicyWarnsOnceYgyv: a row that resolves to no name
+// is warned about once per process, then logged at Debug, not on every tick.
+func TestUnresolvableLegacyPolicyWarnsOnceYgyv(t *testing.T) {
+	svc := newApplyFixture(t, &ygyvDocker{live: map[string]string{}})
+	var buf strings.Builder
+	svc.logger = slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	seedYgyvPolicy(t, svc, "p-unknown", ygyvID("d4"), 0)
+
+	for range 3 {
+		svc.RunAutoUpdates(context.Background(), nil)
+	}
+
+	var warn, debug int
+	for _, line := range strings.Split(buf.String(), "\n") {
+		if !strings.Contains(line, "no known container name") {
+			continue
+		}
+		switch {
+		case strings.Contains(line, "level=WARN"):
+			warn++
+		case strings.Contains(line, "level=DEBUG"):
+			debug++
+		}
+	}
+	require.Equal(t, 1, warn, "warned once")
+	require.Equal(t, 2, debug, "then quiet")
 }

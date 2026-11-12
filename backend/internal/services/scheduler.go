@@ -183,6 +183,14 @@ type SchedulerService struct {
 	// deadlock against the goroutines it is waiting for. Order: lifecycleMu
 	// before mu, never the reverse.
 	lifecycleMu sync.Mutex
+
+	// rekeyMu serialises rekeyLegacyContainerPolicies runs (Start's one-off,
+	// scan ticks and passes can overlap) and guards unresolvedWarned: the
+	// container-ID policies already warned about as unresolvable, so each is
+	// warned about once per process, not on every tick (agent-os-ygyv).
+	rekeyMu          sync.Mutex
+	unresolvedWarned map[string]bool
+
 	// closed is the terminal latch set by Close at process shutdown. Once set,
 	// Start and Restart refuse, so a settings save that lands during shutdown
 	// cannot re-arm the scan ticker or the apply loop. Guarded by lifecycleMu;
@@ -1031,7 +1039,8 @@ const rekeyTimeout = time.Minute
 // names either a live container, whose name Docker gives, or one an update
 // already replaced, whose name update_history recorded. Rows for live
 // containers are moved first, so when an old orphaned row and the live
-// container's row resolve to the same name, the live one keeps it. A row whose
+// container's row resolve to the same name, the live one keeps it; among
+// orphans, the most recently updated one keeps it. A row whose
 // name is already taken is deleted, since that name's policy is the newer
 // one. Every move and delete is logged with the old ID and the name, the record
 // of what this changed. A row that resolves to no name is left and stays
@@ -1041,6 +1050,9 @@ const rekeyTimeout = time.Minute
 // not-found stops the run before anything is written, so the live/orphan order
 // is never decided on a partial picture; the next run tries again.
 func (s *SchedulerService) rekeyLegacyContainerPolicies(ctx context.Context) {
+	s.rekeyMu.Lock()
+	defer s.rekeyMu.Unlock()
+
 	legacy, err := s.db.LegacyContainerPolicies()
 	if err != nil {
 		s.logger.Error("Failed to read container-ID auto-update policies; they are re-keyed on a later run", "error", err)
@@ -1085,12 +1097,41 @@ func (s *SchedulerService) rekeyLegacyContainerPolicies(ctx context.Context) {
 			return
 		}
 		if name == "" {
-			s.logger.Warn("Auto-update policy names a container ID with no known container name; it matches nothing",
+			// It can never resolve, and it matched nothing before either; warn
+			// once per process and keep later runs quiet.
+			level := slog.LevelDebug
+			if !s.unresolvedWarned[p.ID] {
+				if s.unresolvedWarned == nil {
+					s.unresolvedWarned = map[string]bool{}
+				}
+				s.unresolvedWarned[p.ID] = true
+				level = slog.LevelWarn
+			}
+			s.logger.Log(ctx, level, "Auto-update policy names a container ID with no known container name; it matches nothing",
 				"policy_id", p.ID, "container_id", p.TargetID)
 			continue
 		}
 		orphaned = append(orphaned, move{p, name, "update_history"})
 	}
+
+	// Orphans that resolve to the same name: the most recently updated row
+	// wins, because its state is the operator's latest choice. Ordering by age
+	// kept the oldest, which could turn a policy the operator switched off back
+	// on. Times are compared parsed, not as text, since the stored spelling
+	// carries the server's UTC offset; ties go to the lower id.
+	slices.SortStableFunc(orphaned, func(a, b move) int {
+		ta, ea := time.Parse(time.RFC3339, a.policy.UpdatedAt)
+		tb, eb := time.Parse(time.RFC3339, b.policy.UpdatedAt)
+		if ea == nil && eb == nil && !ta.Equal(tb) {
+			return tb.Compare(ta)
+		}
+		if ea != nil || eb != nil {
+			if c := strings.Compare(b.policy.UpdatedAt, a.policy.UpdatedAt); c != 0 {
+				return c
+			}
+		}
+		return strings.Compare(a.policy.ID, b.policy.ID)
+	})
 
 	for _, m := range append(live, orphaned...) {
 		outcome, err := s.db.RekeyContainerPolicy(m.policy.ID, m.policy.TargetID, m.name)

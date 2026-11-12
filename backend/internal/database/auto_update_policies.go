@@ -196,9 +196,10 @@ const (
 	// RekeyMoved: the row now has the name as its target.
 	RekeyMoved RekeyOutcome = "moved"
 	// RekeyDropped: a policy for that name already existed and was kept; the
-	// ID-keyed row was deleted. The name's row is the newer one: it was saved
-	// through a screen that already keyed on the name, or re-keyed from the
-	// container that is live now.
+	// ID-keyed row was deleted. The caller decides which row gets there first:
+	// services.SchedulerService moves the live container's row before any
+	// orphan, and orphans newest-updated first, so the row kept is the
+	// operator's latest choice.
 	RekeyDropped RekeyOutcome = "dropped"
 	// RekeyGone: the row changed or went away meanwhile; nothing was written.
 	RekeyGone RekeyOutcome = "gone"
