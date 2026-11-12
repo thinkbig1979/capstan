@@ -14,6 +14,7 @@ import { useGlobalEnvReveal } from './global-env/useGlobalEnvReveal'
 import { useGlobalEnvVars } from './global-env/useGlobalEnvVars'
 import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 import { FileChangedNotice } from '@/components/FileChangedNotice'
+import { EnvLockedNotice } from '@/components/stack/env-editor/EnvEditorEmptyStates'
 
 export function GlobalEnvSettingsContent() {
   const { authDisabled } = useAuth()
@@ -140,6 +141,10 @@ export function GlobalEnvSettingsContent() {
           beforeSave
           onRetry={() => refetch()}
         />
+      )}
+
+      {locked && dirty && (
+        <EnvLockedNotice hasUnsavedEdits onUnlock={() => handleDialogOpenChange(true)} />
       )}
 
       {changedElsewhere && (

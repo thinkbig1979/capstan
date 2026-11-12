@@ -20,6 +20,7 @@ import { classifyError } from '@/lib/error-handler'
 import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 import { FileChangedNotice } from '@/components/FileChangedNotice'
 import { useExternalFileChange } from '@/hooks/useExternalFileChange'
+import { fillRedactedBlanks } from '@/lib/env-unlock-rebase'
 import type { EnvEntryDraft, EnvFileResponse } from '@/types'
 
 interface EnvEditorProps {
@@ -110,17 +111,37 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
     }
   }
 
-  // Unsaved edits survive a new payload (agent-os-umig), except across a lock
-  // change or the file appearing or going away, which keep the plain hydrate:
-  // rows edited while locked hold blanked secrets (Save is only disabled,
-  // EnvTableView.tsx), and carrying them over an unlock would let a save write
-  // the blanks. The edits a lock change still discards are agent-os-vqf5.
+  // Unsaved edits survive a new payload (agent-os-umig), and a lock change
+  // too (agent-os-vqf5): a lock keeps them on screen (Save stays disabled while
+  // locked, EnvTableView.tsx), and an unlock puts the real value back into any
+  // row that only held the redacted blank, so a save can never write a blank
+  // over a secret. A file appearing or going away keeps the plain hydrate.
   const { changedOnDisk, reload } = useExternalFileChange(envData, {
     isDirty: hasUnsavedChanges,
     hydrate,
+    rebaseWhileDirty: (next, prev) => {
+      if (!next.hasEnvFile || !prev?.hasEnvFile) return false
+      if (Boolean(next.locked) === Boolean(prev.locked)) return false
+      // Locked: the payload is redacted and carries nothing to rebase onto.
+      if (next.locked) return true
+      const redacted = new Set(
+        prev.entries.filter((e) => prev.locked && e.sensitive && e.value === '').map((e) => e.key),
+      )
+      const rows = fillRedactedBlanks(entries, loadedEnv.rows, redacted, next.entries)
+      const baseRows = fillRedactedBlanks(loadedEnv.rows, loadedEnv.rows, redacted, next.entries)
+      // A raw text the user did not touch (absent while locked) follows the file.
+      const nextRaw = next.raw ?? ''
+      const rawEdited = rawContent !== loadedEnv.raw
+      const baseRaw = rawEdited ? loadedEnv.raw : nextRaw
+      setEntries(rows)
+      if (!rawEdited) setRawContent(nextRaw)
+      setLoadedEnv({ rows: baseRows, raw: baseRaw })
+      // Nothing else changed on disk since the baseline: the edits stay, no
+      // notice. Otherwise the standard rule below decides.
+      return sameEntries(next.entries, baseRows) && nextRaw === baseRaw
+    },
     canHydrateWhileDirty: (next, prev) => {
       if (!next.hasEnvFile || !prev?.hasEnvFile) return true
-      if (Boolean(next.locked) !== Boolean(prev.locked)) return true
       // Every representation the user edited must already equal the new
       // file. Matching only one of them hydrates over edits in the other.
       const rawEdited = rawContent !== loadedEnv.raw
@@ -209,7 +230,12 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
         onUnlocked={handleUnlocked}
       />
 
-      {locked && <EnvLockedNotice onUnlock={() => handleUnlockDialogOpenChange(true)} />}
+      {locked && (
+        <EnvLockedNotice
+          onUnlock={() => handleUnlockDialogOpenChange(true)}
+          hasUnsavedEdits={hasUnsavedChanges}
+        />
+      )}
 
       {/* Above the editor, where EnvLockedNotice already puts "editing is
           constrained" messaging — both save controls (the table's and the raw
