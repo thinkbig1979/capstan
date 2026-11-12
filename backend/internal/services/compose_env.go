@@ -45,20 +45,10 @@ const (
 // exists, so a missing EnvFile fails as it does for compose; superset chains
 // hold only files that can be stat'ed and are not directories.
 func composeEnvFileChains(st models.Stack, globalEnvPath string, mode composeEnvMode) ([][]string, error) {
-	var dotEnv, envFile string
-	if st.Directory != "" {
-		dotEnv = filepath.Join(st.Directory, ".env")
-	}
-	if st.EnvFile != "" {
-		envFile = stackRelativePath(st.Directory, st.EnvFile)
-	}
+	dotEnv, envFile := stackEnvPaths(st)
 
 	if mode == composeEnvSuperset {
-		chains := [][]string{existingFiles([]string{globalEnvPath, dotEnv})}
-		if envFile != "" && envFile != dotEnv {
-			chains = append(chains, existingFiles([]string{globalEnvPath, envFile}))
-		}
-		return chains, nil
+		return supersetEnvFileChains(globalEnvPath, dotEnv, envFile), nil
 	}
 
 	var files []string
@@ -80,6 +70,29 @@ func composeEnvFileChains(st models.Stack, globalEnvPath string, mode composeEnv
 		}
 	}
 	return [][]string{files}, nil
+}
+
+// supersetEnvFileChains is composeEnvFileChains' superset mode, which cannot
+// fail: {global.env, .env} and, when the EnvFile is another file,
+// {global.env, EnvFile}, each holding only the files that can be stat'ed.
+func supersetEnvFileChains(globalEnvPath, dotEnv, envFile string) [][]string {
+	chains := [][]string{existingFiles([]string{globalEnvPath, dotEnv})}
+	if envFile != "" && envFile != dotEnv {
+		chains = append(chains, existingFiles([]string{globalEnvPath, envFile}))
+	}
+	return chains
+}
+
+// stackEnvPaths returns the stack's .env and its EnvFile resolved against the
+// stack directory, "" for either that does not apply.
+func stackEnvPaths(st models.Stack) (dotEnv, envFile string) {
+	if st.Directory != "" {
+		dotEnv = filepath.Join(st.Directory, ".env")
+	}
+	if st.EnvFile != "" {
+		envFile = stackRelativePath(st.Directory, st.EnvFile)
+	}
+	return dotEnv, envFile
 }
 
 // resolveComposeEnv resolves a stack's compose environment in the given mode:

@@ -187,8 +187,8 @@ func (s *DockerService) composeSecrets(stack models.Stack) []string {
 		}
 	}
 
-	// Superset chains never fail; they only hold files that can be stat'ed.
-	chains, _ := composeEnvFileChains(stack, globalPath, composeEnvSuperset)
+	dotEnv, envFile := stackEnvPaths(stack)
+	chains := supersetEnvFileChains(globalPath, dotEnv, envFile)
 	read := map[string]bool{}
 	for _, chain := range chains {
 		for _, p := range chain {

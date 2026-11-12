@@ -213,7 +213,8 @@ func hideMultilineBodies(entries []EnvEntry, raw string) {
 	}
 	for i := 0; i < len(entries); i++ {
 		e := entries[i]
-		if !e.Sensitive && !(e.Comment && e.Key == "" && commentedSecretEnd(e.Value) != -1) {
+		opensBody := e.Sensitive || (e.Comment && e.Key == "" && commentedSecretEnd(e.Value) != -1)
+		if !opensBody {
 			continue
 		}
 		q, open := opensMultilineValue(lineText(e))
