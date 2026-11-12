@@ -2102,7 +2102,11 @@ func unreadableRestoreExcludes(source string, paths []string) (rels []string, pl
 			return nil, false
 		}
 		rel, err := filepath.Rel(source, p)
-		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, "../") || filepath.IsAbs(rel) {
+		if err != nil {
+			// Rel could not relate them: the path cannot be excluded.
+			return nil, false
+		}
+		if rel == "." || rel == ".." || strings.HasPrefix(rel, "../") || filepath.IsAbs(rel) {
 			return nil, false
 		}
 		rels = append(rels, rel)
