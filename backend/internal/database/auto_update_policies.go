@@ -77,12 +77,12 @@ func (d *DB) UpsertAutoUpdatePolicy(policy *models.AutoUpdatePolicy) error {
 //     no-op and the operator's change stands;
 //   - the failure count is incremented in SQL, from the stored value, never
 //     from the copy the pass read.
-const autoUpdatePolicyPassGuard = `WHERE id = ? AND enabled = TRUE AND paused = FALSE`
+const autoUpdatePolicyLiveRowWhere = `WHERE id = ? AND enabled = TRUE AND paused = FALSE`
 
 // ResetAutoUpdatePolicyFailures zeroes a policy's failure count after a pass
 // in which its updates succeeded. It reports whether a row was written.
 func (d *DB) ResetAutoUpdatePolicyFailures(id, updatedAt string) (bool, error) {
-	res, err := d.db.Exec(`UPDATE auto_update_policies SET consecutive_failures = 0, updated_at = ? `+autoUpdatePolicyPassGuard,
+	res, err := d.db.Exec(`UPDATE auto_update_policies SET consecutive_failures = 0, updated_at = ? `+autoUpdatePolicyLiveRowWhere,
 		updatedAt, id)
 	if err != nil {
 		return false, err
@@ -102,7 +102,7 @@ func (d *DB) RecordAutoUpdatePolicyFailure(id, updatedAt string, pauseAt int) (w
 		SET consecutive_failures = consecutive_failures + 1,
 		    paused = (consecutive_failures + 1 >= ?),
 		    updated_at = ?
-		`+autoUpdatePolicyPassGuard+`
+		`+autoUpdatePolicyLiveRowWhere+`
 		RETURNING paused`, pauseAt, updatedAt, id).Scan(&paused)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, false, nil

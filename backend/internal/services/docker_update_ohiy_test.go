@@ -552,7 +552,7 @@ func TestStandaloneUpdateIsOneFunctionOhiy(t *testing.T) {
 // first on that same ctx.
 func ohiyRecreate(t *testing.T, d *ohiyDocker, ctx context.Context) (string, []string, error) {
 	t.Helper()
-	inspect, err := d.ContainerInspect(context.Background(), ohiyOldID)
+	inspect, err := d.ContainerInspect(ctx, ohiyOldID)
 	require.NoError(t, err)
 	var lines []string
 	id, err := (&DockerService{updateClient: d}).recreateStandaloneContainer(ctx, inspect, true,
