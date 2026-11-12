@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
@@ -434,10 +435,10 @@ func resolveBoolSetting(db *database.DB, key, envVal string, defaultVal bool) (b
 		return false, err
 	}
 	if dbVal != "" {
-		return dbVal == "true", nil
+		return strings.EqualFold(dbVal, "true"), nil
 	}
 	if envVal != "" {
-		return envVal == "true", nil
+		return strings.EqualFold(envVal, "true"), nil
 	}
 	return defaultVal, nil
 }
