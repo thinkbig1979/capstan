@@ -1,4 +1,4 @@
-import type { Dispatch, SetStateAction } from 'react'
+import { useEffect, useRef, type Dispatch, type SetStateAction } from 'react'
 import { stacksApi } from '@/lib/api'
 import { useActionMutation } from '@/hooks/useActionMutation'
 import type { EnvEntryRow } from './types'
@@ -32,6 +32,18 @@ export function useEnvMutations({
   setShowEnvSection,
   resetHistory,
 }: UseEnvMutationsArgs) {
+  // What the editor held when Save was clicked, and what was sent. onResult
+  // closes over the render that clicked, so "does the editor still hold the
+  // saved text" needs the latest render's state, read through a ref.
+  const latest = useRef({ entries, rawContent })
+  useEffect(() => {
+    latest.current = { entries, rawContent }
+  })
+  const savedRef = useRef<{
+    body: { entries?: EnvEntryRow[]; raw?: string }
+    snapshot: { entries: EnvEntryRow[]; rawContent: string }
+  } | null>(null)
+
   const saveMutation = useActionMutation({
     mutationFn: async (body: { entries?: EnvEntryRow[]; raw?: string }) => {
       // _rowId is a client-only synthetic key for React row identity (see
@@ -48,10 +60,18 @@ export function useEnvMutations({
     successTitle: 'Environment variables saved',
     onResult: (result) => {
       if (result.outcome === 'success' || result.outcome === 'no_change') {
-        setHasUnsavedChanges(false)
-        const body = saveMutation.variables
-        if (body) {
-          resetHistory(body.entries || entries, body.raw || rawContent)
+        // Clean only if neither the rows nor the raw text moved since Save was
+        // clicked (agent-os-3761). Typing that landed while the save was in
+        // flight is not on disk: the editor stays dirty, and the save's own
+        // refetch is then recognised through savedRef (EnvEditor.tsx).
+        const saved = savedRef.current
+        if (
+          saved &&
+          latest.current.entries === saved.snapshot.entries &&
+          latest.current.rawContent === saved.snapshot.rawContent
+        ) {
+          setHasUnsavedChanges(false)
+          resetHistory(saved.body.entries || saved.snapshot.entries, saved.body.raw || saved.snapshot.rawContent)
         }
       }
     },
@@ -75,12 +95,14 @@ export function useEnvMutations({
   })
 
   const handleSaveTable = () => {
+    savedRef.current = { body: { entries }, snapshot: { entries, rawContent } }
     saveMutation.mutate({ entries })
   }
 
   const handleSaveRaw = () => {
+    savedRef.current = { body: { raw: rawContent }, snapshot: { entries, rawContent } }
     saveMutation.mutate({ raw: rawContent })
   }
 
-  return { saveMutation, createEnvMutation, handleSaveTable, handleSaveRaw }
+  return { saveMutation, createEnvMutation, handleSaveTable, handleSaveRaw, savedRef }
 }

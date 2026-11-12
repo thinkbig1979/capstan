@@ -111,6 +111,17 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
     }
   }
 
+  const { saveMutation, createEnvMutation, handleSaveTable, handleSaveRaw, savedRef } = useEnvMutations({
+    stackId,
+    entries,
+    rawContent,
+    setEntries,
+    setRawContent,
+    setHasUnsavedChanges,
+    setShowEnvSection,
+    resetHistory,
+  })
+
   // Unsaved edits survive a new payload (agent-os-umig), and a lock change
   // too (agent-os-vqf5): a lock keeps them on screen (Save stays disabled while
   // locked, EnvTableView.tsx), and an unlock puts the real value back into any
@@ -140,6 +151,14 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
       // notice. Otherwise the standard rule below decides.
       return sameEntries(next.entries, baseRows) && nextRaw === baseRaw
     },
+    // The refetch after a save brings back what was sent. An editor that kept
+    // typing past that save stays dirty and takes it without a notice
+    // (agent-os-3761).
+    isOwnSave: (next) => {
+      const sent = savedRef.current?.body
+      if (!sent || !next.hasEnvFile) return false
+      return sent.entries ? sameEntries(next.entries, sent.entries) : next.raw === sent.raw
+    },
     canHydrateWhileDirty: (next, prev) => {
       if (!next.hasEnvFile || !prev?.hasEnvFile) return true
       // Every representation the user edited must already equal the new
@@ -150,16 +169,6 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
     },
   })
 
-  const { saveMutation, createEnvMutation, handleSaveTable, handleSaveRaw } = useEnvMutations({
-    stackId,
-    entries,
-    rawContent,
-    setEntries,
-    setRawContent,
-    setHasUnsavedChanges,
-    setShowEnvSection,
-    resetHistory,
-  })
 
   // The backend redacted this payload: sensitive values arrived blank and there
   // is no raw file. Editing is therefore off the table until the unlock window
