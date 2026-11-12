@@ -228,31 +228,28 @@ func Test_Resource_ImagePrune_CountsUntaggedEntries(t *testing.T) {
 
 	PullPinnedImage(t, "public.ecr.aws/docker/library/alpine:3.21")
 
-	// Strategy: build image A with tag T (adding a unique RUN layer), then
-	// build image B (different content) with the same tag T. This moves the tag
-	// from A to B, leaving A dangling (untagged but layer present). Prune must
-	// then report A as pruned.
+	// Strategy: commit a container without a repository or tag, which leaves
+	// an untagged (dangling) image on every storage driver. Moving a tag with
+	// a second `docker build -t` does not: the containerd image store (the
+	// default since Docker 29) deletes the old image outright, so nothing is
+	// left for prune to report (agent-os-qs2n).
 	ts := fmt.Sprintf("%d", time.Now().UnixNano()%1_000_000)
-	tag := "capstan-test-prune-" + ts + ":latest"
+	ctr := "capstan-test-prune-" + ts
 
-	// Build first image.
-	dir1 := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir1, "Dockerfile"),
-		[]byte("FROM public.ecr.aws/docker/library/alpine:3.21\nRUN echo first-"+ts), 0644))
-	out1, err1 := exec.Command("docker", "build", "-t", tag, dir1).CombinedOutput()
-	require.NoError(t, err1, "build first: %s", out1)
-	t.Cleanup(func() { dockerRmiForce(tag) })
+	outC, errC := exec.Command("docker", "create", "--name", ctr,
+		"public.ecr.aws/docker/library/alpine:3.21", "true").CombinedOutput()
+	require.NoError(t, errC, "create container: %s", outC)
+	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", ctr).Run() })
 
-	// Build second image with SAME tag — moves the tag, leaving first dangling.
-	dir2 := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir2, "Dockerfile"),
-		[]byte("FROM public.ecr.aws/docker/library/alpine:3.21\nRUN echo second-"+ts), 0644))
-	out2, err2 := exec.Command("docker", "build", "-t", tag, dir2).CombinedOutput()
-	require.NoError(t, err2, "build second: %s", out2)
+	outM, errM := exec.Command("docker", "commit", "-m", "capstan-prune-"+ts, ctr).CombinedOutput()
+	require.NoError(t, errM, "commit untagged image: %s", outM)
 
-	// Verify there are dangling images now.
+	// Fail here, not in the prune assertion, if the fixture stops producing a
+	// dangling image: a broken setup must not read as a prune defect.
 	danglingOut, _ := exec.Command("docker", "images", "--filter", "dangling=true", "--format", "{{.ID}}").Output()
 	t.Logf("dangling images before prune: %s", strings.TrimSpace(string(danglingOut)))
+	require.NotEmpty(t, strings.TrimSpace(string(danglingOut)),
+		"fixture must leave a dangling image before the prune")
 
 	svc := newDockerServiceForResources(t, t.TempDir())
 	ctx := context.Background()

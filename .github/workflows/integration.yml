@@ -68,7 +68,7 @@ jobs:
     # hosted VM, emphatically not on a shared host. Both reasons must be
     # resolved before this moves.
     name: Real-Docker integration tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest became 26.04 (Docker 29, containerd store) on 2026-10-26; see agent-os-qs2n
 
     # Integration tests can pull images and spin up containers; give them
     # enough time. 10 minutes is generous for the current harness + smoke
