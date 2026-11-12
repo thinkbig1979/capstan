@@ -1530,11 +1530,16 @@ func (s *BackupService) backupStack(
 			stream(out, "info", fmt.Sprintf("[%s] marked snapshot %s %s; its id is now %s", stackID, snapshotID, PartialSnapshotTag, shortSnapshotID(newID)))
 			snapshotID = shortSnapshotID(newID)
 			marked = true
-			if s.healOrSkipRetention(ctx, restic, stackID, warn, &res, out) {
+			if s.healOrSkipRetention(ctx, restic, stackID, newID, true, warn, &res, out) {
 				s.applyStackRetention(ctx, restic, stackID, newID, warn, &res, out)
 			}
 		}
-	} else if s.healOrSkipRetention(ctx, restic, stackID, warn, &res, out) {
+	} else {
+		currentID := ""
+		if summary != nil {
+			currentID = summary.SnapshotID
+		}
+		s.healOrSkipRetention(ctx, restic, stackID, currentID, false, warn, &res, out)
 		// Apply retention policy, for a partial snapshot too: skipping it is
 		// what let a stack with one permanently unreadable file grow its
 		// repository forever (agent-os-sufn). After a complete backup the
@@ -1559,16 +1564,24 @@ func (s *BackupService) backupStack(
 // the global lock for one long one.
 const healPartialMarksPerRun = 20
 
-// healOrSkipRetention runs healPartialMarks and reports whether retention may
-// run. Any fault skips retention for the stack this run: an untagged partial
-// snapshot would read as complete once its run item is pruned.
-func (s *BackupService) healOrSkipRetention(ctx context.Context, restic *ResticManager, stackID string, warn func(string), res *stackResult, out chan<- StreamLine) bool {
-	if err := s.healPartialMarks(ctx, restic, stackID, out); err != nil {
-		warn(fmt.Sprintf("retention skipped: earlier partial snapshots could not be marked %s: %v", PartialSnapshotTag, err))
-		res.retentionFailed = true
-		return false
+// healOrSkipRetention runs healPartialMarks for the run that wrote
+// currentID and reports whether retention may run. A fault skips retention
+// after a PARTIAL backup, where retention must tell partial from complete. After
+// a complete backup it does not: the newest snapshot is complete and the plain
+// policy keeps it (review SH3); the fault is still reported and the unmarked
+// items wait for the next run.
+func (s *BackupService) healOrSkipRetention(ctx context.Context, restic *ResticManager, stackID, currentID string, partial bool, warn func(string), res *stackResult, out chan<- StreamLine) bool {
+	err := s.healPartialMarks(ctx, restic, stackID, currentID, out)
+	if err == nil {
+		return true
 	}
-	return true
+	if !partial {
+		warn(fmt.Sprintf("earlier partial snapshots could not be marked %s; retried next run: %v", PartialSnapshotTag, err))
+		return true
+	}
+	warn(fmt.Sprintf("retention skipped: earlier partial snapshots could not be marked %s: %v", PartialSnapshotTag, err))
+	res.retentionFailed = true
+	return false
 }
 
 // healPartialMarks tags the stack's earlier partial snapshots that run items
@@ -1587,7 +1600,12 @@ func (s *BackupService) healOrSkipRetention(ctx context.Context, restic *ResticM
 //   - it is gone with no such snapshot (forgotten): logged and settled.
 //
 // With nothing recorded unmarked, it makes no restic call at all.
-func (s *BackupService) healPartialMarks(ctx context.Context, restic *ResticManager, stackID string, out chan<- StreamLine) error {
+//
+// "Gone" is only believed from a listing that is shown to be complete: it
+// must contain currentID, the snapshot this run just wrote. An empty, null or
+// partial listing fails closed and marks nothing (review SH1), because
+// settling an item as gone without tagging it is exactly the MUST-D1 hole.
+func (s *BackupService) healPartialMarks(ctx context.Context, restic *ResticManager, stackID, currentID string, out chan<- StreamLine) error {
 	items, err := s.db.GetUnmarkedPartialItems(stackID, healPartialMarksPerRun)
 	if err != nil {
 		return fmt.Errorf("read partial snapshots still to mark: %w", err)
@@ -1598,6 +1616,9 @@ func (s *BackupService) healPartialMarks(ctx context.Context, restic *ResticMana
 	snaps, err := restic.ListForPartialMarks(ctx, stackID)
 	if err != nil {
 		return err
+	}
+	if currentID == "" || !slices.ContainsFunc(snaps, func(snap resticSnapshot) bool { return snapshotIDMatches(snap, currentID) }) {
+		return fmt.Errorf("the snapshot listing (%d snapshots) does not include snapshot %s, which this run wrote, so it cannot show which earlier snapshots are gone", len(snaps), shortSnapshotID(currentID))
 	}
 	for _, item := range items {
 		id := item.SnapshotID

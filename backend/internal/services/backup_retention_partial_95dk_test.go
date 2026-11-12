@@ -51,7 +51,12 @@ type dk95Runner struct {
 	lookupFail bool // `snapshots` fails: a tag that rewrote, then a lost lookup
 	listings   int
 	dryRunJSON string // when set, the dry-run answers this instead
+	keepLast   int    // the policy keeps the newest keepLast snapshots (0 = 1)
+	badListing string // when set, the listing numbered badAt answers this
+	badAt      int
 }
+
+func (r *dk95Runner) kept() int { return max(r.keepLast, 1) }
 
 var dk95Epoch = time.Date(2026, 11, 1, 2, 0, 0, 0, time.UTC)
 
@@ -102,8 +107,8 @@ func (r *dk95Runner) Run(_ context.Context, _ string, args []string, _ []string,
 			}
 			return nil
 		}
-		if len(r.store) > 1 {
-			r.store = r.store[len(r.store)-1:]
+		if len(r.store) > r.kept() {
+			r.store = r.store[len(r.store)-r.kept():]
 		}
 	}
 	return nil
@@ -127,6 +132,9 @@ func (r *dk95Runner) Output(_ context.Context, _ string, args []string, _ []stri
 	switch args[0] {
 	case "snapshots":
 		r.listings++
+		if r.badListing != "" && r.listings == r.badAt {
+			return []byte(r.badListing), nil
+		}
 		if r.lookupFail {
 			return nil, fmt.Errorf("restic: %w", fakeExitError{code: 1})
 		}
@@ -145,7 +153,7 @@ func (r *dk95Runner) Output(_ context.Context, _ string, args []string, _ []stri
 			Remove []dk95JSON `json:"remove"`
 		}{}
 		for i, s := range r.store {
-			if i == len(r.store)-1 {
+			if i >= len(r.store)-r.kept() {
 				group.Keep = append(group.Keep, s.json())
 			} else {
 				group.Remove = append(group.Remove, s.json())
@@ -389,7 +397,10 @@ func dk95ItemByID(t *testing.T, db *database.DB, runID string) models.BackupRunI
 // next partial night still keeps the real newest complete snapshot.
 func TestBackup95dk_HealedPartialSurvivesHistoryPruning(t *testing.T) {
 	t.Parallel()
-	r := &dk95Runner{unreadable: []int{0, 1, 1}}
+	// keepLast 2 keeps the seeded partial through night 2, so night 3 decides
+	// between it and snapshot 1: unhealed and unrecorded, it would read as
+	// the newer complete snapshot and snapshot 1 would be forgotten.
+	r := &dk95Runner{unreadable: []int{0, 1, 1}, keepLast: 2}
 	svc, db, raw := dk95Svc(t, r)
 	dk95Run(t, svc, db) // complete snapshot 1
 	sufn := seedUnmarkedPartial(t, r, db, 50)
@@ -405,13 +416,14 @@ func TestBackup95dk_HealedPartialSurvivesHistoryPruning(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 3, pruned, "fixture is unarmed: the history was not pruned")
 
+	require.True(t, r.has(sufn) || r.has("f"+sufn[1:]), "fixture is unarmed: the seeded partial did not survive into night 3: %v", r.store)
 	dk95Run(t, svc, db) // partial night 3, no history left
 	assert.True(t, r.has(dk95ID(1)), "the real complete snapshot survives: store %v, forgets %v", r.store, r.forgets)
 }
 
-// Control for (1), the same steps with the heal pass unable to tag: retention
-// is skipped, so the complete snapshot is still not forgotten blind.
-func TestBackup95dk_HealFailureSkipsRetention(t *testing.T) {
+// SH3: a heal fault after a COMPLETE backup reports, leaves the item
+// unmarked and still runs the plain policy (the newest snapshot is complete).
+func TestBackup95dk_HealFaultOnCompleteNightKeepsRetention(t *testing.T) {
 	t.Parallel()
 	r := &dk95Runner{unreadable: []int{0, 0}}
 	svc, db, _ := dk95Svc(t, r)
@@ -420,10 +432,62 @@ func TestBackup95dk_HealFailureSkipsRetention(t *testing.T) {
 	r.mu.Lock()
 	r.tagFail = true
 	r.mu.Unlock()
-	_, item := dk95Run(t, svc, db) // a complete night: the heal pass still runs
-	assert.Contains(t, item.ErrorMessage, "earlier partial snapshots could not be marked")
-	assert.Len(t, r.forgets, 1, "no forget after a failed heal: %v", r.forgets)
+	_, item := dk95Run(t, svc, db)
+	assert.Contains(t, item.ErrorMessage, "could not be marked")
+	assert.NotContains(t, item.ErrorMessage, "retention skipped")
+	assert.Len(t, r.forgets, 2, "the complete night's policy forget ran: %v", r.forgets)
 	assert.False(t, dk95ItemByID(t, db, "sufn-run-50").PartialMarked)
+}
+
+// SH3: the same fault after a PARTIAL backup skips retention.
+func TestBackup95dk_HealFaultOnPartialNightSkipsRetention(t *testing.T) {
+	t.Parallel()
+	r := &dk95Runner{unreadable: []int{0, 1}}
+	svc, db, _ := dk95Svc(t, r)
+	dk95Run(t, svc, db)
+	seedUnmarkedPartial(t, r, db, 50)
+	r.mu.Lock()
+	r.badListing, r.badAt = "[]", r.listings+2 // night 2: TagPartial's lookup, then the heal listing
+	r.mu.Unlock()
+	_, item := dk95Run(t, svc, db)
+	assert.Contains(t, item.ErrorMessage, "retention skipped: earlier partial snapshots could not be marked")
+	assert.Len(t, r.forgets, 1, "no forget after a failed heal on a partial night: %v", r.forgets)
+	assert.Equal(t, 0, r.dryRuns)
+}
+
+// SH1: an empty or null listing proves nothing is gone. Nothing is marked,
+// and the next run with a real listing heals.
+func TestBackup95dk_EmptyListingMarksNothing(t *testing.T) {
+	t.Parallel()
+	for name, listing := range map[string]string{"empty": "[]", "null": "null"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := &dk95Runner{unreadable: []int{0, 0, 0}}
+			svc, db, _ := dk95Svc(t, r)
+			dk95Run(t, svc, db)
+			sufn := seedUnmarkedPartial(t, r, db, 50)
+			r.mu.Lock()
+			r.badListing, r.badAt = listing, r.listings+1
+			r.mu.Unlock()
+			_, item := dk95Run(t, svc, db)
+			assert.Contains(t, item.ErrorMessage, "does not include snapshot")
+			pending := dk95ItemByID(t, db, "sufn-run-50")
+			assert.False(t, pending.PartialMarked, "nothing may be settled from an empty listing")
+			assert.Equal(t, sufn[:8], pending.SnapshotID)
+			assert.Equal(t, 0, r.tags)
+
+			// keep the seeded snapshot alive for the next run
+			r.mu.Lock()
+			if !slices.ContainsFunc(r.store, func(s dk95Snap) bool { return s.id == sufn }) {
+				r.store = append(r.store, dk95Snap{id: sufn, at: dk95Epoch.Add(90 * time.Minute), tags: []string{dk95Stack}})
+			}
+			r.mu.Unlock()
+			dk95Run(t, svc, db)
+			healed := dk95ItemByID(t, db, "sufn-run-50")
+			assert.True(t, healed.PartialMarked)
+			assert.Equal(t, "f"+sufn[1:8], healed.SnapshotID, "healed by tagging, not settled as gone")
+		})
+	}
 }
 
 // (2) A tag failure on one night is healed on the next.
