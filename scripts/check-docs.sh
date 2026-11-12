@@ -889,8 +889,9 @@ check_ticker_stop() {
 }
 
 # check_env_hand_parse delegates to scripts/check-env-hand-parse.sh: no
-# non-test Go file under backend/internal or backend/cmd splits text at "="
-# by hand outside its allowlisted functions; a stack's env is resolved with
+# non-test Go file under backend/internal or backend/cmd looks for "=" with a
+# strings or bytes call outside its allowlisted functions (the start of a hand
+# parse of KEY=value); a stack's env is resolved with
 # compose-go through resolveComposeEnv (agent-os-1106). Self-test first, same
 # reasoning as ws-registration.
 check_env_hand_parse() {
@@ -916,7 +917,7 @@ check_env_hand_parse() {
     echo "PASS: env-hand-parse - ${self#env-hand-parse }; ${out#check-env-hand-parse: }"
     return 0
   fi
-  echo "FAIL: env-hand-parse - a hand split of env text at \"=\" outside the allowlist, or a stale allowlist entry:"
+  echo "FAIL: env-hand-parse - a strings/bytes call looking for \"=\" outside the allowlist, or a stale allowlist entry:"
   echo "$out"
   return 1
 }

@@ -3,8 +3,9 @@
 #
 # ONE invariant (agent-os-1106):
 #
-#   No non-test Go file under backend/internal or backend/cmd splits text at
-#   "=" by hand, except in the allowlisted functions below.
+#   No non-test Go file under backend/internal or backend/cmd looks for "=" in
+#   text with a strings or bytes call, except in the allowlisted functions
+#   below. A call that looks for "=" is how a hand parse of KEY=value starts.
 #
 # WHY. compose reads a stack's env with compose-go's dotenv parser: quotes,
 # escapes, "KEY: value", multi-line values and ${VAR} references. A hand split
@@ -16,18 +17,28 @@
 # compose_env.go), which calls compose-go.
 #
 # WHAT IS A VIOLATION. A line, outside a // comment, calling strings.* or
-# bytes.* Cut, Split, SplitN, SplitAfter, SplitAfterN, Index, IndexByte,
-# IndexRune or LastIndex with a "=" or '=' argument, in a function that is not
-# on ALLOWLIST. A function is the nearest top-level `func` line above the
-# call, so a closure counts as its enclosing function.
+# bytes.* Cut, Split*, Index*, LastIndex*, Contains*, Count or FieldsFunc*
+# (the families in SPLIT_RE) with either a string-literal argument holding a
+# "=" ("=", "=:", "=,:") or a '=' rune anywhere after the call (the closure
+# of IndexFunc or FieldsFunc), in a function that is not on ALLOWLIST. A
+# function is the nearest top-level `func` line above the call, so a closure
+# counts as its enclosing function; a top-level `}` or a package-level var,
+# const, type or import ends it, so code after a function is not covered by
+# that function's entry.
 #
 # ALLOWLIST is FILE|FUNC. Each entry must still match at least one call: an
 # entry whose split is gone is stale and fails the check, so the list shrinks
 # as the hand parsers are removed and the instrument is shown to fire on the
 # real tree every run.
 #
-# LIMIT. Line-based. A call split across lines, a "=" held in a variable, or a
-# hand parser that loops over bytes is invisible to this check.
+# LIMIT. Line-based, so these are invisible to it: a call split across lines;
+# a "=" held in a variable or constant (strings.Cut(s, sep)); a hand parser
+# that loops over bytes; a call from a package other than strings or bytes
+# (regexp, bufio.Scanner with a custom split). A literal argument is
+# recognised by its position (after "(" or ",", before ")" or ","), so a
+# literal holding "=" that sits elsewhere on the line, such as a comparison
+# after the call, is not mistaken for one. A nested first argument
+# (strings.Cut(strings.TrimSpace(s), "=")) IS seen.
 #
 # USAGE
 #   check-env-hand-parse.sh              scan this repo
@@ -45,15 +56,27 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 ALLOWLIST="
 backend/internal/handlers/env.go|parseEnvFile
+backend/internal/handlers/env.go|composeLineKey
+backend/internal/handlers/env.go|opensMultilineValue
+backend/internal/handlers/env.go|commentedSecretEnd
+backend/internal/handlers/env.go|redactGlobalEnvVars
 backend/internal/handlers/settings.go|parseEnvFile
 backend/internal/services/redact_compose.go|sensitiveEnvValues
 backend/internal/services/compose_env.go|resolveComposeEnv
 backend/internal/services/exec_env.go|stripCapstanSecrets
+backend/internal/services/redact_url.go|parseRcloneConnectionString
 "
 # Why each entry is allowed:
 #   handlers/env.go parseEnvFile: the env table's own line parser; it keys rows
 #     the way compose does (composeLineKey) and round-trips the file byte for
 #     byte, which compose-go cannot.
+#   handlers/env.go composeLineKey: where compose ends a key, the first "=" or
+#     ":" (mirrors compose-go dotenv/parser.go locateKeyName). opensMultilineValue
+#     and commentedSecretEnd use the same rule to find where a value starts, for
+#     the locked view's masking (agent-os-yt2f); they do not read the value.
+#   handlers/env.go redactGlobalEnvVars: mirrors settings.go parseEnvFile's row
+#     rule (a line holding "=") to match its rows to lines for the locked view.
+#     agent-os-rd1l, which replaces that parser, removes it; delete with it.
 #   handlers/settings.go parseEnvFile: the global env page's parser.
 #     agent-os-rd1l removes it; delete this entry with it.
 #   services/redact_compose.go sensitiveEnvValues: redaction's fallback parser,
@@ -62,10 +85,12 @@ backend/internal/services/exec_env.go|stripCapstanSecrets
 #   services/compose_env.go resolveComposeEnv, services/exec_env.go
 #     stripCapstanSecrets: split a process environment's KEY=VALUE strings,
 #     which hold no quotes or comments, not .env text.
+#   services/redact_url.go parseRcloneConnectionString: rclone's inline
+#     key=value option grammar in a remote string, not .env text.
 
 # The awk program receives the pattern through -v, so no regex escapes are
 # needed: bracket expressions only, which gawk and mawk read alike.
-SPLIT_RE="(strings|bytes)[.](Cut|SplitAfterN|SplitAfter|SplitN|Split|IndexByte|IndexRune|Index|LastIndex)[(][^)]*(\"=\"|'=')"
+SPLIT_RE="(strings|bytes)[.](Cut|SplitAfterN|SplitAfterSeq|SplitAfter|SplitN|SplitSeq|Split|IndexAny|IndexByte|IndexRune|IndexFunc|Index|LastIndexAny|LastIndexByte|LastIndexFunc|LastIndex|ContainsAny|ContainsRune|ContainsFunc|Contains|Count|FieldsFuncSeq|FieldsFunc)[(].*([(,][ \t]*\"[^\"]*=[^\"]*\"[ \t]*[),]|'=')"
 
 usage() {
   echo "Usage: $(basename "$0") [DIR | --self-test]" >&2
@@ -98,6 +123,8 @@ check_dir() {
   # shellcheck disable=SC2086 # $files is newline-separated paths without spaces
   hits=$(cd "$dir" && command awk -v re="$SPLIT_RE" '
     FNR == 1 { fn = "" }
+    /^}/ { fn = "" }
+    /^(var|const|type|import)[ \t(]/ { fn = "" }
     /^func[ \t]/ {
       s = $0
       sub(/^func[ \t]+/, "", s)
@@ -142,7 +169,7 @@ $entry	"*) ;;
   local rc=0
   if [ -n "$violations" ]; then
     printf '%s' "$violations"
-    echo "check-env-hand-parse: a hand split at \"=\" outside the allowlist; resolve a stack's env with resolveComposeEnv (backend/internal/services/compose_env.go), or allowlist the function with its reason"
+    echo "check-env-hand-parse: a strings/bytes call looking for \"=\" outside the allowlist (a hand parse of KEY=value); resolve a stack's env with resolveComposeEnv (backend/internal/services/compose_env.go), or allowlist the function with its reason"
     rc=1
   fi
   if [ -n "$stale" ]; then
@@ -188,9 +215,42 @@ func (h *EnvHandler) parseEnvFile(content string) []EnvEntry {
 	return nil
 }
 
+var exportPrefix = regexp.MustCompile(`^export\s+`)
+
+func composeLineKey(line string) (string, bool) {
+	if end := strings.IndexAny(s, "=:"); end != -1 {
+	}
+	return "", false
+}
+
+func opensMultilineValue(line string) (byte, bool) {
+	sep := strings.IndexAny(line, "=:")
+	return 0, false
+}
+
+func commentedSecretEnd(value string) int {
+	sep := strings.IndexAny(body, "=:")
+	return -1
+}
+
+func redactGlobalEnvVars(vars []map[string]string, raw string) {
+	if t == "" || !strings.Contains(t, "=") {
+	}
+}
+
 func serializeEnvFile(entries []EnvEntry) string {
 	buf.WriteString("=")
+	if a, b, _ := strings.Cut(x, ","); y == "a=b" {
+	}
 	return ""
+}
+EOF
+  cat > "$d/backend/internal/services/redact_url.go" <<'EOF'
+package services
+
+func parseRcloneConnectionString(opaque string) ([]rcloneParam, bool) {
+	eq := strings.IndexAny(opaque[i:], "=,:")
+	return nil, false
 }
 EOF
   cat > "$d/backend/internal/handlers/settings.go" <<'EOF'
@@ -250,7 +310,7 @@ self_test() {
 
   local d="$tmp/clean"
   write_base "$d"
-  selftest_case "clean tree" 0 '0 violations in 6 files [(]5 allowlisted splits[)]' "$d"
+  selftest_case "clean tree" 0 '0 violations in 7 files [(]10 allowlisted splits[)]' "$d"
 
   d="$tmp/planted"
   write_base "$d"
@@ -276,6 +336,31 @@ self_test() {
   write_base "$d"
   printf '\nfunc outer() {\n\tf := func(s string) {\n\t\tstrings.Cut(s, "=")\n\t}\n\t_ = f\n}\n' >> "$d/backend/internal/services/redact_compose.go"
   selftest_case "closure counts as its enclosing function" 1 'redact_compose.go:[0-9]+:' "$d"
+
+  d="$tmp/indexany"
+  write_base "$d"
+  printf '\nfunc keyEnd(line string) int {\n\treturn strings.IndexAny(line, "=:")\n}\n' >> "$d/backend/internal/services/exec_env.go"
+  selftest_case "IndexAny with a set holding =" 1 'exec_env.go:[0-9]+: .*IndexAny' "$d"
+
+  d="$tmp/fieldsfunc"
+  write_base "$d"
+  printf "\nfunc fields(s string) []string {\n\treturn strings.FieldsFunc(s, func(r rune) bool { return r == '=' })\n}\n" >> "$d/backend/internal/services/exec_env.go"
+  selftest_case "FieldsFunc closure on '='" 1 'exec_env.go:[0-9]+: .*FieldsFunc' "$d"
+
+  d="$tmp/nested"
+  write_base "$d"
+  printf '\nfunc trimmed(line string) {\n\tk, v, _ := strings.Cut(strings.TrimSpace(line), "=")\n}\n' >> "$d/backend/internal/services/exec_env.go"
+  selftest_case "nested first argument" 1 'exec_env.go:[0-9]+: .*Cut[(]strings.TrimSpace' "$d"
+
+  d="$tmp/afterfunc"
+  write_base "$d"
+  printf '\nvar splitKV = func(s string) (string, string, bool) { return strings.Cut(s, "=") }\n' >> "$d/backend/internal/services/redact_compose.go"
+  selftest_case "package-level var after an allowlisted function" 1 'redact_compose.go:[0-9]+: var splitKV' "$d"
+
+  d="$tmp/varblock"
+  write_base "$d"
+  printf '\nvar (\n\tsplitKV = func(s string) (string, string, bool) { return strings.Cut(s, "=") }\n)\n' >> "$d/backend/internal/services/redact_compose.go"
+  selftest_case "var block after an allowlisted function" 1 'redact_compose.go:[0-9]+:[[:space:]]+splitKV' "$d"
 
   d="$tmp/stale"
   write_base "$d"
