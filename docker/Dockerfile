@@ -35,7 +35,7 @@ RUN npm run build
 # Backend build stage — also pinned to $BUILDPLATFORM. Go cross-compiles
 # natively (CGO disabled), so we build on the fast host arch and emit a binary
 # for the requested $TARGETARCH. TARGETOS/TARGETARCH are provided by Buildx.
-FROM --platform=$BUILDPLATFORM public.ecr.aws/docker/library/golang:1.27.3-trixie AS backend-build
+FROM --platform=$BUILDPLATFORM public.ecr.aws/docker/library/golang:1.27.4-trixie AS backend-build
 
 WORKDIR /app
 
