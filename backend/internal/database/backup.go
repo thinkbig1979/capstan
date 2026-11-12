@@ -1,6 +1,8 @@
 package database
 
 import (
+	"database/sql"
+	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
@@ -354,10 +356,19 @@ func (d *DB) SweepInterruptedBackupRuns() (int, error) {
 // --- Backup Run Items ---
 
 func (d *DB) AddBackupRunItem(item *models.BackupRunItem) error {
-	query := `INSERT INTO backup_run_items (id, run_id, stack_id, status, snapshot_id, stop_applied, duration_ms, error_message)
-	          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+	query := `INSERT INTO backup_run_items (id, run_id, stack_id, status, snapshot_id, stop_applied, duration_ms, error_message,
+	                                        unreadable_count, unreadable_paths)
+	          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	var paths any // NULL when none were stored
+	if len(item.UnreadablePaths) > 0 {
+		raw, err := json.Marshal(item.UnreadablePaths)
+		if err != nil {
+			return fmt.Errorf("encode unreadable paths: %w", err)
+		}
+		paths = string(raw)
+	}
 	_, err := d.db.Exec(query, item.ID, item.RunID, item.StackID, item.Status, item.SnapshotID,
-		item.StopApplied, item.DurationMs, item.ErrorMessage)
+		item.StopApplied, item.DurationMs, item.ErrorMessage, item.UnreadableCount, paths)
 	return err
 }
 
@@ -368,15 +379,33 @@ func (d *DB) AddBackupRunItem(item *models.BackupRunItem) error {
 // status and error_message columns.
 const backupRunItemColumns = `backup_run_items.id, backup_run_items.run_id, backup_run_items.stack_id, ` +
 	`backup_run_items.status, COALESCE(backup_run_items.snapshot_id, ''), backup_run_items.stop_applied, ` +
-	`COALESCE(backup_run_items.duration_ms, 0), COALESCE(backup_run_items.error_message, '')`
+	`COALESCE(backup_run_items.duration_ms, 0), COALESCE(backup_run_items.error_message, ''), ` +
+	`backup_run_items.unreadable_count, backup_run_items.unreadable_paths`
 
 // scanBackupRunItem reads one row selected with backupRunItemColumns, from
 // *sql.Row or *sql.Rows.
 func scanBackupRunItem(row interface{ Scan(dest ...any) error }) (models.BackupRunItem, error) {
-	var item models.BackupRunItem
-	err := row.Scan(&item.ID, &item.RunID, &item.StackID, &item.Status, &item.SnapshotID,
-		&item.StopApplied, &item.DurationMs, &item.ErrorMessage)
-	return item, err
+	var (
+		item  models.BackupRunItem
+		count sql.NullInt64
+		paths sql.NullString
+	)
+	if err := row.Scan(&item.ID, &item.RunID, &item.StackID, &item.Status, &item.SnapshotID,
+		&item.StopApplied, &item.DurationMs, &item.ErrorMessage, &count, &paths); err != nil {
+		return item, err
+	}
+	if count.Valid {
+		n := int(count.Int64)
+		item.UnreadableCount = &n
+	}
+	if paths.Valid && paths.String != "" {
+		// Refused, not dropped: restore reads these to keep --delete off
+		// files the snapshot lacks, and an empty list there means "none".
+		if err := json.Unmarshal([]byte(paths.String), &item.UnreadablePaths); err != nil {
+			return item, fmt.Errorf("decode unreadable paths of backup item %s: %w", item.ID, err)
+		}
+	}
+	return item, nil
 }
 
 func (d *DB) GetBackupRunItems(runID string) ([]models.BackupRunItem, error) {
@@ -399,6 +428,47 @@ func (d *DB) GetBackupRunItems(runID string) ([]models.BackupRunItem, error) {
 		return nil, fmt.Errorf("reading backup run items: %w", err)
 	}
 	return items, nil
+}
+
+// GetNewestCompleteSnapshotID returns the snapshot id of the stack's newest
+// backup item that wrote a complete snapshot: status success, a snapshot id,
+// and no unreadable count (agent-os-95dk). ErrNotFound-shaped when there is
+// none.
+func (d *DB) GetNewestCompleteSnapshotID(stackID string) (string, error) {
+	query := `SELECT backup_run_items.snapshot_id
+	          FROM backup_run_items
+	          JOIN backup_runs br ON br.id = backup_run_items.run_id
+	          WHERE backup_run_items.stack_id = ?
+	            AND backup_run_items.status = 'success'
+	            AND COALESCE(backup_run_items.snapshot_id, '') <> ''
+	            AND backup_run_items.unreadable_count IS NULL
+	          ORDER BY br.started_at DESC, backup_run_items.rowid DESC
+	          LIMIT 1`
+	var id string
+	if err := d.db.QueryRow(query, stackID).Scan(&id); err != nil {
+		return "", notFound(err, "complete backup snapshot", stackID)
+	}
+	return id, nil
+}
+
+// GetRunItemForSnapshot returns the stack's newest successful backup item
+// that recorded snapshotID, matched as the stored short id or a prefix of a
+// full one (agent-os-fmeu). ErrNotFound-shaped when no item recorded it.
+func (d *DB) GetRunItemForSnapshot(stackID, snapshotID string) (*models.BackupRunItem, error) {
+	query := `SELECT ` + backupRunItemColumns + `
+	          FROM backup_run_items
+	          JOIN backup_runs br ON br.id = backup_run_items.run_id
+	          WHERE backup_run_items.stack_id = ?
+	            AND backup_run_items.status = 'success'
+	            AND COALESCE(backup_run_items.snapshot_id, '') <> ''
+	            AND (backup_run_items.snapshot_id = ? OR substr(?, 1, length(backup_run_items.snapshot_id)) = backup_run_items.snapshot_id)
+	          ORDER BY br.started_at DESC, backup_run_items.rowid DESC
+	          LIMIT 1`
+	item, err := scanBackupRunItem(d.db.QueryRow(query, stackID, snapshotID, snapshotID))
+	if err != nil {
+		return nil, notFound(err, "backup item for snapshot", snapshotID)
+	}
+	return &item, nil
 }
 
 func (d *DB) GetLatestRunItemForStack(stackID string) (*models.BackupRunItem, error) {

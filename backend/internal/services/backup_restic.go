@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -786,9 +787,58 @@ func (m *ResticManager) opDeadline(timeout time.Duration) time.Duration {
 // ApplyRetention runs `restic forget` with the configured keep-* flags and
 // --prune when AutoPrune is set. It streams output to out.
 func (m *ResticManager) ApplyRetention(ctx context.Context, tag string, out chan<- StreamLine) error {
+	_, err := m.ApplyRetentionKeeping(ctx, tag, "", out)
+	return err
+}
+
+// retentionPolicy returns the keep-* flags from the config, or nil when none
+// is set.
+func (m *ResticManager) retentionPolicy() []string {
+	var policy []string
+	for _, k := range []struct {
+		flag string
+		n    int
+	}{
+		{"--keep-daily", m.cfg.KeepDaily},
+		{"--keep-weekly", m.cfg.KeepWeekly},
+		{"--keep-monthly", m.cfg.KeepMonthly},
+		{"--keep-yearly", m.cfg.KeepYearly},
+	} {
+		if k.n > 0 {
+			policy = append(policy, k.flag, strconv.Itoa(k.n))
+		}
+	}
+	return policy
+}
+
+// resticForgetGroup is the part of one `restic forget --json` group Capstan
+// reads: the snapshots the policy would remove.
+type resticForgetGroup struct {
+	Remove []resticSnapshot `json:"remove"`
+}
+
+// ApplyRetentionKeeping applies the retention policy to the snapshots tagged
+// tag, except that the snapshot keepID (a short or full id; "" for none) is
+// never forgotten. kept reports that the policy would have forgotten keepID
+// and this call kept it.
+//
+// Why: restic's keep-* buckets cannot tell a partial snapshot from a complete
+// one, so when a stack's backups turn partial and stay partial, the policy
+// ages its last complete snapshot out after the keep-daily days
+// (agent-os-95dk). The caller passes that snapshot's id after a partial
+// backup.
+//
+// With a keepID it first asks restic what the policy would remove (`forget
+// --dry-run --json`, --no-lock: it is a read, and the caller holds the global
+// backup lock). If keepID is not in that set, the policy runs as usual.
+// Otherwise every other snapshot in the set is forgotten by id. It fails
+// closed: a dry-run that fails or cannot be read forgets nothing and returns
+// an error, because the only way to protect keepID without it would be to
+// guess.
+func (m *ResticManager) ApplyRetentionKeeping(ctx context.Context, tag, keepID string, out chan<- StreamLine) (kept bool, err error) {
 	pwFile, cleanup, err := m.withPasswordFile()
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer cleanup()
 
@@ -800,44 +850,82 @@ func (m *ResticManager) ApplyRetention(ctx context.Context, tag string, out chan
 	// date tag (Backup), so grouping by tags makes one group per day and
 	// keeps every snapshot (OBSERVED, restic 0.18.0 dry-run). The tag filter
 	// keeps the policy to this stack's snapshots.
-	args := []string{"forget", "--verbose", "--group-by", "paths"}
+	selection := []string{"--group-by", "paths"}
 	if tag != "" {
-		args = append(args, "--tag", tag)
+		selection = append(selection, "--tag", tag)
 	}
 
-	hasRetention := false
-	if m.cfg.KeepDaily > 0 {
-		args = append(args, "--keep-daily", strconv.Itoa(m.cfg.KeepDaily))
-		hasRetention = true
-	}
-	if m.cfg.KeepWeekly > 0 {
-		args = append(args, "--keep-weekly", strconv.Itoa(m.cfg.KeepWeekly))
-		hasRetention = true
-	}
-	if m.cfg.KeepMonthly > 0 {
-		args = append(args, "--keep-monthly", strconv.Itoa(m.cfg.KeepMonthly))
-		hasRetention = true
-	}
-	if m.cfg.KeepYearly > 0 {
-		args = append(args, "--keep-yearly", strconv.Itoa(m.cfg.KeepYearly))
-		hasRetention = true
-	}
-
-	if !hasRetention {
+	policy := m.retentionPolicy()
+	if len(policy) == 0 {
 		m.logger.Warn("ApplyRetention: no keep-* settings configured, skipping forget")
-		return nil
+		return false, nil
 	}
 
 	timeout := retentionTimeout
+	var prune []string
 	if m.cfg.AutoPrune {
-		args = append(args, "--prune")
+		prune = []string{"--prune"}
 		timeout = pruneTimeout
 	}
 
-	// The deadline covers the attempt, the stale-lock unlock and the retry.
+	// The deadline covers the dry-run, the attempt, the stale-lock unlock and
+	// the retry.
 	ctx, cancel := withCommandDeadline(ctx, m.opDeadline(timeout))
 	defer cancel()
-	return timeoutError(ctx, m.runLocking(ctx, args, m.resticEnv(pwFile), out), "restic forget")
+	env := m.resticEnv(pwFile)
+
+	args := append(append([]string{"forget", "--verbose"}, selection...), policy...)
+	if keepID != "" {
+		remove, dryErr := m.forgetDryRun(ctx, selection, policy, env)
+		if dryErr != nil {
+			return false, timeoutError(ctx, dryErr, "restic forget --dry-run")
+		}
+		if slices.ContainsFunc(remove, func(s resticSnapshot) bool { return snapshotIDMatches(s, keepID) }) {
+			kept = true
+			ids := make([]string, 0, len(remove))
+			for _, s := range remove {
+				if !snapshotIDMatches(s, keepID) {
+					ids = append(ids, s.ID)
+				}
+			}
+			if len(ids) == 0 {
+				return true, nil
+			}
+			// "--" before the ids, as before every positional here.
+			args = append(append(append([]string{"forget", "--verbose"}, prune...), "--"), ids...)
+			return true, timeoutError(ctx, m.runLocking(ctx, args, env, out), "restic forget")
+		}
+	}
+	args = append(args, prune...)
+	return kept, timeoutError(ctx, m.runLocking(ctx, args, env, out), "restic forget")
+}
+
+// forgetDryRun returns the snapshots the policy would remove.
+func (m *ResticManager) forgetDryRun(ctx context.Context, selection, policy, env []string) ([]resticSnapshot, error) {
+	args := append(append([]string{"forget", "--no-lock", "--dry-run", "--json"}, selection...), policy...)
+	raw, err := m.runner.Output(ctx, "restic", args, env)
+	if err != nil {
+		return nil, err
+	}
+	var groups []resticForgetGroup
+	if err := json.Unmarshal(bytes.TrimSpace(raw), &groups); err != nil {
+		return nil, fmt.Errorf("parse restic forget --dry-run JSON: %w", err)
+	}
+	var remove []resticSnapshot
+	for _, g := range groups {
+		for _, s := range g.Remove {
+			if s.ID == "" {
+				return nil, errors.New("parse restic forget --dry-run JSON: a snapshot to remove has no id")
+			}
+			remove = append(remove, s)
+		}
+	}
+	return remove, nil
+}
+
+// snapshotIDMatches reports whether id (a short or full snapshot id) names s.
+func snapshotIDMatches(s resticSnapshot, id string) bool {
+	return id != "" && (s.ID == id || s.ShortID == id || strings.HasPrefix(s.ID, id))
 }
 
 // Prune runs `restic prune` (optionally with --dry-run). It streams output to out.

@@ -175,12 +175,18 @@ var lockingSubcommands = map[string]bool{"forget": true, "prune": true, "check":
 // agent-os-hxuz): a function that builds one must call runLocking and must not
 // call the runner directly. Read through go:embed (packageSources), so a `go test -overlay`
 // mutant of backup_restic.go is what this sees.
+//
+// An argv literal that also carries "--no-lock" takes no lock, so it cannot
+// fail with exit 11 and is not a locking call: `forget --no-lock --dry-run`
+// in forgetDryRun is a read (agent-os-95dk). The exemption is per literal, so
+// a function building a locking argv elsewhere is still held to the rule.
 func TestResticLockingCallsGoThroughRunLocking(t *testing.T) {
 	entries, err := packageSources.ReadDir(".")
 	require.NoError(t, err)
 
 	fset := token.NewFileSet()
 	found := map[string]bool{}
+	exempt := map[string]bool{}
 	for _, e := range entries {
 		name := e.Name()
 		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
@@ -204,7 +210,11 @@ func TestResticLockingCallsGoThroughRunLocking(t *testing.T) {
 					if len(x.Elts) > 0 {
 						if lit, ok := x.Elts[0].(*ast.BasicLit); ok && lit.Kind == token.STRING {
 							if sub, err := strconv.Unquote(lit.Value); err == nil && lockingSubcommands[sub] {
-								buildsLockingArgv = true
+								if literalHasString(x, "--no-lock") {
+									exempt[fn.Name.Name] = true
+								} else {
+									buildsLockingArgv = true
+								}
 							}
 						}
 					}
@@ -240,9 +250,26 @@ func TestResticLockingCallsGoThroughRunLocking(t *testing.T) {
 
 	// Positive control: the guard must see the five known sites, or a zero
 	// above means it matched nothing.
-	for _, want := range []string{"ApplyRetention", "Prune", "VerifyRepositoryData", "Backup", "Restore"} {
+	for _, want := range []string{"ApplyRetentionKeeping", "Prune", "VerifyRepositoryData", "Backup", "Restore"} {
 		assert.True(t, found[want], "guard did not see %s: its argv detection is blind", want)
 	}
+	// And the exemption must fire on the one --no-lock site it exists for,
+	// or it is a hole nobody can see.
+	assert.True(t, exempt["forgetDryRun"], "the --no-lock exemption did not see forgetDryRun")
+	assert.False(t, found["forgetDryRun"], "forgetDryRun builds only a --no-lock argv")
+}
+
+// literalHasString reports whether a composite literal has the string
+// literal s among its elements.
+func literalHasString(lit *ast.CompositeLit, s string) bool {
+	for _, e := range lit.Elts {
+		if b, ok := e.(*ast.BasicLit); ok && b.Kind == token.STRING {
+			if v, err := strconv.Unquote(b.Value); err == nil && v == s {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // TestRunBackup_StaleLockRetryWithNilOutDoesNotHang: RunBackup accepts a nil

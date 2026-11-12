@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
@@ -981,8 +982,8 @@ func (s *BackupService) executeBackupRun(
 			notStarted = append(notStarted, stackID)
 			// recordItem and finaliseRun write through the database handle and
 			// take no context, so this write cannot fail on the dead one.
-			s.recordItem(run.ID, stackID, "skipped", "", false, 0,
-				fmt.Sprintf("not started: the run's context ended (%v)", ctxErr))
+			s.recordItem(run.ID, stackID, runItemOutcome{status: "skipped",
+				message: fmt.Sprintf("not started: the run's context ended (%v)", ctxErr)})
 			stream(out, "info", fmt.Sprintf("stack %s not started: the run's context ended (%v)", stackID, ctxErr))
 			continue
 		}
@@ -1375,6 +1376,9 @@ func (s *BackupService) backupStack(
 		snapshotID  string
 		stopApplied bool
 		notes       []string
+		// unreadable is set for a partial snapshot (agent-os-95dk): the item
+		// records it, so later retention and restores can tell it apart.
+		unreadable *ResticBackupSummary
 	)
 	defer func() {
 		status := "success"
@@ -1382,8 +1386,13 @@ func (s *BackupService) backupStack(
 			status = "failed"
 			notes = append([]string{retErr.Error()}, notes...)
 		}
-		s.recordItem(runID, stackID, status, snapshotID, stopApplied, time.Since(startedAt),
-			strings.Join(notes, "; "))
+		item := runItemOutcome{status: status, snapshotID: snapshotID, stopApplied: stopApplied,
+			duration: time.Since(startedAt), message: strings.Join(notes, "; ")}
+		if unreadable != nil && status == "success" {
+			n := unreadable.UnreadableCount
+			item.unreadableCount = &n
+		}
+		s.recordItem(runID, stackID, item)
 	}()
 	// warn reports a non-fatal problem live and keeps it for the run item.
 	warn := func(msg string) {
@@ -1470,6 +1479,7 @@ func (s *BackupService) backupStack(
 		// it is verified and retained like a complete one (agent-os-sufn).
 		res.partial = true
 		res.unreadable = summary.UnreadableCount
+		unreadable = summary
 		warn(unreadableNote(summary))
 		s.logger.Warn("backup snapshot saved without unreadable files",
 			"stack", stackID, "count", summary.UnreadableCount, "listed", summary.Unreadable)
@@ -1501,17 +1511,13 @@ func (s *BackupService) backupStack(
 	// forever (agent-os-sufn). restic's keep-* policy keeps the latest
 	// snapshot per daily/weekly/monthly/yearly bucket and cannot tell a
 	// partial snapshot from a complete one (marking it needs `restic tag`,
-	// which rewrites it under a new id). Two costs follow. A later partial
-	// snapshot replaces an earlier complete one in the same bucket. And if
-	// the unreadable set GROWS (a permission change, a failing disk), every
-	// bucket fills with partial snapshots while each run reads "partial" as
-	// before, so the newest complete snapshot ages out: after the keep-daily
-	// days, then the keep-weekly weeks, then the keep-monthly months. No
-	// guard exists for that yet; see the follow-up bead.
-	if retentionErr := restic.ApplyRetention(ctx, stackID, out); retentionErr != nil {
-		warn(fmt.Sprintf("retention warning: %v", retentionErr))
-		res.retentionFailed = true
-	}
+	// which rewrites it under a new id). So when the unreadable set GROWS (a
+	// permission change, a failing disk), every bucket fills with partial
+	// snapshots and the newest complete snapshot would age out. After a
+	// partial backup, retention keeps the stack's newest complete snapshot,
+	// read from the run items (agent-os-95dk). Fails closed: if that snapshot
+	// cannot be looked up, retention is skipped rather than run blind.
+	s.applyStackRetention(ctx, restic, stackID, res.partial, warn, &res, out)
 
 	if res.partial {
 		stream(out, "info", fmt.Sprintf("[%s] completed; some files could not be read", stackID))
@@ -1522,6 +1528,46 @@ func (s *BackupService) backupStack(
 	// The deferred restart will fire here for the stop-policy path unless the
 	// stack was known to be stopped beforehand.
 	return res, nil
+}
+
+// applyStackRetention runs the stack's retention after its backup. After a
+// partial snapshot it keeps the newest complete one (agent-os-95dk).
+func (s *BackupService) applyStackRetention(
+	ctx context.Context,
+	restic *ResticManager,
+	stackID string,
+	partial bool,
+	warn func(string),
+	res *stackResult,
+	out chan<- StreamLine,
+) {
+	keepID := ""
+	if partial {
+		id, err := s.db.GetNewestCompleteSnapshotID(stackID)
+		switch {
+		case errors.Is(err, errdefs.ErrNotFound):
+			// No complete snapshot on record: nothing to keep.
+		case err != nil:
+			warn(fmt.Sprintf("retention skipped: the stack's newest complete snapshot could not be read, so it could not be kept: %v", err))
+			res.retentionFailed = true
+			return
+		default:
+			keepID = id
+		}
+	}
+	kept, err := restic.ApplyRetentionKeeping(ctx, stackID, keepID, out)
+	if err != nil {
+		if keepID != "" {
+			warn(fmt.Sprintf("retention skipped: could not check that it keeps complete snapshot %s: %v", keepID, err))
+		} else {
+			warn(fmt.Sprintf("retention warning: %v", err))
+		}
+		res.retentionFailed = true
+		return
+	}
+	if kept {
+		warn(fmt.Sprintf("retention kept snapshot %s, the stack's newest complete snapshot; the policy would have forgotten it because newer snapshots are partial", keepID))
+	}
 }
 
 // maxNotedPathBytes caps each path in the note: 20 paths at PATH_MAX would
@@ -2154,26 +2200,32 @@ func (s *BackupService) validateSnapshotBelongsToStack(
 	return fmt.Errorf("snapshot %s does not belong to stack %s", snapshotID, stackID)
 }
 
+// runItemOutcome is what one stack's backup records in its run item.
+type runItemOutcome struct {
+	status      string
+	snapshotID  string
+	stopApplied bool
+	duration    time.Duration
+	message     string
+	// unreadableCount is nil for a complete snapshot (agent-os-95dk).
+	unreadableCount *int
+	unreadablePaths []string
+}
+
 // recordItem writes a BackupRunItem to the DB, ignoring errors (they are
 // logged but do not affect the backup result).
-func (s *BackupService) recordItem(
-	runID string,
-	stackID string,
-	status string,
-	snapshotID string,
-	stopApplied bool,
-	duration time.Duration,
-	message string,
-) {
+func (s *BackupService) recordItem(runID, stackID string, o runItemOutcome) {
 	item := &models.BackupRunItem{
-		ID:           uuid.New().String(),
-		RunID:        runID,
-		StackID:      stackID,
-		Status:       status,
-		SnapshotID:   snapshotID,
-		StopApplied:  stopApplied,
-		DurationMs:   duration.Milliseconds(),
-		ErrorMessage: message,
+		ID:              uuid.New().String(),
+		RunID:           runID,
+		StackID:         stackID,
+		Status:          o.status,
+		SnapshotID:      o.snapshotID,
+		StopApplied:     o.stopApplied,
+		DurationMs:      o.duration.Milliseconds(),
+		ErrorMessage:    o.message,
+		UnreadableCount: o.unreadableCount,
+		UnreadablePaths: o.unreadablePaths,
 	}
 	if err := s.db.AddBackupRunItem(item); err != nil {
 		s.logger.Error("failed to record backup run item", "stack", stackID, "error", err)

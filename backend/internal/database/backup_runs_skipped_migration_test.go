@@ -73,7 +73,9 @@ INSERT INTO backup_run_items (id, run_id, stack_id, status, snapshot_id, stop_ap
 	require.NoError(t, err)
 
 	const runsQ = `SELECT * FROM backup_runs ORDER BY id`
-	const itemsQ = `SELECT * FROM backup_run_items ORDER BY id`
+	// The v18 columns by name: later migrations add columns (v26), which is
+	// not this rebuild's concern.
+	const itemsQ = `SELECT id, run_id, stack_id, status, snapshot_id, stop_applied, duration_ms, error_message FROM backup_run_items ORDER BY id`
 	const joinQ = `SELECT r.id, i.id FROM backup_runs r JOIN backup_run_items i ON i.run_id = r.id ORDER BY r.id`
 	// Every index and trigger on the two rebuilt tables, as SQLite stores them.
 	const schemaQ = `SELECT type, name, tbl_name, sql FROM sqlite_master
@@ -119,6 +121,10 @@ INSERT INTO backup_run_items (id, run_id, stack_id, status, snapshot_id, stop_ap
 	require.Equal(t, 1, strings.Count(runsSQLBefore, oldCheck))
 	assert.Equal(t, strings.Replace(runsSQLBefore, oldCheck, newCheck, 1), runsSQLAfter,
 		"backup_runs must differ from v18 only in its status CHECK list")
+	// v26 appends its two columns with ALTER TABLE ADD COLUMN, which SQLite
+	// writes into the stored CREATE TABLE text; removed here so the comparison
+	// still pins v19's rebuild.
+	itemsSQLAfter = strings.Replace(itemsSQLAfter, ", unreadable_count INTEGER, unreadable_paths TEXT", "", 1)
 	assert.Equal(t, itemsSQLBefore, itemsSQLAfter, "backup_run_items must be rebuilt unchanged")
 
 	assertRebuildForeignKeyIntact(t, db, "backup_run_items", "backup_runs", "backup_runs_new", "backup_run_items_v19")

@@ -53,7 +53,7 @@ import (
 // (agent-os-k81p.1): the template is rebuilt
 // from the database package's own migration list, so it picked each up
 // automatically and only this literal needed moving.
-const wantSchemaMigrations = 25
+const wantSchemaMigrations = 26
 
 // backupSchemaTemplate returns the bytes of a fully migrated, empty Capstan
 // database, built exactly once per test binary.
