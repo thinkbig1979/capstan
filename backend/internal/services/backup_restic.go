@@ -261,10 +261,15 @@ const resticExitRepoLocked = 11
 // meaning.
 const resticExitSourceUnreadable = 3
 
-// maxUnreadableListed caps how many unreadable paths a backup keeps by name.
-// They are file names from the stack's directory and land in the run item and
-// the log; the rest are only counted.
+// maxUnreadableListed caps how many unreadable paths the run item's note and
+// the log name; the rest are only counted there.
 const maxUnreadableListed = 20
+
+// maxUnreadableStored caps how many unreadable paths a backup keeps for its
+// run item's unreadable_paths, which a restore reads to keep --delete off
+// them (agent-os-fmeu). Past it the paths are only counted, and a restore of
+// that snapshot runs without --delete.
+const maxUnreadableStored = 1000
 
 // isPartialBackup reports whether a failed `restic backup` still saved a
 // usable snapshot: exit 3, a snapshot id in the summary restic printed, at
@@ -529,7 +534,7 @@ func (s *ResticBackupSummary) noteUnreadable(item, during string) {
 	if s.source != "" && filepath.Clean(item) == s.source {
 		s.SourceUnreadable = true
 	}
-	if len(s.Unreadable) < maxUnreadableListed {
+	if len(s.Unreadable) < maxUnreadableStored {
 		s.Unreadable = append(s.Unreadable, item)
 	}
 }
@@ -1089,7 +1094,11 @@ func (m *ResticManager) Stats(ctx context.Context) (int64, error) {
 // leave untouched, normally restoreProtectedPaths' result: without them,
 // --delete would also remove the live content of mounts and cache directories
 // the backup never covered.
-func (m *ResticManager) Restore(ctx context.Context, snapshotID, sourcePath, targetPath string, excludes []string, out chan<- StreamLine) error {
+//
+// deleteExtra false drops --delete: the caller cannot name every path the
+// snapshot lacks for a reason other than age, so nothing may be deleted
+// (agent-os-fmeu).
+func (m *ResticManager) Restore(ctx context.Context, snapshotID, sourcePath, targetPath string, excludes []string, deleteExtra bool, out chan<- StreamLine) error {
 	pwFile, cleanup, err := m.withPasswordFile()
 	if err != nil {
 		return err
@@ -1104,7 +1113,10 @@ func (m *ResticManager) Restore(ctx context.Context, snapshotID, sourcePath, tar
 	if sourcePath != "" {
 		ref = snapshotID + ":" + sourcePath
 	}
-	args := []string{"restore", ref, "--target", targetPath, "--verbose", "--delete"}
+	args := []string{"restore", ref, "--target", targetPath, "--verbose"}
+	if deleteExtra {
+		args = append(args, "--delete")
+	}
 	for _, rel := range excludes {
 		args = append(args, "--exclude", restoreExcludePattern(rel))
 	}

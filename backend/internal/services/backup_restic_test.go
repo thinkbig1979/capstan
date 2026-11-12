@@ -485,7 +485,7 @@ func TestResticManager_Restore_Args(t *testing.T) {
 		for range out {
 		}
 	}()
-	err := m.Restore(context.Background(), "abc123", "/orig/src", "/restore/here", nil, out)
+	err := m.Restore(context.Background(), "abc123", "/orig/src", "/restore/here", nil, true, out)
 	require.NoError(t, err)
 	close(out)
 

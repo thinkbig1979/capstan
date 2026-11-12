@@ -81,7 +81,7 @@ var lockOps = []struct {
 	// with exit 11 (OBSERVED, restic 0.18.0); runRestore holds the global lock
 	// (agent-os-hxuz).
 	{"restore", func(m *ResticManager) error {
-		return m.Restore(context.Background(), "abc123", "/srv/app", "/srv/app", nil, nil)
+		return m.Restore(context.Background(), "abc123", "/srv/app", "/srv/app", nil, true, nil)
 	}},
 }
 

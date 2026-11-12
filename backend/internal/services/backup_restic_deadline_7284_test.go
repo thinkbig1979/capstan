@@ -168,7 +168,7 @@ func TestResticManager_HungCallTimesOutAndSaysSo(t *testing.T) {
 			return err
 		}},
 		{"restic restore", func(ctx context.Context, m *ResticManager) error {
-			return m.Restore(ctx, "abc123", "/srv/app", "/srv/app", nil, nil)
+			return m.Restore(ctx, "abc123", "/srv/app", "/srv/app", nil, true, nil)
 		}},
 		{"restic snapshots", func(ctx context.Context, m *ResticManager) error {
 			_, err := m.ListSnapshots(ctx, "", 0)
@@ -218,7 +218,7 @@ func TestResticManager_BackupAndRestoreRunUnderTheLongDeadline(t *testing.T) {
 			return err
 		}, backupTimeout},
 		{"restore", func(m *ResticManager) error {
-			return m.Restore(context.Background(), "abc123", "/srv/app", "/srv/app", nil, nil)
+			return m.Restore(context.Background(), "abc123", "/srv/app", "/srv/app", nil, true, nil)
 		}, restoreTimeout},
 	}
 	for _, op := range ops {

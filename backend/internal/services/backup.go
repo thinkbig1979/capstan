@@ -1391,6 +1391,7 @@ func (s *BackupService) backupStack(
 		if unreadable != nil && status == "success" {
 			n := unreadable.UnreadableCount
 			item.unreadableCount = &n
+			item.unreadablePaths = unreadable.Unreadable
 		}
 		s.recordItem(runID, stackID, item)
 	}()
@@ -1581,8 +1582,9 @@ func unreadableNote(summary *ResticBackupSummary) string {
 	if summary.UnreadableCount == 0 {
 		return "snapshot saved, but restic could not read some files and named none"
 	}
-	quoted := make([]string, len(summary.Unreadable))
-	for i, p := range summary.Unreadable {
+	listed := summary.Unreadable[:min(len(summary.Unreadable), maxUnreadableListed)]
+	quoted := make([]string, len(listed))
+	for i, p := range listed {
 		if len(p) > maxNotedPathBytes {
 			p = p[:maxNotedPathBytes] + "..."
 		}
@@ -1590,7 +1592,7 @@ func unreadableNote(summary *ResticBackupSummary) string {
 	}
 	note := fmt.Sprintf("snapshot saved without %d unreadable path(s): %s",
 		summary.UnreadableCount, strings.Join(quoted, ", "))
-	if more := summary.UnreadableCount - len(summary.Unreadable); more > 0 {
+	if more := summary.UnreadableCount - len(listed); more > 0 {
 		note += fmt.Sprintf(" (and %d more, not listed)", more)
 	}
 	return note
@@ -1820,6 +1822,33 @@ func (s *BackupService) runRestore(
 		return fmt.Errorf("restore refused: %w", scanErr)
 	}
 
+	// A partial snapshot lacks the files its backup could not read, and
+	// --delete would remove their live copies (agent-os-fmeu). Decided before
+	// the stop, like the scan above.
+	deleteExtra := true
+	item, itemErr := s.db.GetRunItemForSnapshot(stackID, snapshotID)
+	switch {
+	case errors.Is(itemErr, errdefs.ErrNotFound):
+		// No backup item recorded this snapshot (made outside Capstan, or
+		// before the item history), so nothing marks it partial.
+	case itemErr != nil:
+		return fmt.Errorf("restore refused: could not read whether snapshot %s is partial: %w", snapshotID, itemErr)
+	case item.UnreadableCount != nil:
+		var note string
+		rels, placed := unreadableRestoreExcludes(stackDir, item.UnreadablePaths)
+		if placed && *item.UnreadableCount > 0 && len(item.UnreadablePaths) >= *item.UnreadableCount {
+			protected = append(protected, rels...)
+			note = fmt.Sprintf("partial snapshot: its backup could not read %d path(s); they are left as they are in %s", len(rels), stackDir)
+		} else {
+			deleteExtra = false
+			note = fmt.Sprintf("partial snapshot: its backup could not read %d path(s) and not all of them are on record, so it is restored without --delete: files added since the snapshot stay in %s", *item.UnreadableCount, stackDir)
+		}
+		stream(out, "error", fmt.Sprintf("[%s] %s", stackID, note))
+		if notes != nil {
+			*notes = append(*notes, note)
+		}
+	}
+
 	// Determine if the stack was running. As in backupStack, a failed read is a
 	// third answer — "could not find out" — and not a "no".
 	priorState := s.observeRunState(stack, stackID)
@@ -1892,7 +1921,7 @@ func (s *BackupService) runRestore(
 	stream(out, "info", fmt.Sprintf("[%s] restoring snapshot %s to %s", stackID, snapshotID, stackDir))
 	// stackDir is the snapshot's stored source path; pass it so restic strips that
 	// prefix and restores contents into stackDir rather than nesting them.
-	if err := restic.Restore(ctx, snapshotID, stackDir, stackDir, protected, out); err != nil {
+	if err := restic.Restore(ctx, snapshotID, stackDir, stackDir, protected, deleteExtra, out); err != nil {
 		return fmt.Errorf("restic restore: %w", err)
 	}
 
@@ -1904,6 +1933,30 @@ func (s *BackupService) runRestore(
 	})
 
 	return nil
+}
+
+// unreadableRestoreExcludes maps the unreadable paths a backup recorded,
+// absolute as restic reported them, to excludes relative to source, the
+// snapshot's stored path (agent-os-fmeu). placed is false when any of them
+// does not sit strictly under source, and then the caller must not --delete.
+//
+// Lexical on purpose: these are names inside the snapshot, not host paths.
+// pathutil.IsContained resolves symlinks on the live filesystem, which says
+// nothing about a snapshot, and source may not exist on the host at all after
+// a stacks-dir move. A wrong answer can only drop --delete (allowlisted in
+// scripts/check-path-containment.sh).
+func unreadableRestoreExcludes(source string, paths []string) (rels []string, placed bool) {
+	for _, p := range paths {
+		if !filepath.IsAbs(p) {
+			return nil, false
+		}
+		rel, err := filepath.Rel(source, p)
+		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, "../") || filepath.IsAbs(rel) {
+			return nil, false
+		}
+		rels = append(rels, rel)
+	}
+	return rels, true
 }
 
 // --- RunDRRestore ---
