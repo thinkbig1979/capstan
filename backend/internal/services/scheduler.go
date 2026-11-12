@@ -1030,6 +1030,28 @@ func (s *SchedulerService) pruneVanishedTargets(ctx context.Context, updates []m
 	return live, unresolved
 }
 
+// newestIntentFirst orders orphaned policies that may resolve to the same
+// name: the most recently updated first, because its state is the operator's
+// latest choice. Times are compared parsed, not as text: the stored spelling
+// carries the server's UTC offset, so text order and time order can disagree.
+// An unparseable updated_at sorts after every parseable one, and ties go to
+// the lower id, so the order is total.
+func newestIntentFirst(a, b models.AutoUpdatePolicy) int {
+	ta, ea := time.Parse(time.RFC3339, a.UpdatedAt) //geterrors:ignore an unparseable updated_at is a value to order, not a failure to report: it sorts last
+	tb, eb := time.Parse(time.RFC3339, b.UpdatedAt) //geterrors:ignore same as the line above
+	switch {
+	case ea == nil && eb == nil:
+		if c := tb.Compare(ta); c != 0 {
+			return c
+		}
+	case ea == nil:
+		return -1
+	case eb == nil:
+		return 1
+	}
+	return strings.Compare(a.ID, b.ID)
+}
+
 // rekeyTimeout bounds one rekeyLegacyContainerPolicies run, whose Docker
 // inspects would otherwise wait on a cancel-only context.
 const rekeyTimeout = time.Minute
@@ -1080,7 +1102,17 @@ func (s *SchedulerService) rekeyLegacyContainerPolicies(ctx context.Context) {
 				if info.ContainerJSONBase == nil {
 					break
 				}
-				if name := strings.TrimPrefix(info.Name, "/"); name != "" && info.ID == p.TargetID {
+				name := strings.TrimPrefix(info.Name, "/")
+				if name != "" && info.ID == p.TargetID && strings.Contains(name, oldContainerSuffix) {
+					// Set aside by a standalone update in flight, or left by
+					// one whose final removal failed. Moving the row to that
+					// temporary name would match nothing once it is gone, and
+					// the row would no longer look like an ID to retry.
+					s.logger.Info("Container is set aside by an update; its auto-update policy is re-keyed on a later run",
+						"policy_id", p.ID, "container_id", p.TargetID, "container_name", name)
+					continue
+				}
+				if name != "" && info.ID == p.TargetID {
 					live = append(live, move{p, name, "docker"})
 					continue
 				}
@@ -1114,24 +1146,10 @@ func (s *SchedulerService) rekeyLegacyContainerPolicies(ctx context.Context) {
 		orphaned = append(orphaned, move{p, name, "update_history"})
 	}
 
-	// Orphans that resolve to the same name: the most recently updated row
-	// wins, because its state is the operator's latest choice. Ordering by age
-	// kept the oldest, which could turn a policy the operator switched off back
-	// on. Times are compared parsed, not as text, since the stored spelling
-	// carries the server's UTC offset; ties go to the lower id.
-	slices.SortStableFunc(orphaned, func(a, b move) int {
-		ta, ea := time.Parse(time.RFC3339, a.policy.UpdatedAt)
-		tb, eb := time.Parse(time.RFC3339, b.policy.UpdatedAt)
-		if ea == nil && eb == nil && !ta.Equal(tb) {
-			return tb.Compare(ta)
-		}
-		if ea != nil || eb != nil {
-			if c := strings.Compare(b.policy.UpdatedAt, a.policy.UpdatedAt); c != 0 {
-				return c
-			}
-		}
-		return strings.Compare(a.policy.ID, b.policy.ID)
-	})
+	// Orphans that resolve to the same name: the operator's latest choice
+	// wins (newestIntentFirst). Ordering by age kept the oldest, which could
+	// turn a policy the operator switched off back on.
+	slices.SortStableFunc(orphaned, func(a, b move) int { return newestIntentFirst(a.policy, b.policy) })
 
 	for _, m := range append(live, orphaned...) {
 		outcome, err := s.db.RekeyContainerPolicy(m.policy.ID, m.policy.TargetID, m.name)

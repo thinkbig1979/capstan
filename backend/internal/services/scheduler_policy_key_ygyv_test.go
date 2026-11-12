@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -239,15 +240,22 @@ func TestLegacyContainerPolicyRekeyedOnScanTickYgyv(t *testing.T) {
 // TestLegacyOrphansKeepNewestIntentYgyv: two orphaned ID rows that resolve to
 // the same name. The one the operator changed last wins, whatever the order
 // they were created in, so a policy switched off is not switched back on by
-// an older row for the same container.
+// an older row for the same container. The third case has timestamps whose
+// text order and time order disagree, so only a parsed comparison passes it.
 func TestLegacyOrphansKeepNewestIntentYgyv(t *testing.T) {
 	cases := []struct {
-		name              string
-		enabledCreatedAt  string
-		disabledCreatedAt string
+		name                        string
+		enabledCreated, enabledUpd  string
+		disabledCreated, disableUpd string
 	}{
-		{"the newer row was disabled later", "2026-01-01T00:00:00Z", "2026-02-01T00:00:00Z"},
-		{"an older-created row was disabled later", "2026-02-01T00:00:00Z", "2026-01-01T00:00:00Z"},
+		{"the newer row was disabled later",
+			"2026-01-01T00:00:00Z", "2026-03-01T00:00:00Z", "2026-02-01T00:00:00Z", "2026-04-01T10:00:00+02:00"},
+		{"an older-created row was disabled later",
+			"2026-02-01T00:00:00Z", "2026-03-01T00:00:00Z", "2026-01-01T00:00:00Z", "2026-04-01T10:00:00+02:00"},
+		// 01:00+02:00 is 23:00Z the day before: it sorts AFTER 00:00Z as text
+		// and BEFORE it in time.
+		{"text order and time order disagree",
+			"2026-01-01T00:00:00Z", "2026-04-01T01:00:00+02:00", "2026-02-01T00:00:00Z", "2026-04-01T00:00:00Z"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -255,11 +263,11 @@ func TestLegacyOrphansKeepNewestIntentYgyv(t *testing.T) {
 			svc := newApplyFixture(t, &ygyvDocker{live: map[string]string{}})
 			require.NoError(t, svc.db.UpsertAutoUpdatePolicy(&models.AutoUpdatePolicy{
 				ID: "p-enabled", TargetType: "container", TargetID: enabledID, Enabled: true,
-				CreatedAt: tc.enabledCreatedAt, UpdatedAt: "2026-03-01T00:00:00Z",
+				CreatedAt: tc.enabledCreated, UpdatedAt: tc.enabledUpd,
 			}))
 			require.NoError(t, svc.db.UpsertAutoUpdatePolicy(&models.AutoUpdatePolicy{
 				ID: "p-disabled", TargetType: "container", TargetID: disabledID, Enabled: false,
-				CreatedAt: tc.disabledCreatedAt, UpdatedAt: "2026-04-01T10:00:00+02:00",
+				CreatedAt: tc.disabledCreated, UpdatedAt: tc.disableUpd,
 			}))
 			for _, id := range []string{enabledID, disabledID} {
 				require.NoError(t, svc.db.InsertUpdateHistory(&models.UpdateHistoryEntry{
@@ -277,6 +285,54 @@ func TestLegacyOrphansKeepNewestIntentYgyv(t *testing.T) {
 			require.False(t, p.Enabled)
 		})
 	}
+}
+
+// TestNewestIntentFirstIsATotalOrderYgyv: parseable times newest first, then
+// unparseable ones, ties by id; every input order sorts the same way.
+func TestNewestIntentFirstIsATotalOrderYgyv(t *testing.T) {
+	in := []models.AutoUpdatePolicy{
+		{ID: "z-bad", UpdatedAt: "not a time"},
+		{ID: "a-bad", UpdatedAt: "zzz"},
+		{ID: "old", UpdatedAt: "2026-04-01T01:00:00+02:00"},
+		{ID: "new", UpdatedAt: "2026-04-01T00:00:00Z"},
+		{ID: "b-tie", UpdatedAt: "2026-03-01T00:00:00Z"},
+		{ID: "a-tie", UpdatedAt: "2026-03-01T01:00:00+01:00"},
+	}
+	want := []string{"new", "old", "a-tie", "b-tie", "a-bad", "z-bad"}
+	for rot := range in {
+		perm := append(slices.Clone(in[rot:]), in[:rot]...)
+		slices.Reverse(perm[:len(perm)/2])
+		slices.SortStableFunc(perm, newestIntentFirst)
+		var ids []string
+		for _, p := range perm {
+			ids = append(ids, p.ID)
+		}
+		require.Equal(t, want, ids, "input rotation %d", rot)
+	}
+}
+
+// TestLegacyPolicyNotMovedToSetAsideNameYgyv: while a standalone update has
+// the container set aside under <name>-capstan-old-<id>, or after one left it
+// there, the row is not moved to that temporary name; it is moved to the real
+// name on a later run.
+func TestLegacyPolicyNotMovedToSetAsideNameYgyv(t *testing.T) {
+	docker := &ygyvDocker{live: map[string]string{ygyvOldID: "web" + oldContainerSuffix + ygyvOldID[:12]}}
+	svc := newApplyFixture(t, docker)
+	seedYgyvPolicy(t, svc, "p-web", ygyvOldID, 0)
+
+	svc.RunAutoUpdates(context.Background(), nil)
+
+	got := ygyvPolicies(t, svc)
+	require.Contains(t, got, ygyvOldID, "the row waits on its ID: %v", got)
+	require.Len(t, got, 1)
+
+	// The other side, same fixture: the container has its name back.
+	docker.mu.Lock()
+	docker.live = map[string]string{ygyvOldID: "web"}
+	docker.mu.Unlock()
+	svc.RunAutoUpdates(context.Background(), nil)
+	got = ygyvPolicies(t, svc)
+	require.Equal(t, "p-web", got["web"].ID, "%v", got)
 }
 
 // TestUnresolvableLegacyPolicyWarnsOnceYgyv: a row that resolves to no name

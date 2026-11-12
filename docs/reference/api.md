@@ -471,8 +471,11 @@ Direct Docker resource management, independent of any stack.
   create/update an auto-update policy for a container or stack. For
   `targetType` `container`, `targetId` is the container's name without the
   leading `/`, not its ID: an update recreates the container under a new ID,
-  and the name is what survives. A policy saved under a full 64-character
-  container ID is moved to that container's name by the scheduler
+  and the name is what survives. A policy saved earlier under a full
+  64-character lowercase container ID is moved to that container's name by
+  the update scheduler, which runs only while update scanning is on. If the
+  name already has a policy, that policy is kept and the ID-keyed one is
+  deleted; a policy whose container name cannot be found stays as it was.
 - `DELETE /api/v1/resources/auto-update/policies/:targetType/:targetId` —
   remove an auto-update policy
 - `GET /api/v1/resources/volumes` — list volumes
