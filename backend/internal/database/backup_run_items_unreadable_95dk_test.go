@@ -96,24 +96,26 @@ func TestBackupRunItem_95dk_UnreadableColumnsRoundTrip(t *testing.T) {
 	assert.True(t, errors.Is(err, errdefs.ErrNotFound), "%v", err)
 }
 
-// The newest complete snapshot skips newer partial items and failed ones.
-func TestGetNewestCompleteSnapshotID_95dk(t *testing.T) {
+// The partial snapshot ids on record are the successful items with a count,
+// for this stack only.
+func TestGetPartialSnapshotIDs_95dk(t *testing.T) {
 	db := newTestDB(t)
 	one := 1
-	add := func(run, started, item, status, snap string, count *int) {
+	add := func(run, item, stack, status, snap string, count *int) {
 		t.Helper()
-		require.NoError(t, db.CreateBackupRun(&models.BackupRun{ID: run, Kind: "backup", Trigger: "manual", Status: "success", StartedAt: started}))
-		require.NoError(t, db.AddBackupRunItem(&models.BackupRunItem{ID: item, RunID: run, StackID: "s", Status: status, SnapshotID: snap, UnreadableCount: count}))
+		require.NoError(t, db.CreateBackupRun(&models.BackupRun{ID: run, Kind: "backup", Trigger: "manual", Status: "success", StartedAt: "2026-11-01T00:00:00Z"}))
+		require.NoError(t, db.AddBackupRunItem(&models.BackupRunItem{ID: item, RunID: run, StackID: stack, Status: status, SnapshotID: snap, UnreadableCount: count}))
 	}
-	_, err := db.GetNewestCompleteSnapshotID("s")
-	assert.True(t, errors.Is(err, errdefs.ErrNotFound), "%v", err)
-
-	add("r1", "2026-11-01T00:00:00Z", "i1", "success", "11111111", nil)
-	add("r2", "2026-11-02T00:00:00Z", "i2", "success", "22222222", nil)
-	add("r3", "2026-11-03T00:00:00Z", "i3", "success", "33333333", &one)
-	add("r4", "2026-11-04T00:00:00Z", "i4", "failed", "", nil)
-
-	id, err := db.GetNewestCompleteSnapshotID("s")
+	ids, err := db.GetPartialSnapshotIDs("s")
 	require.NoError(t, err)
-	assert.Equal(t, "22222222", id)
+	assert.Empty(t, ids)
+
+	add("r1", "i1", "s", "success", "11111111", nil)
+	add("r2", "i2", "s", "success", "22222222", &one)
+	add("r3", "i3", "s", "failed", "", &one)
+	add("r4", "i4", "other", "success", "44444444", &one)
+
+	ids, err = db.GetPartialSnapshotIDs("s")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"22222222"}, ids)
 }

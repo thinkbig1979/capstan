@@ -430,25 +430,30 @@ func (d *DB) GetBackupRunItems(runID string) ([]models.BackupRunItem, error) {
 	return items, nil
 }
 
-// GetNewestCompleteSnapshotID returns the snapshot id of the stack's newest
-// backup item that wrote a complete snapshot: status success, a snapshot id,
-// and no unreadable count (agent-os-95dk). ErrNotFound-shaped when there is
-// none.
-func (d *DB) GetNewestCompleteSnapshotID(stackID string) (string, error) {
-	query := `SELECT backup_run_items.snapshot_id
-	          FROM backup_run_items
-	          JOIN backup_runs br ON br.id = backup_run_items.run_id
-	          WHERE backup_run_items.stack_id = ?
-	            AND backup_run_items.status = 'success'
-	            AND COALESCE(backup_run_items.snapshot_id, '') <> ''
-	            AND backup_run_items.unreadable_count IS NULL
-	          ORDER BY br.started_at DESC, backup_run_items.rowid DESC
-	          LIMIT 1`
-	var id string
-	if err := d.db.QueryRow(query, stackID).Scan(&id); err != nil {
-		return "", notFound(err, "complete backup snapshot", stackID)
+// GetPartialSnapshotIDs returns the snapshot ids of the stack's successful
+// backup items that recorded a partial snapshot (agent-os-95dk). They mark
+// partial snapshots written before PartialSnapshotTag existed; history
+// pruning removes them with their runs.
+func (d *DB) GetPartialSnapshotIDs(stackID string) ([]string, error) {
+	rows, err := d.db.Query(`SELECT snapshot_id FROM backup_run_items
+	          WHERE stack_id = ? AND status = 'success'
+	            AND COALESCE(snapshot_id, '') <> '' AND unreadable_count IS NOT NULL`, stackID)
+	if err != nil {
+		return nil, err
 	}
-	return id, nil
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading partial snapshot ids: %w", err)
+	}
+	return ids, nil
 }
 
 // GetRunItemForSnapshot returns the stack's newest successful backup item

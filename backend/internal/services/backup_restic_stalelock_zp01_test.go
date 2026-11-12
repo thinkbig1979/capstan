@@ -168,7 +168,7 @@ func TestResticLockOps_UnlockIsBoundedAndItsFailureReported(t *testing.T) {
 // lockingSubcommands are the restic subcommands that fail with exit 11 on a
 // stale lock while the global backup lock is held, so their calls must go
 // through runLocking.
-var lockingSubcommands = map[string]bool{"forget": true, "prune": true, "check": true, "backup": true, "restore": true}
+var lockingSubcommands = map[string]bool{"forget": true, "prune": true, "check": true, "backup": true, "restore": true, "tag": true}
 
 // TestResticLockingCallsGoThroughRunLocking keeps every restic call that
 // builds a forget/prune/check/backup/restore argv on runLocking (agent-os-zp01,
@@ -176,10 +176,13 @@ var lockingSubcommands = map[string]bool{"forget": true, "prune": true, "check":
 // call the runner directly. Read through go:embed (packageSources), so a `go test -overlay`
 // mutant of backup_restic.go is what this sees.
 //
-// An argv literal that also carries "--no-lock" takes no lock, so it cannot
-// fail with exit 11 and is not a locking call: `forget --no-lock --dry-run`
-// in forgetDryRun is a read (agent-os-95dk). The exemption is per literal, so
-// a function building a locking argv elsewhere is still held to the rule.
+// An argv literal carrying BOTH "--no-lock" and "--dry-run" takes no lock and
+// changes nothing, so it is not a locking call: `forget --no-lock --dry-run`
+// in forgetDryRun is a read (agent-os-95dk). Both are required: restic honours
+// --no-lock on forget and prune only together with --dry-run, so a literal
+// with --no-lock alone is still a writer (review S3). The exemption is per
+// literal, so a function building a locking argv elsewhere is still held to
+// the rule.
 func TestResticLockingCallsGoThroughRunLocking(t *testing.T) {
 	entries, err := packageSources.ReadDir(".")
 	require.NoError(t, err)
@@ -210,7 +213,7 @@ func TestResticLockingCallsGoThroughRunLocking(t *testing.T) {
 					if len(x.Elts) > 0 {
 						if lit, ok := x.Elts[0].(*ast.BasicLit); ok && lit.Kind == token.STRING {
 							if sub, err := strconv.Unquote(lit.Value); err == nil && lockingSubcommands[sub] {
-								if literalHasString(x, "--no-lock") {
+								if literalHasString(x, "--no-lock") && literalHasString(x, "--dry-run") {
 									exempt[fn.Name.Name] = true
 								} else {
 									buildsLockingArgv = true
@@ -250,7 +253,7 @@ func TestResticLockingCallsGoThroughRunLocking(t *testing.T) {
 
 	// Positive control: the guard must see the five known sites, or a zero
 	// above means it matched nothing.
-	for _, want := range []string{"ApplyRetentionKeeping", "Prune", "VerifyRepositoryData", "Backup", "Restore"} {
+	for _, want := range []string{"ApplyRetention", "ApplyRetentionAfterPartial", "TagPartial", "Prune", "VerifyRepositoryData", "Backup", "Restore"} {
 		assert.True(t, found[want], "guard did not see %s: its argv detection is blind", want)
 	}
 	// And the exemption must fire on the one --no-lock site it exists for,

@@ -507,8 +507,9 @@ type ResticBackupSummary struct {
 	FilesChanged int
 	// FilesProcessed is total_files_processed: files read, changed or not.
 	FilesProcessed int
-	// Unreadable names the first maxUnreadableListed paths restic reported it
-	// could not read; UnreadableCount counts all of them. SourceUnreadable is
+	// Unreadable names the first maxUnreadableStored paths restic reported it
+	// could not read (the run item stores them; the note and the log name only
+	// the first maxUnreadableListed); UnreadableCount counts all of them. SourceUnreadable is
 	// set when one of them is the backed-up directory itself.
 	Unreadable       []string
 	UnreadableCount  int
@@ -792,14 +793,42 @@ func (m *ResticManager) opDeadline(timeout time.Duration) time.Duration {
 // ApplyRetention runs `restic forget` with the configured keep-* flags and
 // --prune when AutoPrune is set. It streams output to out.
 func (m *ResticManager) ApplyRetention(ctx context.Context, tag string, out chan<- StreamLine) error {
-	_, err := m.ApplyRetentionKeeping(ctx, tag, "", out)
-	return err
+	pwFile, cleanup, err := m.withPasswordFile()
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	selection, policy, prune, timeout := m.retentionArgs(tag)
+	if len(policy) == 0 {
+		m.logger.Warn("ApplyRetention: no keep-* settings configured, skipping forget")
+		return nil
+	}
+	// The deadline covers the attempt, the stale-lock unlock and the retry.
+	ctx, cancel := withCommandDeadline(ctx, m.opDeadline(timeout))
+	defer cancel()
+	args := append(append(append([]string{"forget", "--verbose"}, selection...), policy...), prune...)
+	return timeoutError(ctx, m.runLocking(ctx, args, m.resticEnv(pwFile), out), "restic forget")
 }
 
-// retentionPolicy returns the keep-* flags from the config, or nil when none
-// is set.
-func (m *ResticManager) retentionPolicy() []string {
-	var policy []string
+// retentionArgs returns the snapshot selection, the keep-* policy (nil when
+// none is set), the prune flag and the deadline for a forget of tag.
+//
+// Grouped by path only, with no host filter (agent-os-wdlf). restic groups
+// forget by host and path by default, and the host used to be the container
+// id, which changes on every redeploy: each deploy's snapshots became a group
+// of their own that a `--hostname <current>` filter never reached again. Not
+// grouped by tags either: every snapshot carries a date tag (Backup), so
+// grouping by tags makes one group per day and keeps every snapshot
+// (OBSERVED, restic 0.18.0 dry-run). That is also why PartialSnapshotTag does
+// not split a stack's group (OBSERVED, restic 0.18.0 and 0.19.1: one group for
+// a tagged and an untagged snapshot of one path). The tag filter keeps the
+// policy to this stack's snapshots.
+func (m *ResticManager) retentionArgs(tag string) (selection, policy, prune []string, timeout time.Duration) {
+	selection = []string{"--group-by", "paths"}
+	if tag != "" {
+		selection = append(selection, "--tag", tag)
+	}
 	for _, k := range []struct {
 		flag string
 		n    int
@@ -813,119 +842,186 @@ func (m *ResticManager) retentionPolicy() []string {
 			policy = append(policy, k.flag, strconv.Itoa(k.n))
 		}
 	}
-	return policy
-}
-
-// resticForgetGroup is the part of one `restic forget --json` group Capstan
-// reads: the snapshots the policy would remove.
-type resticForgetGroup struct {
-	Remove []resticSnapshot `json:"remove"`
-}
-
-// ApplyRetentionKeeping applies the retention policy to the snapshots tagged
-// tag, except that the snapshot keepID (a short or full id; "" for none) is
-// never forgotten. kept reports that the policy would have forgotten keepID
-// and this call kept it.
-//
-// Why: restic's keep-* buckets cannot tell a partial snapshot from a complete
-// one, so when a stack's backups turn partial and stay partial, the policy
-// ages its last complete snapshot out after the keep-daily days
-// (agent-os-95dk). The caller passes that snapshot's id after a partial
-// backup.
-//
-// With a keepID it first asks restic what the policy would remove (`forget
-// --dry-run --json`, --no-lock: it is a read, and the caller holds the global
-// backup lock). If keepID is not in that set, the policy runs as usual.
-// Otherwise every other snapshot in the set is forgotten by id. It fails
-// closed: a dry-run that fails or cannot be read forgets nothing and returns
-// an error, because the only way to protect keepID without it would be to
-// guess.
-func (m *ResticManager) ApplyRetentionKeeping(ctx context.Context, tag, keepID string, out chan<- StreamLine) (kept bool, err error) {
-	pwFile, cleanup, err := m.withPasswordFile()
-	if err != nil {
-		return false, err
-	}
-	defer cleanup()
-
-	// Grouped by path only, with no host filter (agent-os-wdlf). restic
-	// groups forget by host and path by default, and the host used to be the
-	// container id, which changes on every redeploy: each deploy's snapshots
-	// became a group of their own that a `--hostname <current>` filter never
-	// reached again. Not grouped by tags either: every snapshot carries a
-	// date tag (Backup), so grouping by tags makes one group per day and
-	// keeps every snapshot (OBSERVED, restic 0.18.0 dry-run). The tag filter
-	// keeps the policy to this stack's snapshots.
-	selection := []string{"--group-by", "paths"}
-	if tag != "" {
-		selection = append(selection, "--tag", tag)
-	}
-
-	policy := m.retentionPolicy()
-	if len(policy) == 0 {
-		m.logger.Warn("ApplyRetention: no keep-* settings configured, skipping forget")
-		return false, nil
-	}
-
-	timeout := retentionTimeout
-	var prune []string
+	timeout = retentionTimeout
 	if m.cfg.AutoPrune {
 		prune = []string{"--prune"}
 		timeout = pruneTimeout
 	}
+	return selection, policy, prune, timeout
+}
 
+// PartialSnapshotTag marks a snapshot that `restic backup` wrote without some
+// files it could not read (exit 3, agent-os-sufn). restic records no error
+// count in a snapshot (OBSERVED, 0.18.0 and 0.19.1: the summary holds file and
+// data counts only), so this tag is the only durable record of "partial" in
+// the repository itself. It survives backup-history pruning, a fresh database
+// and a DR restore, which the run items do not (agent-os-95dk review MUST-1).
+const PartialSnapshotTag = "capstan-partial"
+
+// tagTimeout bounds one `restic tag`, which rewrites one small snapshot file.
+const tagTimeout = 10 * time.Minute
+
+// TagPartial adds PartialSnapshotTag to the snapshot id and returns the id it
+// has afterwards. `restic tag` rewrites the snapshot under a new id, keeps its
+// time, and records the old id as "original"; it takes the exclusive lock
+// (all OBSERVED, restic 0.18.0 and 0.19.1), so it runs under runLocking while
+// the caller holds the global backup lock. tag is the stack tag the snapshot
+// carries, which narrows the listing that finds the new id. restic's output
+// goes to out, which must be drained: the runner sends every line, so a nil
+// out would block it forever (OBSERVED: the real-restic test hung on one).
+func (m *ResticManager) TagPartial(ctx context.Context, tag, id string, out chan<- StreamLine) (string, error) {
+	pwFile, cleanup, err := m.withPasswordFile()
+	if err != nil {
+		return "", err
+	}
+	defer cleanup()
+
+	ctx, cancel := withCommandDeadline(ctx, m.opDeadline(tagTimeout))
+	defer cancel()
+	env := m.resticEnv(pwFile)
+	args := []string{"tag", "--add", PartialSnapshotTag, "--", id}
+	if err := m.runLocking(ctx, args, env, out); err != nil {
+		return "", timeoutError(ctx, err, "restic tag")
+	}
+	newID, err := m.snapshotByOriginal(ctx, tag, id, env)
+	if err != nil {
+		return "", timeoutError(ctx, err, "restic snapshots")
+	}
+	return newID, nil
+}
+
+// snapshotByOriginal returns the id of the snapshot tagged tag and
+// PartialSnapshotTag whose "original" is id.
+func (m *ResticManager) snapshotByOriginal(ctx context.Context, tag, id string, env []string) (string, error) {
+	raw, err := m.runner.Output(ctx, "restic", []string{"snapshots", "--no-lock", "--json", "--tag", tag}, env)
+	if err != nil {
+		return "", err
+	}
+	var snaps []resticSnapshot
+	if err := json.Unmarshal(bytes.TrimSpace(raw), &snaps); err != nil {
+		return "", fmt.Errorf("parse snapshots JSON: %w", err)
+	}
+	for _, s := range snaps {
+		if s.Original == id && s.ID != "" && slices.Contains(s.Tags, PartialSnapshotTag) {
+			return s.ID, nil
+		}
+	}
+	return "", fmt.Errorf("no snapshot tagged %s records %s as its original", PartialSnapshotTag, shortSnapshotID(id))
+}
+
+// resticForgetGroup is the part of one `restic forget --json` group Capstan
+// reads: the snapshots the policy would keep and remove. Both are read: the
+// snapshot just written must be in one of them, which is what shows the output
+// had the shape this parses (agent-os-95dk review S1).
+type resticForgetGroup struct {
+	Keep   []resticSnapshot `json:"keep"`
+	Remove []resticSnapshot `json:"remove"`
+}
+
+// ApplyRetentionAfterPartial applies the retention policy to the snapshots
+// tagged tag after a partial backup wrote currentID, without ever forgetting
+// the stack's newest complete snapshot. It returns that snapshot's short id
+// when the policy would have forgotten it and this call kept it.
+//
+// Why: restic's keep-* buckets cannot tell a partial snapshot from a complete
+// one, so when a stack's backups turn partial and stay partial, the policy
+// ages its last complete snapshot out after the keep-daily days
+// (agent-os-95dk).
+//
+// The instrument is the repository, not the run history: `forget --dry-run
+// --json` (--no-lock: a read, under the caller's global backup lock) lists
+// every snapshot the policy considers, with its tags and time. A snapshot is
+// partial when it carries PartialSnapshotTag, or when knownPartial says so
+// (the run items of partial snapshots written before the tag existed). The
+// newest snapshot that is neither is the newest complete one. Exactly the
+// dry-run's remove set, minus that snapshot, is then forgotten by id: the
+// policy is not run a second time, so what is forgotten is what was checked
+// (S2).
+//
+// It fails closed, forgetting nothing and returning an error, when the
+// dry-run fails, cannot be parsed, names a snapshot with no id or an
+// unreadable time, or does not list currentID: output of another shape cannot
+// pass for "nothing to protect" (S1).
+func (m *ResticManager) ApplyRetentionAfterPartial(ctx context.Context, tag, currentID string, knownPartial func(resticSnapshot) bool, out chan<- StreamLine) (keptID string, err error) {
+	pwFile, cleanup, err := m.withPasswordFile()
+	if err != nil {
+		return "", err
+	}
+	defer cleanup()
+
+	selection, policy, prune, timeout := m.retentionArgs(tag)
+	if len(policy) == 0 {
+		m.logger.Warn("ApplyRetention: no keep-* settings configured, skipping forget")
+		return "", nil
+	}
 	// The deadline covers the dry-run, the attempt, the stale-lock unlock and
 	// the retry.
 	ctx, cancel := withCommandDeadline(ctx, m.opDeadline(timeout))
 	defer cancel()
 	env := m.resticEnv(pwFile)
 
-	args := append(append([]string{"forget", "--verbose"}, selection...), policy...)
-	if keepID != "" {
-		remove, dryErr := m.forgetDryRun(ctx, selection, policy, env)
-		if dryErr != nil {
-			return false, timeoutError(ctx, dryErr, "restic forget --dry-run")
+	keep, remove, err := m.forgetDryRun(ctx, selection, policy, env)
+	if err != nil {
+		return "", timeoutError(ctx, err, "restic forget --dry-run")
+	}
+	all := append(slices.Clone(keep), remove...)
+	if !slices.ContainsFunc(all, func(s resticSnapshot) bool { return snapshotIDMatches(s, currentID) }) {
+		return "", fmt.Errorf("restic forget --dry-run did not list snapshot %s, which was just written, so its output cannot show which snapshot to keep", shortSnapshotID(currentID))
+	}
+
+	var newest *resticSnapshot
+	var newestAt time.Time
+	for i := range all {
+		s := &all[i]
+		at, perr := time.Parse(time.RFC3339Nano, s.Time)
+		if perr != nil {
+			return "", fmt.Errorf("parse restic forget --dry-run JSON: snapshot %s has time %q: %w", s.ShortID, s.Time, perr)
 		}
-		if slices.ContainsFunc(remove, func(s resticSnapshot) bool { return snapshotIDMatches(s, keepID) }) {
-			kept = true
-			ids := make([]string, 0, len(remove))
-			for _, s := range remove {
-				if !snapshotIDMatches(s, keepID) {
-					ids = append(ids, s.ID)
-				}
-			}
-			if len(ids) == 0 {
-				return true, nil
-			}
-			// "--" before the ids, as before every positional here.
-			args = append(append(append([]string{"forget", "--verbose"}, prune...), "--"), ids...)
-			return true, timeoutError(ctx, m.runLocking(ctx, args, env, out), "restic forget")
+		if slices.Contains(s.Tags, PartialSnapshotTag) || (knownPartial != nil && knownPartial(*s)) {
+			continue
+		}
+		if newest == nil || at.After(newestAt) {
+			newest, newestAt = s, at
 		}
 	}
-	args = append(args, prune...)
-	return kept, timeoutError(ctx, m.runLocking(ctx, args, env, out), "restic forget")
+
+	ids := make([]string, 0, len(remove))
+	for _, s := range remove {
+		if newest != nil && s.ID == newest.ID {
+			keptID = shortSnapshotID(s.ID)
+			continue
+		}
+		ids = append(ids, s.ID)
+	}
+	if len(ids) == 0 {
+		return keptID, nil
+	}
+	// "--" before the ids, as before every positional here.
+	args := append(append(append([]string{"forget", "--verbose"}, prune...), "--"), ids...)
+	return keptID, timeoutError(ctx, m.runLocking(ctx, args, env, out), "restic forget")
 }
 
-// forgetDryRun returns the snapshots the policy would remove.
-func (m *ResticManager) forgetDryRun(ctx context.Context, selection, policy, env []string) ([]resticSnapshot, error) {
+// forgetDryRun returns the snapshots the policy would keep and remove.
+func (m *ResticManager) forgetDryRun(ctx context.Context, selection, policy, env []string) (keep, remove []resticSnapshot, err error) {
 	args := append(append([]string{"forget", "--no-lock", "--dry-run", "--json"}, selection...), policy...)
 	raw, err := m.runner.Output(ctx, "restic", args, env)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var groups []resticForgetGroup
 	if err := json.Unmarshal(bytes.TrimSpace(raw), &groups); err != nil {
-		return nil, fmt.Errorf("parse restic forget --dry-run JSON: %w", err)
+		return nil, nil, fmt.Errorf("parse restic forget --dry-run JSON: %w", err)
 	}
-	var remove []resticSnapshot
 	for _, g := range groups {
-		for _, s := range g.Remove {
+		for _, s := range append(slices.Clone(g.Keep), g.Remove...) {
 			if s.ID == "" {
-				return nil, errors.New("parse restic forget --dry-run JSON: a snapshot to remove has no id")
+				return nil, nil, errors.New("parse restic forget --dry-run JSON: a snapshot has no id")
 			}
-			remove = append(remove, s)
 		}
+		keep = append(keep, g.Keep...)
+		remove = append(remove, g.Remove...)
 	}
-	return remove, nil
+	return keep, remove, nil
 }
 
 // snapshotIDMatches reports whether id (a short or full snapshot id) names s.
@@ -960,6 +1056,9 @@ type resticSnapshot struct {
 	Host    string   `json:"hostname"`
 	Tags    []string `json:"tags"`
 	Paths   []string `json:"paths"`
+	// Original is the id a snapshot had before `restic tag` rewrote it
+	// (TagPartial). Empty for a snapshot never rewritten.
+	Original string `json:"original"`
 	// agent-os-kezb: restic >= 0.17 attaches a summary to every snapshot it
 	// writes, and `restic snapshots --json` already returns it in the bytes
 	// parsed below — so the snapshot size costs no extra restic invocation.

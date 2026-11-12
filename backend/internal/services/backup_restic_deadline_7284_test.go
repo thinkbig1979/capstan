@@ -21,8 +21,10 @@ import (
 
 // childRunHelpers start a child process for their caller and take the
 // caller's context as is: the deadline belongs to the caller, so the guard
-// checks their callers instead of them.
-var childRunHelpers = map[string]bool{"runLocking": true, "runDrained": true}
+// checks their callers instead of them. forgetDryRun and snapshotByOriginal
+// run under ApplyRetentionAfterPartial's and TagPartial's deadline
+// (agent-os-95dk).
+var childRunHelpers = map[string]bool{"runLocking": true, "runDrained": true, "forgetDryRun": true, "snapshotByOriginal": true}
 
 // deadlinePending names functions that start a child process without
 // withCommandDeadline + timeoutError and are tracked for conversion by a
@@ -137,6 +139,7 @@ func TestChildProcessCallsRunUnderACommandDeadline(t *testing.T) {
 		"CheckRepository", "EnsureRepository", "Backup", "Restore", "ListSnapshots", "RestorePreview", "Stats",
 		"Verify", "VerifyRepositoryData", "ApplyRetention", "Prune", "unlockStale",
 		"TestConnectivity", "probeRestoreSource", "remoteHasSnapshots", "Sync", "RestoreRepo", "syncPreflight",
+		"ApplyRetentionAfterPartial", "TagPartial",
 	} {
 		assert.True(t, found[want], "guard did not see %s start a child: its call detection is blind", want)
 	}

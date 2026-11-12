@@ -1482,8 +1482,12 @@ func (s *BackupService) backupStack(
 		res.unreadable = summary.UnreadableCount
 		unreadable = summary
 		warn(unreadableNote(summary))
+		// The log names at most maxUnreadableListed paths, as the note does;
+		// summary.Unreadable holds up to maxUnreadableStored for the item.
+		listed := summary.Unreadable[:min(len(summary.Unreadable), maxUnreadableListed)]
 		s.logger.Warn("backup snapshot saved without unreadable files",
-			"stack", stackID, "count", summary.UnreadableCount, "listed", summary.Unreadable)
+			"stack", stackID, "count", summary.UnreadableCount, "listed", listed,
+			"not_listed", summary.UnreadableCount-len(listed))
 	}
 	if summary != nil {
 		res.bytesAdded = summary.BytesAdded
@@ -1507,18 +1511,31 @@ func (s *BackupService) backupStack(
 		}
 	}
 
-	// Apply retention policy, for a partial snapshot too: skipping it is what
-	// let a stack with one permanently unreadable file grow its repository
-	// forever (agent-os-sufn). restic's keep-* policy keeps the latest
-	// snapshot per daily/weekly/monthly/yearly bucket and cannot tell a
-	// partial snapshot from a complete one (marking it needs `restic tag`,
-	// which rewrites it under a new id). So when the unreadable set GROWS (a
-	// permission change, a failing disk), every bucket fills with partial
-	// snapshots and the newest complete snapshot would age out. After a
-	// partial backup, retention keeps the stack's newest complete snapshot,
-	// read from the run items (agent-os-95dk). Fails closed: if that snapshot
-	// cannot be looked up, retention is skipped rather than run blind.
-	s.applyStackRetention(ctx, restic, stackID, res.partial, warn, &res, out)
+	// A partial snapshot is marked in the repository itself, so retention
+	// and restore can tell it from a complete one whatever the run history
+	// still holds (agent-os-95dk review MUST-1). The tag rewrites its id; the
+	// item records the new one. Marking failed: retention is skipped for this
+	// stack tonight, because without the mark it would read this partial
+	// snapshot as the newest complete one.
+	if res.partial {
+		newID, tagErr := restic.TagPartial(ctx, stackID, summary.SnapshotID, out)
+		if tagErr != nil {
+			warn(fmt.Sprintf("retention skipped: snapshot %s could not be marked %s, so retention could not tell it from a complete one: %v",
+				snapshotID, PartialSnapshotTag, tagErr))
+			res.retentionFailed = true
+		} else {
+			stream(out, "info", fmt.Sprintf("[%s] marked snapshot %s %s; its id is now %s", stackID, snapshotID, PartialSnapshotTag, shortSnapshotID(newID)))
+			snapshotID = shortSnapshotID(newID)
+			s.applyStackRetention(ctx, restic, stackID, newID, warn, &res, out)
+		}
+	} else {
+		// Apply retention policy, for a partial snapshot too: skipping it is
+		// what let a stack with one permanently unreadable file grow its
+		// repository forever (agent-os-sufn). After a complete backup the
+		// newest snapshot is complete and every keep-* n >= 1 keeps it, so
+		// the plain policy is safe.
+		s.applyStackRetention(ctx, restic, stackID, "", warn, &res, out)
+	}
 
 	if res.partial {
 		stream(out, "info", fmt.Sprintf("[%s] completed; some files could not be read", stackID))
@@ -1531,43 +1548,47 @@ func (s *BackupService) backupStack(
 	return res, nil
 }
 
-// applyStackRetention runs the stack's retention after its backup. After a
-// partial snapshot it keeps the newest complete one (agent-os-95dk).
+// applyStackRetention runs the stack's retention after its backup.
+// partialID is the id of the partial snapshot this backup wrote, or "" after
+// a complete one. After a partial snapshot it never forgets the stack's newest
+// complete snapshot (agent-os-95dk), read from the repository's
+// PartialSnapshotTag marks plus, for snapshots written before the mark
+// existed, the run items that recorded them partial. Fails closed: when those
+// items cannot be read, or the repository's answer cannot be trusted,
+// retention is skipped and the run says so.
 func (s *BackupService) applyStackRetention(
 	ctx context.Context,
 	restic *ResticManager,
 	stackID string,
-	partial bool,
+	partialID string,
 	warn func(string),
 	res *stackResult,
 	out chan<- StreamLine,
 ) {
-	keepID := ""
-	if partial {
-		id, err := s.db.GetNewestCompleteSnapshotID(stackID)
-		switch {
-		case errors.Is(err, errdefs.ErrNotFound):
-			// No complete snapshot on record: nothing to keep.
-		case err != nil:
-			warn(fmt.Sprintf("retention skipped: the stack's newest complete snapshot could not be read, so it could not be kept: %v", err))
-			res.retentionFailed = true
-			return
-		default:
-			keepID = id
-		}
-	}
-	kept, err := restic.ApplyRetentionKeeping(ctx, stackID, keepID, out)
-	if err != nil {
-		if keepID != "" {
-			warn(fmt.Sprintf("retention skipped: could not check that it keeps complete snapshot %s: %v", keepID, err))
-		} else {
+	if partialID == "" {
+		if err := restic.ApplyRetention(ctx, stackID, out); err != nil {
 			warn(fmt.Sprintf("retention warning: %v", err))
+			res.retentionFailed = true
 		}
+		return
+	}
+	recorded, err := s.db.GetPartialSnapshotIDs(stackID)
+	if err != nil {
+		warn(fmt.Sprintf("retention skipped: the stack's partial snapshots on record could not be read, so the newest complete one could not be told apart: %v", err))
 		res.retentionFailed = true
 		return
 	}
-	if kept {
-		warn(fmt.Sprintf("retention kept snapshot %s, the stack's newest complete snapshot; the policy would have forgotten it because newer snapshots are partial", keepID))
+	knownPartial := func(snap resticSnapshot) bool {
+		return slices.ContainsFunc(recorded, func(id string) bool { return snapshotIDMatches(snap, id) })
+	}
+	keptID, err := restic.ApplyRetentionAfterPartial(ctx, stackID, partialID, knownPartial, out)
+	if err != nil {
+		warn(fmt.Sprintf("retention skipped: could not check that it keeps the stack's newest complete snapshot: %v", err))
+		res.retentionFailed = true
+		return
+	}
+	if keptID != "" {
+		warn(fmt.Sprintf("retention kept snapshot %s, the stack's newest complete snapshot; the policy would have forgotten it because newer snapshots are partial", keptID))
 	}
 }
 
