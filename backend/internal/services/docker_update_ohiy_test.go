@@ -647,7 +647,7 @@ func TestStandaloneUpdateRollbackTriesEveryStepOhiy(t *testing.T) {
 
 // TestStandaloneUpdateFailsBeforeTouchingOhiy: failures before the recreate
 // leave the original as it was, running under its own name. Setting it aside
-// failing restarts it (restartOld); the old image being unreadable stops
+// failing restarts it (resumeOld); the old image being unreadable stops
 // nothing at all.
 func TestStandaloneUpdateFailsBeforeTouchingOhiy(t *testing.T) {
 	cases := []struct {

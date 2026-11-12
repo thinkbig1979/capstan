@@ -759,7 +759,7 @@ func (s *DockerService) recreateStandaloneContainer(
 	keptName := name + oldContainerSuffix + shortContainerID(inspect.ID)
 	if err := api.ContainerRename(ctx, inspect.ID, keptName); err != nil {
 		if !wasRunning || !cerrdefs.IsNotFound(err) {
-			s.restartOld(ctx, inspect.ID, wasRunning, say)
+			s.resumeOld(ctx, inspect.ID, wasRunning, say)
 			return "", fmt.Errorf("renaming container: %w", err)
 		}
 		kept = ""
@@ -866,10 +866,10 @@ func (s *DockerService) restoreOld(ctx context.Context, newID, kept, name string
 	return errors.Join(errs...)
 }
 
-// restartOld starts the old container again when the update stopped it and
+// resumeOld starts the old container again when the update stopped it and
 // then could not set it aside. Same detached deadline as restoreOld. A failure
 // is logged: the rename error is what the caller reports.
-func (s *DockerService) restartOld(ctx context.Context, id string, wasRunning bool, say func(Stream, string)) {
+func (s *DockerService) resumeOld(ctx context.Context, id string, wasRunning bool, say func(Stream, string)) {
 	if !wasRunning {
 		return
 	}
