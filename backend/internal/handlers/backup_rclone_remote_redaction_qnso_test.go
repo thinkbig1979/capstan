@@ -82,3 +82,50 @@ func TestQnso_PutStoresARealRemote(t *testing.T) {
 	require.Less(t, code, 300)
 	assert.Equal(t, replacement, stored)
 }
+
+// Review S6: a remote whose name carries URL userinfo is served as
+// "user:***@host"; posting that back is refused too.
+func TestQnso_PutRefusesTheMaskedUserinfoRemote(t *testing.T) {
+	t.Parallel()
+	const stored = "https://bob:PWQNSOH@dav.example.com/remote.php"
+	body := qnsoGetSettingsStored(t, stored)
+	masked, _ := body["rcloneRemote"].(string)
+	require.Contains(t, masked, "***@", "fixture is unarmed: GET did not mask the userinfo")
+	require.Equal(t, true, body["rcloneRemoteHasCredential"])
+
+	code, kept := qnsoPutOver(t, stored, masked)
+	assert.Equal(t, http.StatusUnprocessableEntity, code)
+	assert.Equal(t, stored, kept)
+}
+
+func qnsoGetSettingsStored(t *testing.T, remote string) map[string]any {
+	t.Helper()
+	db := newBackupHandlerDB(t)
+	require.NoError(t, db.SetSetting("rclone_remote", remote))
+	h := NewBackupHandler(buildBackupSvc(t, db, true, false), db, slog.Default())
+	t.Cleanup(h.Stop)
+	w := httptest.NewRecorder()
+	newBackupRouter(h).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/settings/backup", nil))
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.NotContains(t, w.Body.String(), "PWQNSOH")
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	return body
+}
+
+func qnsoPutOver(t *testing.T, stored, remote string) (int, string) {
+	t.Helper()
+	db := newBackupHandlerDB(t)
+	require.NoError(t, db.SetSetting("rclone_remote", stored))
+	h := NewBackupHandler(buildBackupSvc(t, db, true, false), db, slog.Default())
+	t.Cleanup(h.Stop)
+	raw, err := json.Marshal(map[string]string{"rcloneRemote": remote})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPut, "/api/settings/backup", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	newBackupRouter(h).ServeHTTP(w, req)
+	got, err := db.GetSetting("rclone_remote")
+	require.NoError(t, err)
+	return w.Code, got
+}

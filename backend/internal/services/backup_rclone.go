@@ -308,9 +308,12 @@ func (m *RcloneManager) Sync(ctx context.Context, repoPath, remote, path string,
 	defer cancel()
 
 	var lastErr error
+	// rclone echoes a connection-string remote in its own output; the
+	// scrubbing runner masks it before the stream and run log (agent-os-qnso).
+	runner := scrubRcloneRunner(m.runner, remote)
 	for attempt := 1; attempt <= retries; attempt++ {
 		m.logger.Info("Sync attempt", "attempt", attempt, "of", retries)
-		if err := scrubRcloneRunner(m.runner, remote).Run(ctx, "rclone", args, nil, out); err != nil {
+		if err := runner.Run(ctx, "rclone", args, nil, out); err != nil {
 			if commandTimedOut(ctx) {
 				return timeoutError(ctx, err, "rclone sync")
 			}
@@ -592,9 +595,12 @@ func (m *RcloneManager) RestoreRepo(ctx context.Context, remote, path, localPath
 	defer cancel()
 
 	var lastErr error
+	// rclone echoes a connection-string remote in its own output; the
+	// scrubbing runner masks it before the stream and run log (agent-os-qnso).
+	runner := scrubRcloneRunner(m.runner, remote)
 	for attempt := 1; attempt <= retries; attempt++ {
 		m.logger.Info("Restore attempt", "attempt", attempt, "of", retries)
-		if err := scrubRcloneRunner(m.runner, remote).Run(ctx, "rclone", args, nil, out); err != nil {
+		if err := runner.Run(ctx, "rclone", args, nil, out); err != nil {
 			if commandTimedOut(ctx) {
 				return timeoutError(ctx, err, "rclone sync")
 			}

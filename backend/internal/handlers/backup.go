@@ -446,8 +446,11 @@ func (h *BackupHandler) updateSettings(c *gin.Context) {
 	// which covers values stored before this check existed.
 	// The form is seeded from the masked GET value, so posting it back
 	// unedited would replace the stored keys with "***" (agent-os-qnso), as
-	// for the repository above.
-	if req.RcloneRemote != nil && strings.Contains(*req.RcloneRemote, services.RcloneRedactionMarker) {
+	// for the repository above. RedactRcloneRemote leaves two markers: "=***"
+	// for a parameter value and "***@" for URL userinfo in the remote name
+	// (review S6). Both are refused by pattern, the repository's rule.
+	if req.RcloneRemote != nil && (strings.Contains(*req.RcloneRemote, services.RcloneRedactionMarker) ||
+		strings.Contains(*req.RcloneRemote, services.UserinfoRedactionMarker)) {
 		handleError(c, models.NewAppError(
 			http.StatusUnprocessableEntity,
 			models.ErrValidation,
