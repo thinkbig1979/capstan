@@ -18,22 +18,48 @@ import (
 // global-env settings page, and compose output (redactComposeOutput) — a key
 // that masks in one place and leaks in the other is the whole bug class. It
 // lived in the handlers package until agent-os-fvk3 needed it here.
+//
+// The rule is by word (agent-os-t61y): the key is split at every character
+// that is not a letter or digit, trailing digits are dropped from each word,
+// and the key is sensitive when a word is one of sensitiveEnvWords, or ends
+// in one of sensitiveEnvWordEndings, or the key contains "_API_". So
+// DB_PASSWORD2, PASSWORD_DB, a bare PASSWORD and DBPASSWORD all match, and an
+// "export " prefix is just one more word. KEY counts only as a whole word,
+// so MONKEY and KEYCLOAK_URL stay visible. PWD and PASS are left out: PWD is
+// the shell's working directory and PASS starts ordinary words.
+//
+// It over-masks on purpose: PASSWORD_MIN_LENGTH, TOKEN_EXPIRY and
+// AWS_ACCESS_KEY_ID are hidden too. A wrongly hidden value costs one unlock;
+// a wrongly shown one is a leaked secret. The frontend's copy is
+// frontend/src/components/stack/env-editor/sensitiveKey.ts.
 func IsSensitiveEnvKey(key string) bool {
 	upperKey := strings.ToUpper(key)
-
-	if strings.HasPrefix(upperKey, "EXPORT ") {
-		upperKey = strings.TrimSpace(upperKey[7:])
-	}
-
-	sensitiveSuffixes := []string{"_KEY", "_SECRET", "_PASSWORD", "_TOKEN"}
-	for _, suffix := range sensitiveSuffixes {
-		if strings.HasSuffix(upperKey, suffix) {
+	words := strings.FieldsFunc(upperKey, func(r rune) bool {
+		return (r < 'A' || r > 'Z') && (r < '0' || r > '9')
+	})
+	for _, w := range words {
+		w = strings.TrimRight(w, "0123456789")
+		if sensitiveEnvWords[w] {
 			return true
 		}
+		for _, end := range sensitiveEnvWordEndings {
+			if strings.HasSuffix(w, end) {
+				return true
+			}
+		}
 	}
-
 	return strings.Contains(upperKey, "_API_")
 }
+
+// sensitiveEnvWords are the words that make a key sensitive on their own.
+var sensitiveEnvWords = map[string]bool{
+	"PASSWORD": true, "PASSWD": true, "SECRET": true, "TOKEN": true,
+	"KEY": true, "APIKEY": true, "PRIVATEKEY": true,
+}
+
+// sensitiveEnvWordEndings also match at the end of a longer word
+// (CLIENTSECRET, AUTHTOKEN). KEY is not one: MONKEY and HOTKEY end in it.
+var sensitiveEnvWordEndings = []string{"PASSWORD", "PASSWD", "SECRET", "TOKEN"}
 
 // composeSecretMinLen is the shortest env value redactComposeOutput replaces.
 // A sensitive key holding "1" or "yes" would otherwise turn every such
