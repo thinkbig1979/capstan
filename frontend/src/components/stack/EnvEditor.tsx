@@ -20,8 +20,15 @@ import { classifyError } from '@/lib/error-handler'
 import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 import { FileChangedNotice } from '@/components/FileChangedNotice'
 import { useExternalFileChange } from '@/hooks/useExternalFileChange'
-import { fillRedactedBlanks } from '@/lib/env-unlock-rebase'
+import { alignRedactedRows, refillRedactedRows, NO_REDACTED_ROWS } from '@/lib/env-unlock-rebase'
 import type { EnvEntryDraft, EnvFileResponse } from '@/types'
+
+/** The fields of a row the locked view can hide, so an unlock can put them back. */
+const REDACTABLE_FIELDS = ['key', 'value', 'comment', 'quote', 'inlineComment'] as const
+
+// Placeholder copy (agent-os-yt2f): wording to be confirmed.
+const SAVE_REFUSED_COPY =
+  "The unlocked file does not line up with the rows you edited while locked, so they can't be saved safely. Reload to load the file; your edits will be lost."
 
 interface EnvEditorProps {
   stackId: string
@@ -38,7 +45,17 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   // The rows and raw text as last loaded. Table and raw are edited
   // independently, so this is what tells which of them the user changed.
-  const [loadedEnv, setLoadedEnv] = useState<{ rows: EnvEntryRow[]; raw: string }>({ rows: [], raw: '' })
+  // `redacted` holds the ids of rows the server redacted, when the baseline is
+  // a locked payload: those are the rows an unlock has to fill.
+  const [loadedEnv, setLoadedEnv] = useState<{ rows: EnvEntryRow[]; raw: string; redacted: ReadonlySet<number> }>({
+    rows: [],
+    raw: '',
+    redacted: NO_REDACTED_ROWS,
+  })
+  // An unlock whose payload could not be lined up with the rows kept from the
+  // locked view (agent-os-yt2f): saving would write rows that hold the locked
+  // shapes, so both saves are refused until Reload.
+  const [saveRefused, setSaveRefused] = useState(false)
   const [showEnvSection, setShowEnvSection] = useState(false)
   const nextRowId = useNextRowId()
 
@@ -110,7 +127,14 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
         _rowId: nextRowId(),
       }))
       setEntries(rows)
-      setLoadedEnv({ rows, raw: next.raw ?? '' })
+      setLoadedEnv({
+        rows,
+        raw: next.raw ?? '',
+        redacted: next.locked
+          ? new Set(rows.filter((_, i) => next.entries[i].sensitive).map((r) => r._rowId))
+          : NO_REDACTED_ROWS,
+      })
+      setSaveRefused(false)
       // `raw` is absent while locked — the backend withholds it rather than
       // sending an empty file, so default it instead of writing `undefined` into
       // a textarea (agent-os-7o5s).
@@ -119,6 +143,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
       setShowEnvSection(true)
       resetHistory(rows, next.raw ?? '')
     } else {
+      setSaveRefused(false)
       setShowEnvSection(false)
     }
   }
@@ -126,9 +151,11 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
 
   // Unsaved edits survive a new payload (agent-os-umig), and a lock change
   // too (agent-os-vqf5): a lock keeps them on screen (Save stays disabled while
-  // locked, EnvTableView.tsx), and an unlock puts the real value back into any
-  // row that only held the redacted blank, so a save can never write a blank
-  // over a secret. A file appearing or going away keeps the plain hydrate.
+  // locked, EnvTableView.tsx), and an unlock puts the real content back into
+  // every redacted row the user left as it was, so a save can never write a
+  // locked shape over a secret. When the unlocked payload does not line up
+  // with the locked one, nothing is filled and Save is refused until Reload
+  // (agent-os-yt2f). A file appearing or going away keeps the plain hydrate.
   const { changedOnDisk, reload } = useExternalFileChange(envData, {
     isDirty: hasUnsavedChanges,
     hydrate,
@@ -137,11 +164,14 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
       if (Boolean(next.locked) === Boolean(prev.locked)) return false
       // Locked: the payload is redacted and carries nothing to rebase onto.
       if (next.locked) return true
-      const redacted = new Set(
-        prev.entries.filter((e) => prev.locked && e.sensitive && e.value === '').map((e) => e.key),
-      )
+      const aligned = alignRedactedRows(loadedEnv.rows, loadedEnv.redacted, next.entries)
+      if (!aligned) {
+        setSaveRefused(true)
+        return false
+      }
+      setSaveRefused(false)
       const fill = (rows: EnvEntryRow[]) =>
-        fillRedactedBlanks(rows, loadedEnv.rows, redacted, next.entries)
+        refillRedactedRows(rows, loadedEnv.rows, aligned, REDACTABLE_FIELDS)
       const baseRows = fill(loadedEnv.rows)
       // A raw text the user did not touch (absent while locked) follows the file.
       const nextRaw = next.raw ?? ''
@@ -149,13 +179,13 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
       const baseRaw = rawEdited ? loadedEnv.raw : nextRaw
       setEntries(fill(entries))
       if (!rawEdited) setRawContent(nextRaw)
-      // Undo and Redo restore old snapshots, which still hold the blanks (and the
-      // empty locked raw): fill them too, or one keystroke brings a blank back.
+      // Undo and Redo restore old snapshots, which still hold the locked shapes
+      // (and the empty locked raw): fill them too, or one keystroke brings one back.
       rebaseHistory((snapshot) => ({
         entries: fill(snapshot.entries),
         raw: !rawEdited && snapshot.raw === loadedEnv.raw ? nextRaw : snapshot.raw,
       }))
-      setLoadedEnv({ rows: baseRows, raw: baseRaw })
+      setLoadedEnv({ rows: baseRows, raw: baseRaw, redacted: NO_REDACTED_ROWS })
       // Nothing else changed on disk since the baseline: the edits stay, no
       // notice. Otherwise the standard rule below decides.
       return sameEntries(next.entries, baseRows) && nextRaw === baseRaw
@@ -173,7 +203,11 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
       // The raw text the user never touched follows the file, as the baseline
       // does; otherwise rawContent !== loadedEnv.raw would read as a raw edit.
       if (savedRaw !== undefined && rawContent === loadedEnv.raw) setRawContent(savedRaw)
-      setLoadedEnv((prev) => ({ rows: sent?.entries ?? prev.rows, raw: savedRaw ?? prev.raw }))
+      setLoadedEnv((prev) => ({
+        rows: sent?.entries ?? prev.rows,
+        raw: savedRaw ?? prev.raw,
+        redacted: NO_REDACTED_ROWS,
+      }))
       clearSent()
     },
     canHydrateWhileDirty: (next, prev) => {
@@ -194,6 +228,14 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   // The Raw tab and its view go away while locked. Showing the table then keeps
   // the edits the user kept visible, whichever view the lock found them in.
   const activeView = locked ? 'table' : view
+
+  // Refused in the handlers too, not only by the disabled buttons.
+  const saveTable = () => {
+    if (!saveRefused) handleSaveTable()
+  }
+  const saveRaw = () => {
+    if (!saveRefused) handleSaveRaw()
+  }
 
   // agent-os-wczm. The ISERROR guard is the one that was broken: this component
   // hydrates `entries`, `rawContent` and `hasUnsavedChanges` from the payload
@@ -280,7 +322,11 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
         />
       )}
 
-      {changedOnDisk && <FileChangedNotice onReload={reload} />}
+      {saveRefused && !locked ? (
+        <FileChangedNotice onReload={reload}>{SAVE_REFUSED_COPY}</FileChangedNotice>
+      ) : (
+        changedOnDisk && <FileChangedNotice onReload={reload} />
+      )}
 
       <EnvTableView
         visible={activeView === 'table'}
@@ -289,19 +335,21 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
         onDeleteEntry={handleDeleteEntry}
         onAddEntry={handleAddEntry}
         onToggleVisibility={toggleVisibility}
-        onSaveTable={handleSaveTable}
+        onSaveTable={saveTable}
         saving={saveMutation.isPending}
         hasUnsavedChanges={hasUnsavedChanges}
         locked={locked}
+        saveRefused={saveRefused}
       />
 
       {view === 'raw' && !locked && (
         <EnvRawView
           rawContent={rawContent}
           onRawChange={handleRawChange}
-          onSaveRaw={handleSaveRaw}
+          onSaveRaw={saveRaw}
           saving={saveMutation.isPending}
           hasUnsavedChanges={hasUnsavedChanges}
+          saveRefused={saveRefused}
         />
       )}
     </div>
