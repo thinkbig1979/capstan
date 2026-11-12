@@ -74,6 +74,8 @@ type ohiyDocker struct {
 	renameBackErr  error              // ContainerRename of the original back to its own name fails
 	oldImageErr    error              // ImageInspect of the old image fails
 	updateErr      error              // ContainerUpdate fails
+	startNewRuns   bool               // the new container's start fails client-side AFTER the daemon started it
+	pruneOldOnNew  bool               // a prune removes the set-aside original once the new container has started
 
 	createdConfigs []container.Config // the Config each ContainerCreate received, before the merge
 }
@@ -322,6 +324,13 @@ func (d *ohiyDocker) ContainerStart(ctx context.Context, id string, _ container.
 		}
 		if d.cancelAfterNew != nil {
 			d.cancelAfterNew()
+		}
+		if d.startNewRuns {
+			c.running = true
+			return errors.New("ohiy fake: start request failed after the daemon started it")
+		}
+		if d.pruneOldOnNew {
+			delete(d.containers, ohiyOldID)
 		}
 		if d.startNewErr != nil {
 			return d.startNewErr
@@ -708,4 +717,52 @@ func ohiyKeys[K ~string, V any](m map[K]V) []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// TestStandaloneUpdateNeverRunsBothOhiy: the new container's start failed on
+// the client side after the daemon had started it, and the rollback cannot
+// remove it. The old container is NOT started beside it (two copies on the
+// same volumes); the error says a person has to act. The other side, same
+// fixture: when the new container is not running, the old one is started.
+func TestStandaloneUpdateNeverRunsBothOhiy(t *testing.T) {
+	t.Run("new container running and not removable", func(t *testing.T) {
+		d := newOhiyDocker(t, container.Config{})
+		d.startNewRuns = true
+		d.removeNewErr = errOhiyDaemon
+
+		_, _, err := ohiyRecreate(t, d, context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "manual action needed")
+
+		got := d.snapshot()
+		assert.True(t, got[ohiyOldName].running, "the new container still runs under the name")
+		assert.False(t, got[ohiyLeftover].running, "the old container must not run beside it")
+	})
+
+	t.Run("new container stopped and not removable", func(t *testing.T) {
+		d := newOhiyDocker(t, container.Config{})
+		d.startNewErr = errOhiyDaemon
+		d.removeNewErr = errOhiyDaemon
+
+		_, _, err := ohiyRecreate(t, d, context.Background())
+		require.Error(t, err)
+		assert.NotContains(t, err.Error(), "manual action needed")
+		assert.True(t, d.snapshot()[ohiyLeftover].running, "the old container serves again")
+	})
+}
+
+// TestStandaloneUpdateOldAlreadyPrunedIsNotALeftoverOhiy: a prune removed the
+// set-aside original before the final removal. That is success, not a
+// leftover: no warning, no restart-policy change attempted.
+func TestStandaloneUpdateOldAlreadyPrunedIsNotALeftoverOhiy(t *testing.T) {
+	d := newOhiyDocker(t, container.Config{})
+	d.pruneOldOnNew = true
+
+	_, lines, err := ohiyRecreate(t, d, context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, d.snapshot(), 1)
+	assert.False(t, slices.ContainsFunc(lines, func(l string) bool { return strings.Contains(l, "could not be removed") }),
+		"no leftover warning for a container that is gone: %q", lines)
+	assert.Contains(t, lines, "Old container already removed")
 }

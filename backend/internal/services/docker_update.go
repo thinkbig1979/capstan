@@ -816,6 +816,12 @@ func (s *DockerService) removeOld(ctx context.Context, kept, keptName string, sa
 		say(StreamStdout, "Old container removed")
 		return
 	}
+	if cerrdefs.IsNotFound(err) {
+		// A prune took the stopped, set-aside container first: it is gone,
+		// which is what this step wanted. Not a leftover.
+		say(StreamStdout, "Old container already removed")
+		return
+	}
 	restart := "its restart policy is now \"no\", so it stays stopped"
 	if _, uerr := api.ContainerUpdate(rctx, kept, container.UpdateConfig{
 		RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyDisabled},
@@ -843,9 +849,11 @@ func (s *DockerService) restoreOld(ctx context.Context, newID, kept, name string
 	api := s.updateAPI()
 
 	var errs []error
+	newMayRun := false
 	if newID != "" {
 		if err := api.ContainerRemove(rctx, newID, container.RemoveOptions{Force: true}); err != nil {
 			errs = append(errs, fmt.Errorf("rollback: removing the new container: %w", err))
+			newMayRun = newContainerMayRun(rctx, api, newID)
 		}
 	}
 	if kept == "" {
@@ -856,7 +864,15 @@ func (s *DockerService) restoreOld(ctx context.Context, newID, kept, name string
 	} else {
 		say(StreamStdout, "Old container restored")
 	}
-	if wasRunning {
+	switch {
+	case wasRunning && newMayRun:
+		// The new container's start can fail on the client side after the
+		// daemon started it (the update's context ended mid-request), and it
+		// could not be removed. Starting the old one beside it would run two
+		// copies on the same volumes, so it stays stopped for a person to
+		// decide.
+		errs = append(errs, fmt.Errorf("rollback: the new container %s may still be running and could not be removed, so the old container %s was left stopped; manual action needed", shortContainerID(newID), shortContainerID(kept)))
+	case wasRunning:
 		if err := api.ContainerStart(rctx, kept, container.StartOptions{}); err != nil {
 			errs = append(errs, fmt.Errorf("rollback: starting the old container: %w", err))
 		} else {
@@ -864,6 +880,23 @@ func (s *DockerService) restoreOld(ctx context.Context, newID, kept, name string
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// newContainerMayRun reports whether a new container that could not be removed
+// might be running. Only "gone" or "inspected and not running" count as safe;
+// an inspect that fails any other way is treated as running.
+func newContainerMayRun(ctx context.Context, api containerUpdateAPI, id string) bool {
+	info, err := api.ContainerInspect(ctx, id)
+	if cerrdefs.IsNotFound(err) {
+		return false
+	}
+	if err != nil {
+		return true // unknown: assume it runs
+	}
+	if info.ContainerJSONBase == nil || info.State == nil {
+		return true
+	}
+	return info.State.Running
 }
 
 // resumeOld starts the old container again when the update stopped it and
