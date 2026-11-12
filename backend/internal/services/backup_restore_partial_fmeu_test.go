@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -47,10 +48,12 @@ func fmeuSetup(t *testing.T, dataDir string, item *models.BackupRunItem) (*Backu
 	return buildSvc(t, db, docker, runner, runner), db, runner, docker, stack
 }
 
-// snapshotJSONAt is snapshotJSON with the snapshot's stored path set.
-func snapshotJSONAt(id, stackID, path string) []byte {
-	return []byte(fmt.Sprintf(`[{"id":%q,"short_id":%q,"time":"2026-11-01T00:00:00Z","hostname":"h","tags":[%q],"paths":[%q]}]`,
-		id, id, stackID, path))
+// snapshotJSONAt is snapshotJSON with the snapshot's stored path set and any
+// extra tags.
+func snapshotJSONAt(id, stackID, path string, extraTags ...string) []byte {
+	tags, _ := json.Marshal(append([]string{stackID}, extraTags...)) //nolint:errcheck // strings always marshal
+	return []byte(fmt.Sprintf(`[{"id":%q,"short_id":%q,"time":"2026-11-01T00:00:00Z","hostname":"h","tags":%s,"paths":[%q]}]`,
+		id, id, tags, path))
 }
 
 // fmeuRestore runs the restore and returns its error and every stream line.
@@ -209,4 +212,45 @@ func TestFmeu_UnreadableRestoreExcludes(t *testing.T) {
 	ok("/old/app")          // the source itself: "."
 	ok("data/db")           // relative: Rel errors, never an unanchored exclude
 	ok("/old/app/ok", "/x") // one bad path spoils the set
+}
+
+// Review MUST-1: the snapshot is marked partial in the repository, and its run
+// item is gone (history pruned, or a DR to a new database). Nothing names its
+// unreadable paths, so the restore runs without --delete.
+func TestFmeu_TaggedPartialWithoutItemDropsDelete(t *testing.T) {
+	t.Parallel()
+	svc, _, runner, _, stack := fmeuSetup(t, t.TempDir(), nil)
+	runner.outputData = snapshotJSONAt(fmeuSnap, "myapp", stack, PartialSnapshotTag)
+
+	err, stream := fmeuRestore(t, svc)
+	require.NoError(t, err)
+	assert.NotContains(t, restoreCall(t, runner), "--delete")
+	assert.Contains(t, stream, "no longer on record")
+}
+
+// Tagged, with the item and every path on record: the paths are excluded and
+// --delete stays, as for an untagged partial item.
+func TestFmeu_TaggedPartialWithItemExcludesPaths(t *testing.T) {
+	t.Parallel()
+	svc, _, runner, _, stack := fmeuSetup(t, t.TempDir(), &models.BackupRunItem{
+		UnreadableCount: intp(1), UnreadablePaths: []string{"$STACK/data/db"}})
+	runner.outputData = snapshotJSONAt(fmeuSnap, "myapp", stack, PartialSnapshotTag)
+
+	err, _ := fmeuRestore(t, svc)
+	require.NoError(t, err)
+	args := restoreCall(t, runner)
+	assert.Contains(t, args, "--delete")
+	assert.True(t, argPairContains(args, "--exclude", "/data/db"), "%v", args)
+}
+
+// Tagged, but its item records no count (an inconsistent pair): the tag wins
+// and --delete is dropped.
+func TestFmeu_TaggedSnapshotWithCompleteItemDropsDelete(t *testing.T) {
+	t.Parallel()
+	svc, _, runner, _, stack := fmeuSetup(t, t.TempDir(), &models.BackupRunItem{})
+	runner.outputData = snapshotJSONAt(fmeuSnap, "myapp", stack, PartialSnapshotTag)
+
+	err, _ := fmeuRestore(t, svc)
+	require.NoError(t, err)
+	assert.NotContains(t, restoreCall(t, runner), "--delete")
 }

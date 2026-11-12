@@ -1810,7 +1810,7 @@ func (s *BackupService) runRestore(
 	// Validate that the snapshot is tagged with the stack ID, and read the
 	// path it holds. Before the stop: a snapshot that cannot be restored is
 	// refused with the stack untouched (agent-os-jkyn).
-	snapPath, err := s.validateSnapshotBelongsToStack(ctx, restic, snapshotID, stackID)
+	snap, err := s.validateSnapshotBelongsToStack(ctx, restic, snapshotID, stackID)
 	if err != nil {
 		return fmt.Errorf("snapshot validation: %w", err)
 	}
@@ -1850,22 +1850,40 @@ func (s *BackupService) runRestore(
 	// --delete would remove their live copies (agent-os-fmeu). Decided before
 	// the stop, like the scan above.
 	deleteExtra := true
+	//
+	// The repository's PartialSnapshotTag says WHETHER it is partial and
+	// outlives the run history; the run item says WHICH paths it lacks:
+	//   tagged, item with paths  -> exclude them from --delete
+	//   tagged, no usable item   -> no --delete (history pruned, DR to a new DB)
+	//   untagged, item partial   -> as tagged (written before the tag existed)
+	//   untagged, no item        -> complete, --delete
+	// (agent-os-95dk review MUST-1).
+	tagged := slices.Contains(snap.Tags, PartialSnapshotTag)
 	item, itemErr := s.db.GetRunItemForSnapshot(stackID, snapshotID)
-	switch {
-	case errors.Is(itemErr, errdefs.ErrNotFound):
-		// No backup item recorded this snapshot (made outside Capstan, or
-		// before the item history), so nothing marks it partial.
-	case itemErr != nil:
+	if itemErr != nil && !errors.Is(itemErr, errdefs.ErrNotFound) {
 		return fmt.Errorf("restore refused: could not read whether snapshot %s is partial: %w", snapshotID, itemErr)
-	case item.UnreadableCount != nil:
+	}
+	var recorded *int
+	if itemErr == nil {
+		recorded = item.UnreadableCount
+	}
+	if tagged || recorded != nil {
 		var note string
-		rels, placed := unreadableRestoreExcludes(snapPath, item.UnreadablePaths)
-		if placed && *item.UnreadableCount > 0 && len(item.UnreadablePaths) >= *item.UnreadableCount {
+		var rels []string
+		placed := false
+		if recorded != nil {
+			rels, placed = unreadableRestoreExcludes(snap.Paths[0], item.UnreadablePaths)
+		}
+		switch {
+		case placed && *recorded > 0 && len(item.UnreadablePaths) >= *recorded:
 			protected = append(protected, rels...)
 			note = fmt.Sprintf("partial snapshot: its backup could not read %d path(s); they are left as they are in %s", len(rels), stackDir)
-		} else {
+		case recorded == nil:
 			deleteExtra = false
-			note = fmt.Sprintf("partial snapshot: its backup could not read %d path(s) and not all of them are on record, so it is restored without --delete: files added since the snapshot stay in %s", *item.UnreadableCount, stackDir)
+			note = fmt.Sprintf("partial snapshot (%s) whose unreadable paths are no longer on record, so it is restored without --delete: files added since the snapshot stay in %s", PartialSnapshotTag, stackDir)
+		default:
+			deleteExtra = false
+			note = fmt.Sprintf("partial snapshot: its backup could not read %d path(s) and not all of them are on record, so it is restored without --delete: files added since the snapshot stay in %s", *recorded, stackDir)
 		}
 		stream(out, "error", fmt.Sprintf("[%s] %s", stackID, note))
 		if notes != nil {
@@ -1943,11 +1961,11 @@ func (s *BackupService) runRestore(
 	stopApplied = true
 
 	stream(out, "info", fmt.Sprintf("[%s] restoring snapshot %s to %s", stackID, snapshotID, stackDir))
-	// snapPath is the path the snapshot holds; restic strips that prefix and
+	// snap.Paths[0] is the path the snapshot holds; restic strips that prefix and
 	// restores its contents into stackDir rather than nesting them. It is not
 	// stackDir: after a stacks-dir move, or on DR to another path, older
 	// snapshots still hold the old path (agent-os-jkyn).
-	if err := restic.Restore(ctx, snapshotID, snapPath, stackDir, protected, deleteExtra, out); err != nil {
+	if err := restic.Restore(ctx, snapshotID, snap.Paths[0], stackDir, protected, deleteExtra, out); err != nil {
 		return fmt.Errorf("restic restore: %w", err)
 	}
 
@@ -2260,7 +2278,7 @@ func (s *BackupService) resolveTargetPolicies(stackIDs []string) ([]models.Backu
 
 // validateSnapshotBelongsToStack checks that the given snapshot has a tag
 // matching stackID, which prevents cross-stack restore mistakes, and returns
-// the one absolute path the snapshot holds. Backup writes each snapshot from
+// the snapshot, its one absolute path cleaned in Paths[0]. Backup writes each snapshot from
 // a single absolute stack directory, so any other shape cannot be restored
 // by subfolder and is refused (agent-os-jkyn).
 func (s *BackupService) validateSnapshotBelongsToStack(
@@ -2268,22 +2286,23 @@ func (s *BackupService) validateSnapshotBelongsToStack(
 	restic *ResticManager,
 	snapshotID string,
 	stackID string,
-) (string, error) {
+) (models.BackupSnapshot, error) {
 	// List all snapshots for this stack (limit=0 = all) and look for snapshotID.
 	snaps, err := restic.ListSnapshots(ctx, stackID, 0)
 	if err != nil {
-		return "", fmt.Errorf("list snapshots for stack %s: %w", stackID, err)
+		return models.BackupSnapshot{}, fmt.Errorf("list snapshots for stack %s: %w", stackID, err)
 	}
 	for _, snap := range snaps {
 		if snap.ID != snapshotID && snap.ShortID != snapshotID {
 			continue
 		}
 		if len(snap.Paths) != 1 || !filepath.IsAbs(snap.Paths[0]) {
-			return "", fmt.Errorf("snapshot %s does not hold exactly one absolute path (it holds %q), so it cannot be restored into the stack directory", snapshotID, snap.Paths)
+			return models.BackupSnapshot{}, fmt.Errorf("snapshot %s does not hold exactly one absolute path (it holds %q), so it cannot be restored into the stack directory", snapshotID, snap.Paths)
 		}
-		return filepath.Clean(snap.Paths[0]), nil
+		snap.Paths = []string{filepath.Clean(snap.Paths[0])}
+		return snap, nil
 	}
-	return "", fmt.Errorf("snapshot %s does not belong to stack %s", snapshotID, stackID)
+	return models.BackupSnapshot{}, fmt.Errorf("snapshot %s does not belong to stack %s", snapshotID, stackID)
 }
 
 // runItemOutcome is what one stack's backup records in its run item.
