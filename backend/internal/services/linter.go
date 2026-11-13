@@ -35,22 +35,29 @@ func NewLinterService() *LinterService {
 // env_file that is not on disk yet ("missing-env-file"), env files that could
 // not be read ("env-unresolved").
 //
-// Every message is redacted with the sensitive values of env, because
-// compose-go quotes interpolated values in its errors (an invalid cpus quotes
-// ${DB_PASSWORD}'s value), and these results reach sessions that have not
-// unlocked env values, 422 bodies and logs.
+// A secret never reaches compose-go: every variable whose value the masker
+// treats as secret is interpolated as lintPlaceholder instead
+// (interpolationVars). compose-go quotes interpolated values in its errors,
+// and it quotes them transformed (a size field cut at its last digit, a cast
+// error or a duration escaped by strconv.Quote), so replacing the verbatim
+// value afterwards cannot cover them; these results reach sessions that have
+// not unlocked env values, 422 bodies and logs. A secret's value never decides
+// whether a legitimate file is valid. Every message is still redacted with
+// the secret values, for a secret the content itself spells out.
 func (l *LinterService) LintCompose(content, workingDir string, env LintEnv) ([]models.LintResult, error) {
-	results, err := l.lintCompose(content, workingDir, env)
+	secrets := env.secretValues()
+	results, err := l.lintCompose(content, workingDir, env.interpolationVars(secrets))
 	if err != nil {
 		return nil, err
 	}
-	secrets := env.secretValues()
 	for i := range results {
 		results[i].Message = redactComposeOutput(results[i].Message, secrets)
 	}
 	return results, nil
 }
 
+// lintCompose lints with vars as the interpolation environment, which
+// interpolationVars has already cleared of secrets.
 func (l *LinterService) lintCompose(content, workingDir string, env LintEnv) ([]models.LintResult, error) {
 	var results []models.LintResult
 
@@ -279,6 +286,39 @@ type LintEnv struct {
 	// Unresolved is true when the env files could not be read; Vars then
 	// holds what could be resolved without them.
 	Unresolved bool
+	// Secrets are the env files' secret values, as StackSecretValues finds
+	// them. A variable whose value holds one is never interpolated as itself.
+	Secrets []string
+}
+
+// lintPlaceholder is what a secret, or a required variable with no value, is
+// interpolated as. "0" decodes in every typed field a variable usually feeds
+// (ports, cpus, mem_limit, pids_limit, stop_grace_period, deploy.replicas), so
+// the stand-in raises no error of its own.
+const lintPlaceholder = "0"
+
+// interpolationVars is e with every secret value replaced by lintPlaceholder:
+// a variable IsSensitiveEnvVar matches (its name, or URL credentials in its
+// value), or whose value holds one of secrets. An empty value stays empty, so
+// ${X:?} still reports it missing.
+func (e LintEnv) interpolationVars(secrets []string) LintEnv {
+	vars := make(map[string]string, len(e.Vars))
+	for k, v := range e.Vars {
+		if v != "" && (IsSensitiveEnvVar(k, v) || containsAny(v, secrets)) {
+			v = lintPlaceholder
+		}
+		vars[k] = v
+	}
+	return LintEnv{Vars: vars, Unresolved: e.Unresolved, Secrets: e.Secrets}
+}
+
+func containsAny(s string, subs []string) bool {
+	for _, sub := range subs {
+		if sub != "" && strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
 }
 
 // StackLintEnv is the environment `docker compose` interpolates the stack's
@@ -288,20 +328,21 @@ func StackLintEnv(st models.Stack, globalEnvPath string) LintEnv {
 	if err != nil {
 		// err is neither logged nor returned: compose-go quotes the offending
 		// line, which can be a secret (resolveComposeEnv's doc comment).
-		return LintEnv{Vars: processComposeEnv(), Unresolved: true}
+		return LintEnv{Vars: processComposeEnv(), Unresolved: true, Secrets: StackSecretValues(st, globalEnvPath)}
 	}
-	return LintEnv{Vars: vars}
+	return LintEnv{Vars: vars, Secrets: StackSecretValues(st, globalEnvPath)}
 }
 
 // NewLintEnv is the environment for a stack whose env file is not on disk:
 // global.env with envText (the env file the request will write) laid over it.
 // envText "" lints with global.env alone.
 func NewLintEnv(globalEnvPath, envText string) LintEnv {
+	secrets := StackSecretValues(models.Stack{}, globalEnvPath)
 	envs, err := resolveComposeEnv(models.Stack{}, globalEnvPath, composeEnvExact)
 	if err != nil {
-		return LintEnv{Vars: processComposeEnv(), Unresolved: true}.WithEnvText(envText)
+		return LintEnv{Vars: processComposeEnv(), Unresolved: true, Secrets: secrets}.WithEnvText(envText)
 	}
-	return LintEnv{Vars: envs[0]}.WithEnvText(envText)
+	return LintEnv{Vars: envs[0], Secrets: secrets}.WithEnvText(envText)
 }
 
 // WithEnvText lays the env file content envText over e, parsed by compose-go's
@@ -316,12 +357,13 @@ func (e LintEnv) WithEnvText(envText string) LintEnv {
 	for k, v := range e.Vars {
 		vars[k] = v
 	}
+	secrets := append(append([]string{}, e.Secrets...), sensitiveEnvValues(envText)...)
 	parsed, err := dotenv.UnmarshalWithLookup(envText, func(k string) (string, bool) {
 		v, ok := vars[k]
 		return v, ok
 	})
 	if err != nil {
-		return LintEnv{Vars: vars, Unresolved: true}
+		return LintEnv{Vars: vars, Unresolved: true, Secrets: secrets}
 	}
 	for k, v := range parsed {
 		vars[k] = v
@@ -329,18 +371,26 @@ func (e LintEnv) WithEnvText(envText string) LintEnv {
 	for k, v := range processComposeEnv() {
 		vars[k] = v
 	}
-	return LintEnv{Vars: vars, Unresolved: e.Unresolved}
+	return LintEnv{Vars: vars, Unresolved: e.Unresolved, Secrets: secrets}
 }
 
-// secretValues are the values of e's sensitive keys, longest first, as
-// composeSecrets returns them for compose output.
+// secretValues are e's Secrets plus the values of e's sensitive variables,
+// longest first, as composeSecrets returns them for compose output.
 func (e LintEnv) secretValues() []string {
 	var secrets []string
 	seen := map[string]bool{}
-	for k, v := range e.Vars {
-		if IsSensitiveEnvKey(k) && len(v) >= composeSecretMinLen && !seen[v] {
+	add := func(v string) {
+		if len(v) >= composeSecretMinLen && !seen[v] {
 			seen[v] = true
 			secrets = append(secrets, v)
+		}
+	}
+	for _, v := range e.Secrets {
+		add(v)
+	}
+	for k, v := range e.Vars {
+		if IsSensitiveEnvVar(k, v) {
+			add(v)
 		}
 	}
 	sort.Slice(secrets, func(i, j int) bool { return len(secrets[i]) > len(secrets[j]) })

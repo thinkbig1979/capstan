@@ -164,24 +164,35 @@ func TestComposePut_RequiredVarUnsetSavesWithWarning_siou(t *testing.T) {
 	assert.True(t, found, "want a required-variable warning, got %+v", resp.LintResults)
 }
 
-// Linting with the real env makes compose-go quote env values in its errors
-// (`cpus: ${DB_PASSWORD}` -> an invalid-cpus message holding the value). A
-// LOCKED session must not read the value back through the lint route.
+// Linting with the real env makes compose-go quote env values in its errors.
+// A LOCKED session must not read a secret back through the lint route. Since
+// sec D1 the secret is never interpolated (a placeholder stands in), so a
+// secret in a typed field lints clean. Two-sided: a NON-secret variable is
+// still interpolated as itself and quoted, and a secret the content spells
+// out is starred by the redaction layer.
 func TestComposeLint_LockedSessionNeverSeesEnvValue_siou(t *testing.T) {
 	const secret = "hunter2SECRETsiou"
-	compose := "services:\n  db:\n    image: postgres:16\n    restart: unless-stopped\n    cpus: ${DB_PASSWORD}\n"
-	h, id, _ := composeStackSiou(t, compose, "DB_PASSWORD="+secret+"\n")
+	h, id, _ := composeStackSiou(t, "services:\n  db:\n    image: postgres:16\n", "DB_PASSWORD="+secret+"\nPLAIN=visibleXYZ\n")
 	router := gin.New()
 	router.POST("/stacks/:id/compose/lint", h.Lint) // no unlock: locked
 
-	w := doJSONSiou(t, router, http.MethodPost, "/stacks/"+id+"/compose/lint", map[string]string{"content": compose})
+	lint := func(compose string) (LintResponse, string) {
+		w := doJSONSiou(t, router, http.MethodPost, "/stacks/"+id+"/compose/lint", map[string]string{"content": compose})
+		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+		var resp LintResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.False(t, strings.Contains(w.Body.String(), secret), "body leaks the env value: %s", w.Body.String())
+		return resp, w.Body.String()
+	}
 
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-	var resp LintResponse
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	// Two-sided: the env value WAS interpolated (the lint fails on it), and
-	// the value is not in the body.
-	assert.False(t, resp.Valid, "an interpolated non-numeric cpus must fail the lint: %+v", resp.LintResults)
-	assert.False(t, strings.Contains(w.Body.String(), secret), "body leaks the env value: %s", w.Body.String())
-	assert.Contains(t, w.Body.String(), "***", "the value is replaced, not dropped: %s", w.Body.String())
+	resp, _ := lint("services:\n  db:\n    image: postgres:16\n    restart: unless-stopped\n    cpus: ${DB_PASSWORD}\n")
+	assert.True(t, resp.Valid, "the secret is interpolated as a placeholder, which decodes: %+v", resp.LintResults)
+
+	resp, body := lint("services:\n  db:\n    image: postgres:16\n    restart: unless-stopped\n    cpus: ${PLAIN}\n")
+	assert.False(t, resp.Valid, "a non-secret variable is interpolated as itself: %+v", resp.LintResults)
+	assert.Contains(t, body, "visibleXYZ", "and its value is quoted: %s", body)
+
+	resp, body = lint("services:\n  db:\n    image: postgres:16\n    restart: unless-stopped\n    cpus: " + secret + "\n")
+	assert.False(t, resp.Valid, "%+v", resp.LintResults)
+	assert.Contains(t, body, "***", "a secret the content spells out is starred: %s", body)
 }

@@ -106,24 +106,54 @@ func TestLinterService_MissingEnvFileIsWarning_siou(t *testing.T) {
 	assert.Empty(t, rulesSiou(results)["missing-env-file"], "%+v", results)
 }
 
-// compose-go quotes interpolated values in its errors. Two-sided: the message
-// is about the value (so it was interpolated), and the value is starred.
+// compose-go quotes interpolated values in its errors, transformed. A secret
+// is therefore never interpolated: a placeholder stands in (sec D1). Two-sided:
+// a non-secret value is still interpolated and quoted, and a secret the
+// content spells out is starred by the redaction layer.
 func TestLinterService_MessagesNeverQuoteSensitiveValues_siou(t *testing.T) {
 	const secret = "hunter2SECRETsvc"
-	compose := "services:\n  db:\n    image: postgres:16\n    cpus: ${DB_PASSWORD}\n"
-	results, err := NewLinterService().LintCompose(compose, t.TempDir(),
-		LintEnv{Vars: map[string]string{"DB_PASSWORD": secret, "PLAIN": "visible"}})
-	require.NoError(t, err)
-
-	var structure []models.LintResult
-	for _, r := range results {
-		assert.NotContains(t, r.Message, secret, "%+v", r)
-		if r.Rule == "compose-structure" {
-			structure = append(structure, r)
+	env := LintEnv{Vars: map[string]string{"DB_PASSWORD": secret, "PLAIN": "visible"}}
+	structure := func(compose string) []models.LintResult {
+		results, err := NewLinterService().LintCompose(compose, t.TempDir(), env)
+		require.NoError(t, err)
+		var out []models.LintResult
+		for _, r := range results {
+			assert.NotContains(t, r.Message, secret, "%+v", r)
+			if r.Rule == "compose-structure" {
+				out = append(out, r)
+			}
 		}
+		return out
 	}
-	require.Len(t, structure, 1, "%+v", results)
-	assert.True(t, strings.Contains(structure[0].Message, "***"), "the value is replaced: %q", structure[0].Message)
+
+	assert.Empty(t, structure("services:\n  db:\n    image: postgres:16\n    cpus: ${DB_PASSWORD}\n"),
+		"the secret is interpolated as a placeholder, which decodes")
+
+	plain := structure("services:\n  db:\n    image: postgres:16\n    cpus: ${PLAIN}\n")
+	require.Len(t, plain, 1)
+	assert.Contains(t, plain[0].Message, "visible", "a non-secret value is interpolated as itself")
+
+	literal := structure("services:\n  db:\n    image: postgres:16\n    cpus: " + secret + "\n")
+	require.Len(t, literal, 1)
+	assert.True(t, strings.Contains(literal[0].Message, "***"), "the value is replaced: %q", literal[0].Message)
+}
+
+// The placeholder rule: a sensitive name, URL credentials, or a value holding
+// one of Secrets; an empty value stays empty.
+func TestLintEnv_InterpolationVarsPlaceholders_siou(t *testing.T) {
+	e := LintEnv{
+		Vars: map[string]string{
+			"DB_PASSWORD": "pw1234", "EMPTY_TOKEN": "", "CONN": "mysql://u:p4ss@h/db",
+			"ALIAS": "x-tok_live_ABCD-y", "PLAIN": "visible",
+		},
+		Secrets: []string{"tok_live_ABCD"},
+	}
+	got := e.interpolationVars(e.secretValues()).Vars
+	assert.Equal(t, map[string]string{
+		"DB_PASSWORD": lintPlaceholder, "EMPTY_TOKEN": "", "CONN": lintPlaceholder,
+		"ALIAS": lintPlaceholder, "PLAIN": "visible",
+	}, got)
+	assert.Equal(t, "pw1234", e.Vars["DB_PASSWORD"], "the env is not mutated")
 }
 
 func TestLintEnv_WithEnvTextOverlays_siou(t *testing.T) {
