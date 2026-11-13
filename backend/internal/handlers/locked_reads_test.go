@@ -173,7 +173,8 @@ func TestLockedReads_ComposePutRefusedWhenFileHasMaskedValues(t *testing.T) {
 	code, body := lockedPutW6wx(t, e.router, "/api/stacks/s-app/compose", map[string]string{"content": "services: [::"})
 	require.Equal(t, http.StatusForbidden, code, body)
 	assert.Contains(t, body, "Re-enter your password")
-	got, err := os.ReadFile(composePath)
+	got, err := os.ReadFile( //nolint:gosec // G304: the test reads back the fixture file it wrote
+		composePath)
 	require.NoError(t, err)
 	assert.Equal(t, secretComposeW6wx, string(got), "file unchanged")
 

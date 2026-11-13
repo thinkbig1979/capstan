@@ -25,17 +25,23 @@ func fakeInspectDockerYvlh(t *testing.T) *httptest.Server {
 		w.Header().Set("Api-Version", "1.47")
 		w.Header().Set("Content-Type", "application/json")
 		if strings.HasSuffix(r.URL.Path, "/containers/c1/json") {
-			_, _ = w.Write([]byte(`{"Id":"c1","Name":"/db","Config":{"Image":"postgres:16","Env":[` +
-				`"DB_PASSWORD=` + inspectSecretYvlh + `",` +
-				`"DATABASE_URL=postgres://u:` + inspectSecretYvlh + `@db/app",` +
-				`"TZ=Europe/Amsterdam",` +
-				`"BROKEN_ENTRY_` + inspectSecretYvlh + `"]}}`))
+			writeOrFailYvlh(t, w, []byte(`{"Id":"c1","Name":"/db","Config":{"Image":"postgres:16","Env":[`+
+				`"DB_PASSWORD=`+inspectSecretYvlh+`",`+
+				`"DATABASE_URL=postgres://u:`+inspectSecretYvlh+`@db/app",`+
+				`"TZ=Europe/Amsterdam",`+
+				`"BROKEN_ENTRY_`+inspectSecretYvlh+`"]}}`))
 			return
 		}
-		_, _ = w.Write([]byte(`{}`))
+		writeOrFailYvlh(t, w, []byte(`{}`))
 	}))
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+func writeOrFailYvlh(t *testing.T, w http.ResponseWriter, body []byte) {
+	if _, err := w.Write(body); err != nil {
+		t.Errorf("fake docker write: %v", err)
+	}
 }
 
 func inspectYvlh(t *testing.T, unlocked bool) (int, string) {

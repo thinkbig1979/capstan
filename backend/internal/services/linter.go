@@ -398,7 +398,13 @@ func findVarLine(content, name string) int {
 // only when workingDir exists: a stack being created has no folder yet, and
 // its .env comes from the same request.
 func (l *LinterService) missingEnvFiles(content, workingDir string, project *types.Project) []models.LintResult {
-	if fi, err := os.Stat(workingDir); err != nil || !fi.IsDir() {
+	fi, err := os.Stat(workingDir)
+	if err != nil {
+		// No folder yet (create), or one compose could not read either:
+		// nothing on disk to check the env files against.
+		return nil
+	}
+	if !fi.IsDir() {
 		return nil
 	}
 	var results []models.LintResult
@@ -414,14 +420,10 @@ func (l *LinterService) missingEnvFiles(content, workingDir string, project *typ
 			if _, err := os.Stat(p); err == nil { //geterrors:ignore existence probe: any stat failure means compose cannot read it either, which is what the warning says
 				continue
 			}
-			shown := p
-			if r, err := filepath.Rel(workingDir, p); err == nil && !strings.HasPrefix(r, "..") {
-				shown = r
-			}
 			results = append(results, models.LintResult{
 				Level:   "warning",
 				Line:    l.findServiceLine(content, name),
-				Message: fmt.Sprintf("Service '%s' names env_file %s, which does not exist. Deploy will fail until it is created, or mark it `required: false`.", name, shown),
+				Message: fmt.Sprintf("Service '%s' names env_file %s, which does not exist. Deploy will fail until it is created, or mark it `required: false`.", name, p),
 				Rule:    "missing-env-file",
 			})
 		}

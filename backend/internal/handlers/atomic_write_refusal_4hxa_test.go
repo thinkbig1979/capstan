@@ -63,6 +63,13 @@ func unlocked4hxa(c *gin.Context) {
 
 const compose4hxa = "services:\n  web:\n    image: nginx:1.27\n"
 
+// must4hxa fails a fixture step loudly: the shape closures have no t.
+func must4hxa(err error) {
+	if err != nil {
+		panic(err)
+	}
+}
+
 func danglingCompose4hxa(dir string) {
 	if err := os.Symlink("missing.yaml", filepath.Join(dir, "compose.yaml")); err != nil {
 		panic(err)
@@ -102,8 +109,8 @@ func TestComposeEnvPut_DanglingComposeLinkAnswers409_4hxa(t *testing.T) {
 
 func TestEnvPut_DanglingLinkAnswers409_4hxa(t *testing.T) {
 	router, dir := stackWithComposePath4hxa(t, ".env", func(dir string) {
-		_ = os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte(compose4hxa), 0o644)
-		_ = os.Symlink("gone.env", filepath.Join(dir, ".env"))
+		must4hxa(os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte(compose4hxa), 0o644))
+		must4hxa(os.Symlink("gone.env", filepath.Join(dir, ".env")))
 	})
 
 	w := doJSONSiou(t, router, http.MethodPut, "/api/stack1/env", map[string]string{"raw": "A=1\n"})
@@ -116,8 +123,8 @@ func TestEnvPut_DanglingLinkAnswers409_4hxa(t *testing.T) {
 
 func TestEnvCreate_DanglingLinkAnswers409_4hxa(t *testing.T) {
 	router, _ := stackWithComposePath4hxa(t, "", func(dir string) {
-		_ = os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte(compose4hxa), 0o644)
-		_ = os.Symlink("gone.env", filepath.Join(dir, ".env"))
+		must4hxa(os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte(compose4hxa), 0o644))
+		must4hxa(os.Symlink("gone.env", filepath.Join(dir, ".env")))
 	})
 
 	w := doJSONSiou(t, router, http.MethodPost, "/api/stack1/env", map[string]string{"filename": ".env", "raw": "A=1\n"})
@@ -130,7 +137,7 @@ func TestEnvCreate_DanglingLinkAnswers409_4hxa(t *testing.T) {
 
 func TestWriteRefusal_NotRegularFileIs409_4hxa(t *testing.T) {
 	router, _ := stackWithComposePath4hxa(t, "", func(dir string) {
-		_ = os.MkdirAll(filepath.Join(dir, "compose.yaml"), 0o755)
+		must4hxa(os.MkdirAll(filepath.Join(dir, "compose.yaml"), 0o755))
 	})
 
 	w := doJSONSiou(t, router, http.MethodPut, "/api/stack1/compose", map[string]string{"content": compose4hxa})
@@ -171,8 +178,8 @@ func TestWriteRefusalIsTyped_4hxa(t *testing.T) {
 func TestWriteFault_TempCreateStays500_4hxa(t *testing.T) {
 	router, _ := stackWithComposePath4hxa(t, "", func(dir string) {
 		long := strings.Repeat("c", 250)
-		_ = os.WriteFile(filepath.Join(dir, long), []byte(compose4hxa), 0o644)
-		_ = os.Symlink(long, filepath.Join(dir, "compose.yaml"))
+		must4hxa(os.WriteFile(filepath.Join(dir, long), []byte(compose4hxa), 0o644))
+		must4hxa(os.Symlink(long, filepath.Join(dir, "compose.yaml")))
 	})
 
 	w := doJSONSiou(t, router, http.MethodPut, "/api/stack1/compose", map[string]string{"content": compose4hxa})

@@ -69,6 +69,10 @@ backend/internal/services/exec_env.go|stripCapstanSecrets
 backend/internal/services/redact_url.go|parseRcloneConnectionString
 backend/internal/services/backup_rclone_redact.go|RedactRcloneRemote
 backend/internal/services/backup_rclone_redact.go|rcloneSecrets
+backend/internal/services/linter.go|processComposeEnv
+backend/internal/handlers/resources.go|maskContainerEnv
+backend/internal/services/mask_secret_lines.go|walk
+backend/internal/services/mask_secret_lines.go|maskItemAfterEquals
 "
 # Why each entry is allowed:
 #   handlers/env.go parseEnvFile: the env table's own line parser; it keys rows
@@ -97,6 +101,13 @@ backend/internal/services/backup_rclone_redact.go|rcloneSecrets
 #   services/backup_rclone_redact.go RedactRcloneRemote, rcloneSecrets: the same
 #     rclone key=value option grammar, split to mask or collect a remote's
 #     credential values (agent-os-qnso), not .env text.
+#   services/linter.go processComposeEnv: the compose child's process
+#     environment (dockerEnv), split as resolveComposeEnv splits it; no file.
+#   handlers/resources.go maskContainerEnv: Docker's Config.Env entries, the
+#     Engine API's KEY=VALUE strings, split to mask a value (agent-os-yvlh).
+#   services/mask_secret_lines.go walk, maskItemAfterEquals: find where a
+#     KEY=value list item's value starts so it can be masked for a locked
+#     view (agent-os-w6wx); they never resolve or return a value.
 
 # The awk program receives the pattern through -v, so no regex escapes are
 # needed: bracket expressions only, which gawk and mawk read alike.
@@ -323,6 +334,35 @@ package services
 
 func helper() { strings.Cut(line, "=") }
 EOF
+  cat > "$d/backend/internal/services/linter.go" <<'EOF'
+package services
+
+func processComposeEnv() map[string]string {
+	if k, v, ok := strings.Cut(kv, "="); ok {
+	}
+	return nil
+}
+EOF
+  cat > "$d/backend/internal/handlers/resources.go" <<'EOF'
+package handlers
+
+func maskContainerEnv(env []string) []string {
+	k, v, ok := strings.Cut(e, "=")
+	return nil
+}
+EOF
+  cat > "$d/backend/internal/services/mask_secret_lines.go" <<'EOF'
+package services
+
+func (m *lineMasker) walk(n *yaml.Node) {
+	if key, val, ok := strings.Cut(c.Value, "="); ok {
+	}
+}
+
+func (m *lineMasker) maskItemAfterEquals(n *yaml.Node) {
+	eq := strings.IndexByte(line[col:], '=')
+}
+EOF
   printf 'package main\n\nfunc main() {}\n' > "$d/backend/cmd/server/main.go"
 }
 
@@ -334,7 +374,7 @@ self_test() {
 
   local d="$tmp/clean"
   write_base "$d"
-  selftest_case "clean tree" 0 '0 violations in 8 files [(]12 allowlisted splits[)]' "$d"
+  selftest_case "clean tree" 0 '0 violations in 11 files [(]16 allowlisted splits[)]' "$d"
 
   d="$tmp/planted"
   write_base "$d"

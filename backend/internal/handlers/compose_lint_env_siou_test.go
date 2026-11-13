@@ -86,7 +86,8 @@ func TestComposePut_RequiredVarInDotEnvSaves_siou(t *testing.T) {
 	w := doJSONSiou(t, router, http.MethodPut, "/stacks/"+id+"/compose", map[string]string{"content": requiredVarComposeSiou})
 
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-	got, err := os.ReadFile(filepath.Join(stackDir, "compose.yaml"))
+	got, err := os.ReadFile( //nolint:gosec // G304: the test reads back the fixture file it wrote
+		filepath.Join(stackDir, "compose.yaml"))
 	require.NoError(t, err)
 	assert.Equal(t, requiredVarComposeSiou, string(got))
 }
@@ -120,7 +121,8 @@ func TestComposePutComposeAndEnv_RequiredVarInRequestEnv_siou(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	assert.NotContains(t, w.Body.String(), "required-variable", "the request's own env sets DB_PASS")
-	got, err := os.ReadFile(filepath.Join(stackDir, "compose.yaml"))
+	got, err := os.ReadFile( //nolint:gosec // G304: the test reads back the fixture file it wrote
+		filepath.Join(stackDir, "compose.yaml"))
 	require.NoError(t, err)
 	assert.Equal(t, requiredVarComposeSiou, string(got))
 }
