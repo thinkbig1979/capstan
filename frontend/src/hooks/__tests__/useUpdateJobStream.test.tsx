@@ -18,6 +18,8 @@ import { useAuthStore } from '@/stores/authStore'
 
 class MockWebSocket {
   static instance: MockWebSocket | null = null
+  /** Every socket constructed, in order: a redial shows up here, not in `instance`. */
+  static urls: string[] = []
   url: string
   readyState = 0
   onopen: (() => void) | null = null
@@ -28,6 +30,7 @@ class MockWebSocket {
   constructor(url: string) {
     this.url = url
     MockWebSocket.instance = this
+    MockWebSocket.urls.push(url)
   }
 
   send() {}
@@ -67,6 +70,7 @@ beforeEach(() => {
   originalWebSocket = globalThis.WebSocket
   globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket
   MockWebSocket.instance = null
+  MockWebSocket.urls = []
   useAuthStore.setState({
     token: null,
     user: null,
@@ -384,5 +388,69 @@ describe('useUpdateJobStream — caller-closed incomplete run refreshes the upda
     unmount()
 
     expect(keys()).toEqual([])
+  })
+})
+
+// agent-os-enxv: the server ends a job's stream after its terminal frame by
+// closing the socket (gorilla's Close sends no close frame, so the browser
+// sees 1006), and WSClient re-dials any such close. A finished job's open log
+// re-dialled a ladder of sockets, and again on every tab focus, each one
+// metered against the per-user cap. The hook now closes the stream itself on
+// a terminal frame: done, or the "job not found" error frame.
+describe('useUpdateJobStream — terminal frame ends the stream', () => {
+  const finishedJob = {
+    id: 'j1', targetType: 'stack', targetId: 's1', name: 'web', stackId: 's1',
+    status: 'success', lines: [], createdAt: '2026-11-13T10:00:00Z',
+  }
+
+  /** Drop the live socket the way the server does, then give every re-dial
+   *  route (ladder and focus recovery) time to fire. */
+  function serverCloseThenWait() {
+    vi.useFakeTimers()
+    try {
+      act(() => {
+        MockWebSocket.instance!.onclose!({ code: 1006 })
+      })
+      act(() => { vi.advanceTimersByTime(60_000) })
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' })
+      act(() => { document.dispatchEvent(new Event('visibilitychange')) })
+      act(() => { vi.advanceTimersByTime(60_000) })
+    } finally {
+      vi.useRealTimers()
+    }
+  }
+
+  it("does not redial after a done frame and the server's close (1006), nor on a visibilitychange", async () => {
+    renderStream('j1')
+    await openSocket()
+    frame({ type: 'snapshot', job: finishedJob })
+    frame({ type: 'done', status: 'success', outcome: 'success' })
+
+    serverCloseThenWait()
+
+    expect(MockWebSocket.urls).toHaveLength(1)
+    expect(MockWebSocket.urls[0]).toContain('/ws/updates/jobs/j1')
+    expect(useUpdateJobStore.getState().jobs['j1']?.status).toBe('success')
+  })
+
+  it("does not redial after a 'job not found' error frame", async () => {
+    renderStream('j1')
+    await openSocket()
+    frame({ type: 'error', error: 'job not found' })
+
+    serverCloseThenWait()
+
+    expect(MockWebSocket.urls).toHaveLength(1)
+  })
+
+  it("still redials after a close with NO terminal frame (a live job's dropped stream re-attaches)", async () => {
+    renderStream('j1')
+    await openSocket()
+    frame({ type: 'snapshot', job: { ...finishedJob, status: 'running' } })
+
+    serverCloseThenWait()
+
+    expect(MockWebSocket.urls.length).toBeGreaterThan(1)
+    expect(MockWebSocket.urls.every(u => u.includes('/ws/updates/jobs/j1'))).toBe(true)
   })
 })
