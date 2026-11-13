@@ -817,6 +817,12 @@ func isAutoUpdateTargetType(t string) bool {
 	return t == string(services.JobTargetTypeContainer) || t == string(services.JobTargetTypeStack)
 }
 
+// upsertAutoUpdatePolicyAfterReadHook is TEST-ONLY and nil in production. It
+// runs in upsertAutoUpdatePolicy between the policy read and the write, which
+// is the window in which the auto-update pass can record a failure or a pause
+// (agent-os-nlll).
+var upsertAutoUpdatePolicyAfterReadHook func()
+
 func (h *ResourcesHandler) upsertAutoUpdatePolicy(c *gin.Context) {
 	targetType := c.Param("targetType")
 	targetId := c.Param("targetId")
@@ -839,16 +845,15 @@ func (h *ResourcesHandler) upsertAutoUpdatePolicy(c *gin.Context) {
 	// agent-os-1gqn. This read decided whether the policy below is an UPDATE of
 	// the stored row or a brand-new one, and its error was folded into "no
 	// existing policy" by a guard further down that required a nil error AND a
-	// non-nil row. UpsertAutoUpdatePolicy is INSERT OR REPLACE
-	// (database/auto_update_policies.go:41-48) against UNIQUE(target_type,
-	// target_id), so on a read fault the stored row was DELETED and replaced
-	// with a fresh one: new ID, CreatedAt reset to now, ConsecutiveFailures
-	// zeroed, Paused cleared — and the caller got 200 OK.
+	// non-nil row. The write was then INSERT OR REPLACE against
+	// UNIQUE(target_type, target_id), so on a read fault the stored row was
+	// DELETED and replaced with a fresh one: new ID, CreatedAt reset to now,
+	// ConsecutiveFailures zeroed, Paused cleared — and the caller got 200 OK.
 	//
 	// Not hypothetical, and not only reachable on a dead database, which would
 	// have failed the write too and so hidden the damage: a row whose
 	// consecutive_failures cannot be scanned as an int (SQLite columns are not
-	// STRICT) fails this read while the replace below succeeds. That is the
+	// STRICT) fails this read while a write would still succeed. That is the
 	// fixture the regression uses.
 	existing, err := h.db.GetAutoUpdatePolicy(targetType, targetId)
 	if err != nil && !errors.Is(err, errdefs.ErrNotFound) {
@@ -857,39 +862,30 @@ func (h *ResourcesHandler) upsertAutoUpdatePolicy(c *gin.Context) {
 		return
 	}
 
-	policy := &models.AutoUpdatePolicy{
-		ID:         uuid.New().String(),
-		TargetType: targetType,
-		TargetID:   targetId,
-		Enabled:    req.Enabled,
-		CreatedAt:  now,
-		UpdatedAt:  now,
+	if upsertAutoUpdatePolicyAfterReadHook != nil {
+		upsertAutoUpdatePolicyAfterReadHook()
 	}
 
+	// The read decides one thing: whether enabled=true resumes a paused
+	// policy. The write itself is column-scoped (SetAutoUpdatePolicyEnabled),
+	// because the auto-update pass may record a failure or a pause between the
+	// read and the write, and writing the copy read here back over the row
+	// erased that pause (agent-os-nlll).
+	//
 	// err is nil or errdefs.ErrNotFound past the guard above, so a non-nil existing is
 	// exactly "the row was found". Spelled as the nil check alone rather than
 	// left as a conjunction of the nil-error and non-nil-row tests: a guarded
 	// site that still matches the class sweep would be a permanent false
 	// positive in it (agent-os-r1by). That rule applies to prose too, which is
 	// why neither this comment nor the one above spells the old shape out.
-	if existing != nil {
-		policy.ID = existing.ID
-		policy.ConsecutiveFailures = existing.ConsecutiveFailures
-		policy.Paused = existing.Paused
-		policy.CreatedAt = existing.CreatedAt
-		if req.Enabled && existing.Paused {
-			policy.Paused = false
-			policy.ConsecutiveFailures = 0
-		}
+	resumeID := ""
+	if existing != nil && req.Enabled && existing.Paused {
+		resumeID = existing.ID
 	}
 
-	if !req.Enabled {
-		policy.Paused = false
-		policy.ConsecutiveFailures = 0
-	}
-
-	if err := h.db.UpsertAutoUpdatePolicy(policy); err != nil {
-		slog.Error("Failed to upsert auto-update policy", "error", err)
+	policy, err := h.db.SetAutoUpdatePolicyEnabled(uuid.New().String(), targetType, targetId, req.Enabled, resumeID, now)
+	if err != nil {
+		slog.Error("Failed to save auto-update policy", "error", err)
 		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to save auto-update policy", err))
 		return
 	}

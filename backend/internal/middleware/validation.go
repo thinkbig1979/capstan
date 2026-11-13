@@ -57,12 +57,19 @@ func ValidateUsername(username string) bool {
 	return usernameRegex.MatchString(username)
 }
 
+// maxPasswordBytes is bcrypt's input limit.
+const maxPasswordBytes = 72
+
 func ValidatePassword(password string) (bool, string) {
 	if len(password) < 8 {
 		return false, "Password must be at least 8 characters long"
 	}
-	if len(password) > 128 {
-		return false, "Password must not exceed 128 characters"
+	// bcrypt refuses anything over 72 bytes (ErrPasswordTooLong), and every
+	// password that gets hashed passes through here first. len counts bytes,
+	// which is what bcrypt counts; a character limit would let multibyte
+	// passwords through to a 500 (agent-os-orxo).
+	if len(password) > maxPasswordBytes {
+		return false, "Password must not exceed 72 bytes (accented and non-Latin characters count as 2-4 bytes each)"
 	}
 
 	var hasUpper, hasLower, hasNumber, hasSpecial bool

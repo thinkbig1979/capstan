@@ -236,9 +236,10 @@ overrides:
   #             Unaffected by the major. Kept.
   #   postcss   8.5.25 STAYS, via vite. Never touched eslint. Kept.
   #   fast-uri  3.1.5 STAYS, via ajv@8.20.0 — and that path is PRODUCTION
-  #             (@hookform/resolvers and composerize > composeverter are runtime
-  #             dependencies), not dev-scope like the rest of this block. Kept,
-  #             and it is the one selector here that is not dev-only.
+  #             (composerize > composeverter is a runtime dependency; the
+  #             @hookform/resolvers path left with agent-os-orxo), not dev-scope
+  #             like the rest of this block. Kept, and it is the one selector
+  #             here that is not dev-only.
   #
   # Each selector is capped inside its current major on purpose — these are
   # security floors for packages this repo does not use directly, not upgrades.
@@ -271,7 +272,8 @@ overrides:
   # js-yaml ever re-enters the dependency graph.
   # GHSA-2g4f-4pwh-qvx6. The 6.x copy is declared directly by eslint@10.8.0
   # (before eslint 10 it was reached via eslint > @eslint/eslintrc); the
-  # separate 8.x copy under composerize and @hookform/resolvers is not affected.
+  # separate 8.x copy under composerize is not affected (@hookform/resolvers,
+  # which also pulled it, was removed in agent-os-orxo).
   # Capped below 7 because eslint asks for ^6.14.0 and 7.x/8.x are API breaks,
   # not fixes.
   ajv@<6.14.0: '>=6.14.0 <7'
