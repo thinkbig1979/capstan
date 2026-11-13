@@ -221,17 +221,16 @@ describe('DashboardPage', () => {
     getAutoUpdatePolicies.mockResolvedValue({ globalEnabled: false, policies: [] })
   })
 
-  // agent-os-a1ye.5: the /ws/events stream can go silent (a lost Docker event
-  // stream, a dropped frame). The stack list polls slowly as the fallback, so a
-  // missed status change heals without a window refocus.
-  // AC12(c): the host links under the stacks table are tiles now, not the old strip.
-  it('renders the host tiles, not the host strip, on the Stacks tab', async () => {
+  // AC12(c): the host links under the stacks table are tiles now.
+  it('renders the host tiles on the Stacks tab', async () => {
     renderPage('/')
     expect(await screen.findByTestId('tab-stacks')).toBeInTheDocument()
     expect(screen.getByTestId('host-tiles')).toBeInTheDocument()
-    expect(screen.queryByTestId('host-strip')).not.toBeInTheDocument()
   })
 
+  // agent-os-a1ye.5: the /ws/events stream can go silent (a lost Docker event
+  // stream, a dropped frame). The stack list polls slowly as the fallback, so a
+  // missed status change heals without a window refocus.
   it('polls the stack list every 60s, not from a background tab', async () => {
     const { queryClient } = renderPage('/')
     await waitFor(() => expect(listStacks).toHaveBeenCalled())

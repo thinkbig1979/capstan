@@ -360,6 +360,33 @@ describe('Sidebar — main navigation', () => {
     expect(nav.compareDocumentPosition(stackLinks(desktopAside(container))[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
+  it('reads the badge as "<n> unused" in the link\'s accessible name', async () => {
+    hostSummaryMock.mockResolvedValue(makeHostSummary({ disk: { reclaimable: 14.9 * GiB } }))
+    const { container } = renderSidebar()
+
+    await within(hostLink(container)).findByTestId('sidebar-nav-host-badge')
+    expect(
+      within(desktopAside(container)).getByRole('link', { name: 'Docker host, 14.90 GB unused' }),
+    ).toBe(hostLink(container))
+  })
+
+  // The guard that matters: a refetch that fails over a loaded summary hides
+  // the badge, rather than leaving a stale figure up.
+  it('drops the badge when a refetch fails after a successful load', async () => {
+    hostSummaryMock.mockResolvedValue(makeHostSummary({ disk: { reclaimable: 14.9 * GiB } }))
+    const { container, queryClient } = renderSidebar()
+    await within(hostLink(container)).findByTestId('sidebar-nav-host-badge')
+
+    hostSummaryMock.mockRejectedValue(new Error('503'))
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey: queryKeys.resources.hostSummary() })
+    })
+    await waitFor(() => expect(queryClient.getQueryState(queryKeys.resources.hostSummary())?.status).toBe('error'))
+    // Precondition: the stale summary is still in the cache.
+    expect(queryClient.getQueryData(queryKeys.resources.hostSummary())).toBeDefined()
+    expect(within(hostLink(container)).queryByTestId('sidebar-nav-host-badge')).not.toBeInTheDocument()
+  })
+
   it('hides the badge when nothing is reclaimable', async () => {
     const { container, queryClient } = renderSidebar()
 

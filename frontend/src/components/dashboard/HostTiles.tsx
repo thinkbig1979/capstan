@@ -1,6 +1,7 @@
 import { Link } from 'react-router'
 import { ArrowRight } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
+import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 import { useHostSummary } from '@/hooks/useHostSpace'
 import { HOST_VIEW_ITEMS, hostTiles, type HostView } from '@/components/host/host-views'
 
@@ -21,10 +22,11 @@ interface Tile {
  * plain HostStrip line).
  */
 export function HostTiles() {
-  const { data: summary, isPending } = useHostSummary()
+  const { data: summary, isPending, isError, refetch } = useHostSummary()
 
-  // agent-os-p9e1: a failed read is "unavailable", never a 0 nobody measured.
-  // A failed refetch keeps the last summary, as the Host page does.
+  // agent-os-p9e1: a failed first read is "unavailable", never a 0 nobody
+  // measured. A failed refetch keeps the last summary and says so with the
+  // same notice as the Host page (agent-os-wczm).
   const tiles: Tile[] = summary
     ? hostTiles(summary)
     : HOST_VIEW_ITEMS.map(({ view, label }) => ({ view, label, value: isPending ? undefined : UNAVAILABLE }))
@@ -43,6 +45,9 @@ export function HostTiles() {
           <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
         </Link>
       </div>
+      {isError && !!summary && (
+        <RefreshFailedNotice what="the Docker host summary" onRetry={() => void refetch()} />
+      )}
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
         {tiles.map((t) => (
           <Link

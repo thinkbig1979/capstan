@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { screen, within } from '@testing-library/react'
+import { act, screen, within } from '@testing-library/react'
+import { QueryClient } from '@tanstack/react-query'
+import { queryKeys } from '@/lib/query-keys'
 import { renderWithProviders } from '@/test/utils'
 import { GiB, makeHostSummary } from '@/test/hostSummary'
 import { HostTiles } from '../HostTiles'
@@ -85,6 +87,24 @@ describe('HostTiles', () => {
     }
     expect(screen.queryByText('0')).not.toBeInTheDocument()
     expect(screen.queryByText('0 B')).not.toBeInTheDocument()
+  })
+
+  // A failed refetch keeps the last figures, and says they may be stale.
+  it('keeps the last figures with a could-not-refresh notice when a refetch fails', async () => {
+    hostSummaryMock.mockResolvedValue(makeHostSummary({ images: { bytes: 21 * GiB, reclaimableCount: 2, reclaimableBytes: 9 * GiB } }))
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    renderWithProviders(<HostTiles />, { queryClient })
+    await screen.findByText('21.00 GB')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+
+    hostSummaryMock.mockRejectedValue(new Error('503'))
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey: queryKeys.resources.hostSummary() })
+    })
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not refresh the Docker host summary')
+    expect(value('images')).toBe('21.00 GB')
+    expect(sub('images')).toBe('9.00 GB unused')
   })
 
   it('still shows 0 for a genuinely empty host', async () => {

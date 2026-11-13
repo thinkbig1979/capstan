@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router'
 import { GiB, makeHostSummary } from '@/test/hostSummary'
@@ -61,6 +61,21 @@ describe('CollapsedRail — Docker host', () => {
     const queryClient = renderRail()
 
     await waitFor(() => expect(queryClient.getQueryState(queryKeys.resources.hostSummary())?.status).toBe('error'))
+    expect(screen.queryByTestId('rail-host-dot')).not.toBeInTheDocument()
+  })
+
+  it('drops the dot when a refetch fails after a successful load', async () => {
+    hostSummaryMock.mockResolvedValue(makeHostSummary({ disk: { reclaimable: 3 * GiB } }))
+    const queryClient = renderRail()
+    await screen.findByTestId('rail-host-dot')
+
+    hostSummaryMock.mockRejectedValue(new Error('503'))
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey: queryKeys.resources.hostSummary() })
+    })
+    await waitFor(() => expect(queryClient.getQueryState(queryKeys.resources.hostSummary())?.status).toBe('error'))
+    // Precondition: the stale summary is still in the cache.
+    expect(queryClient.getQueryData(queryKeys.resources.hostSummary())).toBeDefined()
     expect(screen.queryByTestId('rail-host-dot')).not.toBeInTheDocument()
   })
 

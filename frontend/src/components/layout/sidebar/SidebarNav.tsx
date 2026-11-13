@@ -19,6 +19,9 @@ function NavItem({ to, label, icon: Icon, active, testId, badge }: NavItemProps)
       to={to}
       data-testid={testId}
       aria-current={active ? 'page' : undefined}
+      // With a badge, name it "<label>, <n> unused", not "<label><n>": the bare
+      // size would read as total disk use.
+      aria-label={badge ? `${label}, ${badge} unused` : undefined}
       // 44 px rows below lg, where this list is the mobile overlay menu.
       className={`flex min-h-[44px] items-center gap-2.5 rounded-md px-2.5 text-sm transition-colors lg:min-h-9 ${
         active
