@@ -47,7 +47,10 @@ const (
 // It has no I/O and no Docker calls — suitable for both production and unit tests.
 //
 // cmdErr is passed through to Failed() so callers can inspect the underlying
-// compose exit error; it is nil for stop.
+// compose exit error. It is nil on every start/stop path today: StartVerified,
+// StopVerified and RunStreaming all report a non-zero compose exit as failed
+// before verification runs (agent-os-00y3), so the success arms below never
+// see an exit error to drop.
 func classifyContainers(
 	action lifecycleAction,
 	cmdErr error,
@@ -666,8 +669,10 @@ func (s *DockerService) RunStreaming(ctx context.Context, stack models.Stack, su
 	// dereferences s.config inside it, and a panic in a goroutine is not caught
 	// by gin's RecoveryMiddleware — it kills the whole process (agent-os-xay).
 	if s == nil {
+		// A failed done frame, not a bare error frame: operations.go stops a
+		// restart only on a failed done frame (agent-os-00y3).
 		out := make(chan StreamLine, 1)
-		out <- StreamLine{Type: "error", Error: dockerUnavailableReason}
+		out <- failedDoneLine(truth.Failed(dockerUnavailableReason, nil))
 		close(out)
 		return out
 	}
@@ -712,7 +717,11 @@ func (s *DockerService) RunStreaming(ctx context.Context, stack models.Stack, su
 		cmd.Stderr = stderrW
 
 		if err := cmd.Start(); err != nil {
-			out <- StreamLine{Type: "error", Error: fmt.Sprintf("Failed to start command: %v", err)}
+			// The compose run failed, so this is the run's terminal done
+			// frame, as on REST, where CombinedOutput's error is "compose
+			// <sub> failed". A bare error frame let a restart whose down
+			// never ran go on to start (agent-os-00y3).
+			out <- failedDoneLine(truth.Failed("compose "+subcommand+" failed", fmt.Errorf("failed to start command: %w", err)))
 			return
 		}
 
@@ -762,6 +771,13 @@ func (s *DockerService) RunStreaming(ctx context.Context, stack models.Stack, su
 		var ar truth.ActionResult
 		if cmdErr != nil && commandTimedOut(cmdCtx) {
 			ar = truth.Failed("docker compose "+subcommand+" did not finish in time", cmdErr)
+		} else if cmdErr != nil && (action == actionStart || action == actionStop || action == actionRestart) {
+			// A non-zero exit is failed whatever the end state looks like,
+			// exactly as StartVerified/StopVerified short-circuit before
+			// verifying (agent-os-00y3, Edwin 2026-11-13). classifyContainers'
+			// success arms do not read cmdErr, so verifying with it in hand
+			// reported a failed `down` as "stack stopped".
+			ar = truth.Failed("compose "+subcommand+" failed", cmdErr)
 		} else if action != "" {
 			// Verification runs Status, which builds its own compose
 			// deadline from context.Background() because most of its callers
@@ -806,6 +822,12 @@ func streamingAction(subcommand string) lifecycleAction {
 		return actionPull
 	}
 	return ""
+}
+
+// failedDoneLine is the terminal done frame for a run that failed before it
+// produced a verified result.
+func failedDoneLine(ar truth.ActionResult) StreamLine {
+	return StreamLine{Type: "done", Success: false, Error: streamError(ar), Outcome: ar.Outcome, Reason: ar.Reason}
 }
 
 // streamError extracts a human-readable error string from an ActionResult for

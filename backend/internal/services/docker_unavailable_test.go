@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/thinkbig1979/capstan/backend/internal/models"
+	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
 
 // A nil *DockerService is the production shape when the daemon was unreachable
@@ -35,8 +36,13 @@ func TestNilDockerService_RunStreamingDoesNotPanic(t *testing.T) {
 		}
 	})
 
-	require.Len(t, lines, 1, "the outage must be reported as a single terminal error frame")
-	assert.Equal(t, "error", lines[0].Type)
+	// A single failed DONE frame, not a bare error frame: operations.go stops a
+	// restart only on a failed done frame, so an error frame let a restart go
+	// on to its up phase (agent-os-00y3).
+	require.Len(t, lines, 1, "the outage must be reported as a single terminal done frame")
+	assert.Equal(t, "done", lines[0].Type)
+	assert.False(t, lines[0].Success)
+	assert.Equal(t, truth.OutcomeFailed, lines[0].Outcome)
 	assert.Contains(t, lines[0].Error, "Docker daemon unreachable")
 }
 

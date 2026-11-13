@@ -148,7 +148,7 @@ func drainUntilClosed(t *testing.T, methodName string, ch reflect.Value) {
 // of:
 //   - a non-nil error wrapping ErrDockerUnavailable;
 //   - a truth.ActionResult with Outcome == failed and the outage as its reason;
-//   - a channel carrying a terminal error frame.
+//   - a channel carrying a terminal failed done frame (agent-os-00y3).
 //
 // Reflection enforces the rule for the whole method set, so a new method with a
 // value-only signature cannot quietly return zeros during an outage.
@@ -225,9 +225,13 @@ func TestNilDockerService_FailsLoudly(t *testing.T) {
 				case res.Kind() == reflect.Chan && res.Type().Elem() == streamLineType:
 					require.False(t, res.IsNil(), "%s must return a readable channel", method.Name)
 					frame, ok := res.Recv()
-					require.True(t, ok, "%s must emit a terminal error frame before closing", method.Name)
+					require.True(t, ok, "%s must emit a terminal frame before closing", method.Name)
 					line := frame.Interface().(StreamLine)
-					require.Equal(t, "error", line.Type)
+					// A failed done frame, not a bare error frame: operations.go
+					// stops a restart only on a failed done frame (agent-os-00y3).
+					require.Equal(t, "done", line.Type)
+					require.False(t, line.Success)
+					require.Equal(t, truth.OutcomeFailed, line.Outcome)
 					require.Contains(t, line.Error, "Docker daemon unreachable")
 					return
 				}
@@ -235,7 +239,7 @@ func TestNilDockerService_FailsLoudly(t *testing.T) {
 
 			t.Fatalf("%s returns only values with no way to signal the outage: "+
 				"a caller would read its zero values as a real result. Give it an "+
-				"error, a truth.ActionResult, or an error frame.", method.Name)
+				"error, a truth.ActionResult, or a failed done frame.", method.Name)
 		})
 	}
 }
