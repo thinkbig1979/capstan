@@ -24,8 +24,10 @@ vi.mock('codemirror', () => {
     static updateListener = { of: () => [] }
     static contentAttributes = { of: () => [] }
     dispatch() {}
+    setState() {}
+    scrollDOM = { scrollTop: 0 }
     destroy() {}
-    state = { doc: { toString: () => '', length: 0 } }
+    state = { doc: { toString: () => '', length: 0 }, selection: { main: { anchor: 0, head: 0 } } }
   }
   return { basicSetup: [], EditorView: MockEditorView }
 })

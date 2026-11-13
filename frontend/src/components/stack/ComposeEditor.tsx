@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { LoadingSpinner } from '@/components/LoadingSkeleton'
 import { useQuery } from '@tanstack/react-query'
 import { stacksApi } from '@/lib/api'
@@ -81,6 +81,9 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
     // Not `data`: while the editor holds unsaved edits a new query result
     // must not reach the view (agent-os-umig).
     doc: loaded.text,
+    // A fresh object per load: the same text loaded again still replaces a
+    // view that has moved on (load A, edit and save A', A comes back).
+    docKey: loaded,
     ariaLabel: 'Compose file editor',
     // The view holds "***" where secrets are. Edits kept across a re-lock
     // stay editable: they hold no "***", and the server refuses their save
@@ -115,18 +118,6 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
     canHydrateWhileDirty: (next) => next.text === content,
     isOwnSave: (next) => next.text === lastSaved,
   })
-
-  // The doc effect in useCodeMirrorEditor fires only when `doc` changes, so it
-  // misses a load whose text equals the previous load while the view has
-  // moved on (load A, edit and save A', A comes back from disk).
-  useEffect(() => {
-    const view = viewRef.current
-    if (!view) return
-    const current = view.state.doc.toString()
-    if (current !== loaded.text) {
-      view.dispatch({ changes: { from: 0, to: current.length, insert: loaded.text } })
-    }
-  }, [loaded, viewRef])
 
   const { lintResults, showSaveConfirm, setShowSaveConfirm, isLintingBeforeSave, saveMutation, lintMutation, handleSave, handleLint } =
     useComposeSaveAndLint({

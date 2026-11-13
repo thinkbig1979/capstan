@@ -13,6 +13,10 @@ import (
 // compose output use.
 const secretMask = userinfoPlaceholder
 
+// SecretMask is secretMask for the handlers: a request holding it may hold
+// masked text written back.
+const SecretMask = secretMask
+
 // MaskSecrets is the masking for a file shown to a session that has not
 // unlocked env values (agent-os-w6wx): the compose editor and every diff. The
 // env views hide the same values; a file that shows them would undo that.

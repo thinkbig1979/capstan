@@ -41,6 +41,12 @@ interface UseCodeMirrorEditorOptions {
    * it shows masked secrets (agent-os-w6wx).
    */
   readOnly?: boolean
+  /**
+   * Changes with every load the caller pushes into the view, so a load whose
+   * text equals the previous load still replaces a view that has moved on
+   * (load A, edit and save A', A comes back from disk).
+   */
+  docKey?: unknown
   deps?: React.DependencyList
 }
 
@@ -86,6 +92,10 @@ export function useCodeMirrorEditor(
   const readOnlyCompartmentRef = useRef<Compartment | null>(null)
   const readOnlyRef = useRef(options.readOnly ?? false)
   const appliedReadOnlyRef = useRef(false)
+  // Builds a state for the live view with the given doc and selection: the
+  // view's extensions, its compartments as currently applied, and a fresh
+  // undo history.
+  const makeStateRef = useRef<((doc: string, selection?: { anchor: number; head: number }) => EditorState) | null>(null)
 
   useEffect(() => {
     readOnlyRef.current = options.readOnly ?? false
@@ -138,12 +148,10 @@ export function useCodeMirrorEditor(
     ]
 
     appliedDarkRef.current = isDarkRef.current
-    extensions.push(themeCompartment.of(themeExtension(appliedDarkRef.current)))
 
     const readOnlyCompartment = new Compartment()
     readOnlyCompartmentRef.current = readOnlyCompartment
     appliedReadOnlyRef.current = readOnlyRef.current
-    extensions.push(readOnlyCompartment.of(readOnlyExtension(appliedReadOnlyRef.current)))
 
     if (onChangeRef.current || onSelectRef.current) {
       extensions.push(
@@ -165,13 +173,22 @@ export function useCodeMirrorEditor(
       )
     }
 
-    const state = EditorState.create({
-      doc: options.doc,
-      extensions,
-    })
+    // The compartments are given what is applied now, so a state built
+    // after a theme or readOnly change keeps it.
+    const makeState = (doc: string, selection?: { anchor: number; head: number }) =>
+      EditorState.create({
+        doc,
+        selection,
+        extensions: [
+          ...extensions,
+          themeCompartment.of(themeExtension(appliedDarkRef.current)),
+          readOnlyCompartment.of(readOnlyExtension(appliedReadOnlyRef.current)),
+        ],
+      })
+    makeStateRef.current = makeState
 
     const view = new EditorView({
-      state,
+      state: makeState(options.doc),
       parent: containerRef.current,
     })
 
@@ -182,6 +199,7 @@ export function useCodeMirrorEditor(
       viewRef.current = null
       themeCompartmentRef.current = null
       readOnlyCompartmentRef.current = null
+      makeStateRef.current = null
     }
     // The view is rebuilt only when the caller's deps change (a different file,
     // a remounted container); the theme, doc and callbacks reach the live view
@@ -205,16 +223,22 @@ export function useCodeMirrorEditor(
     view.dispatch({ effects: compartment.reconfigure(readOnlyExtension(readOnly)) })
   }, [readOnly])
 
+  // A doc pushed in from outside (a load from the server, a re-lock, an
+  // external change) replaces the view's state rather than editing it, so
+  // the replacement is not an undo step: undo after an unlock must never
+  // bring masked "***" text back into an editable editor (agent-os-w6wx).
+  // The cursor (clamped) and the scroll position carry over.
   useEffect(() => {
     const view = viewRef.current
-    if (!view) return
-    const currentDoc = view.state.doc.toString()
-    if (options.doc !== currentDoc) {
-      view.dispatch({
-        changes: { from: 0, to: currentDoc.length, insert: options.doc },
-      })
-    }
-  }, [options.doc])
+    const makeState = makeStateRef.current
+    if (!view || !makeState) return
+    if (options.doc === view.state.doc.toString()) return
+    const { anchor, head } = view.state.selection.main
+    const clamp = (pos: number) => Math.min(pos, options.doc.length)
+    const scrollTop = view.scrollDOM.scrollTop
+    view.setState(makeState(options.doc, { anchor: clamp(anchor), head: clamp(head) }))
+    view.scrollDOM.scrollTop = scrollTop
+  }, [options.doc, options.docKey])
 
   return { viewRef, isDark }
 }

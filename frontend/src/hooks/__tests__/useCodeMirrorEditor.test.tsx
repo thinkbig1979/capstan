@@ -3,6 +3,9 @@ import { renderHook, act } from '@testing-library/react'
 import { useRef } from 'react'
 
 const dispatchMock = vi.fn()
+// A doc pushed in from outside replaces the view's state (a fresh undo
+// history, agent-os-w6wx); this records the doc of each state set.
+const setStateMock = vi.fn()
 let createdDocs: string[] = []
 let contentAttrs: Array<Record<string, string>> = []
 
@@ -27,10 +30,15 @@ vi.mock('codemirror', () => {
         this._doc = args.changes.insert
       }
     }
+    setState(state: { doc: { toString: () => string } }) {
+      this._doc = state.doc.toString()
+      setStateMock(this._doc)
+    }
+    scrollDOM = { scrollTop: 0 }
     destroy() {}
     get state() {
       const doc = this._doc
-      return { doc: { toString: () => doc, length: doc.length } }
+      return { doc: { toString: () => doc, length: doc.length }, selection: { main: { anchor: 0, head: 0 } } }
     }
   }
   return { basicSetup: [], EditorView: MockEditorView }
@@ -84,6 +92,7 @@ function useHarness(doc: string, ariaLabel?: string) {
 describe('useCodeMirrorEditor', () => {
   beforeEach(() => {
     dispatchMock.mockClear()
+    setStateMock.mockClear()
     createdDocs = []
     contentAttrs = []
   })
@@ -94,19 +103,15 @@ describe('useCodeMirrorEditor', () => {
     })
 
     expect(createdDocs).toEqual([''])
-    expect(dispatchMock).not.toHaveBeenCalled()
+    expect(setStateMock).not.toHaveBeenCalled()
 
     act(() => {
       rerender({ doc: 'services:\n  web:\n    image: nginx\n' })
     })
 
-    expect(dispatchMock).toHaveBeenCalledWith({
-      changes: {
-        from: 0,
-        to: 0,
-        insert: 'services:\n  web:\n    image: nginx\n',
-      },
-    })
+    // Replaced as a new state (no undo step), exactly once, with the new doc.
+    expect(setStateMock.mock.calls).toEqual([['services:\n  web:\n    image: nginx\n']])
+    expect(dispatchMock).not.toHaveBeenCalled()
   })
 
   it('does not re-dispatch when doc prop is unchanged', () => {
@@ -122,6 +127,7 @@ describe('useCodeMirrorEditor', () => {
     })
 
     expect(dispatchMock).not.toHaveBeenCalled()
+    expect(setStateMock).not.toHaveBeenCalled()
   })
 
   // axe aria-input-field-name: CodeMirror's contenteditable has no accessible

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -120,16 +121,25 @@ func (h *ComposeHandler) stackSecrets(stack models.Stack) []string {
 	return services.StackSecretValues(stack, globalEnvPath(h.config))
 }
 
-// refuseLockedSecretsSave answers and returns true when this save must not
-// run: the session has not unlocked env values and the file on disk holds a
-// value the GET masked for it, so what the editor holds is "***" where a
-// secret was, and saving it would overwrite the secret (agent-os-w6wx). It is
-// checked on disk, not on the request, so a stale or forged client cannot
-// get past it. A link the write would refuse answers that refusal (409); any
-// other failure to read the file refuses too: fail closed.
-func (h *ComposeHandler) refuseLockedSecretsSave(c *gin.Context, stack *models.Stack, composePath string) bool {
-	if envUnlocked(c) {
-		return false
+// refuseMaskedSave answers and returns true when this save of content must
+// not run, because it would write a masked "***" over a secret
+// (agent-os-w6wx). Both checks read the file on disk, not the request's
+// claims, so a stale or forged client cannot get past them:
+//
+//   - A session that has not unlocked env values gets 403 when the file
+//     holds a value the GET masked for it: what its editor holds is "***"
+//     where a secret was.
+//   - An unlocked session gets 409 when a line of content equals the masked
+//     form of a line on disk that the masker changed: the editor holds text
+//     from a locked view (an undo back past an unlock did that), and saving
+//     it would overwrite the secret.
+//
+// A link the write would refuse answers that refusal (409); any other
+// failure to read the file refuses too: fail closed.
+func (h *ComposeHandler) refuseMaskedSave(c *gin.Context, stack *models.Stack, composePath, content string) bool {
+	unlocked := envUnlocked(c)
+	if unlocked && !strings.Contains(content, services.SecretMask) {
+		return false // nothing masked can be in it
 	}
 	target, info, err := resolveWriteTarget(composePath)
 	if err != nil {
@@ -139,19 +149,58 @@ func (h *ComposeHandler) refuseLockedSecretsSave(c *gin.Context, stack *models.S
 	if info == nil {
 		return false // nothing on disk yet, nothing to overwrite
 	}
-	//nolint:gosec // target is the compose path resolved by resolveWriteTarget; only a count of masked values leaves this function
-	content, err := os.ReadFile(target)
+	//nolint:gosec // target is the compose path resolved by resolveWriteTarget; only masked lines are compared, nothing of it is returned
+	disk, err := os.ReadFile(target)
 	if err != nil {
 		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "READ_ERROR", "Failed to read the compose file on disk", err))
 		return true
 	}
-	if _, n := services.MaskSecrets(string(content), stack.ComposeFile, h.stackSecrets(*stack)); n > 0 {
-		c.JSON(http.StatusForbidden, models.NewAppError(
-			http.StatusForbidden,
-			models.ErrForbidden,
-			"Re-enter your password to edit a compose file that holds secrets",
+	masked, n := services.MaskSecrets(string(disk), stack.ComposeFile, h.stackSecrets(*stack))
+	if !unlocked {
+		if n > 0 {
+			c.JSON(http.StatusForbidden, models.NewAppError(
+				http.StatusForbidden,
+				models.ErrForbidden,
+				"Re-enter your password to edit a compose file that holds secrets",
+			))
+			return true
+		}
+		return false
+	}
+	if n > 0 && holdsMaskedLine(content, string(disk), masked) {
+		c.JSON(http.StatusConflict, models.NewAppError(
+			http.StatusConflict,
+			models.ErrValidation,
+			"This save holds masked values (***) from a locked view and would overwrite the secrets they hide; reload the file and try again",
 		))
 		return true
+	}
+	return false
+}
+
+// holdsMaskedLine reports whether a line of content equals the masked form of
+// a line the masker changed in disk (masked is disk masked, line for line). A
+// masked form that is also a line of disk as written is not counted: the
+// file really holds it.
+func holdsMaskedLine(content, disk, masked string) bool {
+	diskLines, maskedLines := strings.Split(disk, "\n"), strings.Split(masked, "\n")
+	if len(diskLines) != len(maskedLines) {
+		return true // MaskSecrets keeps the line count; fail closed if not
+	}
+	raw := make(map[string]bool, len(diskLines))
+	for _, l := range diskLines {
+		raw[l] = true
+	}
+	forms := map[string]bool{}
+	for i, l := range maskedLines {
+		if l != diskLines[i] && !raw[l] {
+			forms[l] = true
+		}
+	}
+	for _, l := range strings.Split(content, "\n") {
+		if forms[l] {
+			return true
+		}
 	}
 	return false
 }
@@ -188,8 +237,9 @@ func (h *ComposeHandler) Put(c *gin.Context) {
 	}
 	defer releaseLock()
 
-	// Before the lint: a refused save answers 403, whatever the content.
-	if h.refuseLockedSecretsSave(c, stack, composePath) {
+	// Before the lint: a refused save answers 403 or 409, whatever the lint
+	// would say.
+	if h.refuseMaskedSave(c, stack, composePath, req.Content) {
 		return
 	}
 
@@ -241,7 +291,7 @@ func (h *ComposeHandler) Lint(c *gin.Context) {
 	if err != nil && !errors.Is(err, errdefs.ErrNotFound) {
 		// agent-os-7lg1 judgement call: Lint works standalone — a genuine DB
 		// fault here only degrades the working directory used for linting
-		// (falls back to /tmp below), so it is worth an operator-visible log
+		// (none, below), so it is worth an operator-visible log
 		// line but not worth failing a lint request that never required the
 		// stack to exist. Unlike the other 13 db.GetStack sites in this
 		// package, there is no 404 arm here to preserve: this call never
@@ -424,8 +474,9 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 	}
 	defer releaseLock()
 
-	// Before the lint: a refused save answers 403, whatever the content.
-	if h.refuseLockedSecretsSave(c, stack, composePath) {
+	// Before the lint: a refused save answers 403 or 409, whatever the lint
+	// would say.
+	if h.refuseMaskedSave(c, stack, composePath, req.ComposeContent) {
 		return
 	}
 
