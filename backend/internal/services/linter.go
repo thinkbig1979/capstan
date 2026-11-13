@@ -43,11 +43,32 @@ func NewLinterService() *LinterService {
 // not unlocked env values, 422 bodies and logs. A secret's value never decides
 // whether a legitimate file is valid. Every message is still redacted with
 // the secret values, for a secret the content itself spells out.
+//
+// Whether the file is valid is still decided with the real values: "0" is not
+// a valid value everywhere a secret-looking variable can go (a volume source,
+// a container name), and the stack deploys with the real ones (review r2
+// R2-D1). That run's messages are never returned. When only the real run
+// passes, the placeholder run's errors are dropped; when only the real run
+// fails, one error with no compose-go text (realValuesError) says so.
 func (l *LinterService) LintCompose(content, workingDir string, env LintEnv) ([]models.LintResult, error) {
 	secrets := env.secretValues()
-	results, err := l.lintCompose(content, workingDir, env.interpolationVars(secrets))
+	placeholder := env.interpolationVars(secrets)
+	results, err := l.lintCompose(content, workingDir, placeholder)
 	if err != nil {
 		return nil, err
+	}
+	if !sameVars(placeholder.Vars, env.Vars) {
+		real, err := l.lintCompose(content, workingDir, env)
+		if err != nil {
+			return nil, err
+		}
+		switch realFails, placeholderFails := hasErrorResult(real), hasErrorResult(results); {
+		case !realFails && placeholderFails:
+			results = withoutErrors(results)
+		case realFails && !placeholderFails:
+			results = append(results, realValuesError)
+			l.sortResults(results)
+		}
 	}
 	for i := range results {
 		results[i].Message = redactComposeOutput(results[i].Message, secrets)
@@ -296,6 +317,47 @@ type LintEnv struct {
 	// Secrets are the env files' secret values, as StackSecretValues finds
 	// them. A variable whose value holds one is never interpolated as itself.
 	Secrets []string
+}
+
+// realValuesError is the one result for a file that loads with the
+// placeholder but not with the real values. It quotes nothing: compose-go's
+// text for the real run would quote, possibly transformed, a secret.
+var realValuesError = models.LintResult{
+	Level:   "error",
+	Line:    1,
+	Message: "This file does not load with the stack's environment values; check the variables used in typed fields (ports, cpus, mem_limit, durations, counts).",
+	Rule:    "compose-structure",
+}
+
+func hasErrorResult(results []models.LintResult) bool {
+	for _, r := range results {
+		if r.Level == "error" {
+			return true
+		}
+	}
+	return false
+}
+
+func withoutErrors(results []models.LintResult) []models.LintResult {
+	out := results[:0:0]
+	for _, r := range results {
+		if r.Level != "error" {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func sameVars(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if w, ok := b[k]; !ok || w != v {
+			return false
+		}
+	}
+	return true
 }
 
 // lintPlaceholder is what a secret, or a required variable with no value, is

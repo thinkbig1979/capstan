@@ -126,8 +126,11 @@ func TestLinterService_MessagesNeverQuoteSensitiveValues_siou(t *testing.T) {
 		return out
 	}
 
-	assert.Empty(t, structure("services:\n  db:\n    image: postgres:16\n    cpus: ${DB_PASSWORD}\n"),
-		"the secret is interpolated as a placeholder, which decodes")
+	// The real value does not decode as cpus: invalid (R2-D1), with one error
+	// that quotes nothing from the real run.
+	secretRun := structure("services:\n  db:\n    image: postgres:16\n    cpus: ${DB_PASSWORD}\n")
+	require.Len(t, secretRun, 1)
+	assert.Equal(t, realValuesError.Message, secretRun[0].Message)
 
 	plain := structure("services:\n  db:\n    image: postgres:16\n    cpus: ${PLAIN}\n")
 	require.Len(t, plain, 1)

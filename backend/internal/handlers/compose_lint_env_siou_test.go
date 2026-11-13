@@ -185,10 +185,13 @@ func TestComposeLint_LockedSessionNeverSeesEnvValue_siou(t *testing.T) {
 		return resp, w.Body.String()
 	}
 
-	resp, _ := lint("services:\n  db:\n    image: postgres:16\n    restart: unless-stopped\n    cpus: ${DB_PASSWORD}\n")
-	assert.True(t, resp.Valid, "the secret is interpolated as a placeholder, which decodes: %+v", resp.LintResults)
+	// The real value does not decode as cpus, so the file is invalid (R2-D1),
+	// and the one error says so without quoting the real run.
+	resp, body := lint("services:\n  db:\n    image: postgres:16\n    restart: unless-stopped\n    cpus: ${DB_PASSWORD}\n")
+	assert.False(t, resp.Valid, "%+v", resp.LintResults)
+	assert.Contains(t, body, "does not load with the stack's environment values", body)
 
-	resp, body := lint("services:\n  db:\n    image: postgres:16\n    restart: unless-stopped\n    cpus: ${PLAIN}\n")
+	resp, body = lint("services:\n  db:\n    image: postgres:16\n    restart: unless-stopped\n    cpus: ${PLAIN}\n")
 	assert.False(t, resp.Valid, "a non-secret variable is interpolated as itself: %+v", resp.LintResults)
 	assert.Contains(t, body, "visibleXYZ", "and its value is quoted: %s", body)
 
