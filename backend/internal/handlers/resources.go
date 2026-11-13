@@ -430,13 +430,34 @@ func (h *ResourcesHandler) inspectSecrets(c *gin.Context, inspect container.Insp
 	return secrets, true
 }
 
-// maskContainerInspect masks, for a locked session, Path, Args and every
-// string under Config and HostConfig, with the masker's value pass (secrets)
-// and its name and flag passes (agent-os-yvlh).
+// maskContainerInspect masks, for a locked session, every string the stack's
+// compose file or its running service can put in the inspect document, with
+// the masker's value pass (secrets) and its name and flag passes
+// (agent-os-yvlh): Path, Args, Name, the security labels, State.Error, the
+// healthcheck output, and every string value under Config, HostConfig,
+// Mounts and NetworkSettings (review r3: Mounts[].Source served the bind
+// path HostConfig.Binds starred). Left as Docker sent them, because the
+// daemon generates them: ID, Created, Image (a digest), the
+// resolv/hostname/hosts/log paths, Driver, Platform, ExecIDs, GraphDriver,
+// the sizes, State's status and timestamps, and ImageManifestDescriptor.
 func maskContainerInspect(inspect *container.InspectResponse, secrets []string) {
+	mask := func(s *string) { *s, _ = services.MaskSecrets(*s, "", secrets) }
 	if inspect.ContainerJSONBase != nil {
-		inspect.Path, _ = services.MaskSecrets(inspect.Path, "", secrets)
+		mask(&inspect.Path)
 		inspect.Args = services.MaskArgs(inspect.Args, secrets)
+		for _, s := range []*string{&inspect.Name, &inspect.AppArmorProfile, &inspect.MountLabel, &inspect.ProcessLabel} {
+			mask(s)
+		}
+		if inspect.State != nil {
+			mask(&inspect.State.Error)
+			if inspect.State.Health != nil {
+				for _, r := range inspect.State.Health.Log {
+					if r != nil {
+						mask(&r.Output)
+					}
+				}
+			}
+		}
 	}
 	if inspect.Config != nil {
 		// Env first, by its own rule: an entry with no "=" is masked whole.
@@ -446,14 +467,20 @@ func maskContainerInspect(inspect *container.InspectResponse, secrets []string) 
 	if inspect.ContainerJSONBase != nil && inspect.HostConfig != nil {
 		maskEveryString(reflect.ValueOf(inspect.HostConfig).Elem(), secrets)
 	}
+	maskEveryString(reflect.ValueOf(inspect.Mounts), secrets)
+	if inspect.NetworkSettings != nil {
+		maskEveryString(reflect.ValueOf(inspect.NetworkSettings).Elem(), secrets)
+	}
 }
 
-// maskEveryString masks every string reachable from v, in place, rather than
-// a named list of fields (review r2 N1: LogConfig.Config held a splunk-token
-// and a loki-url with credentials, and the next Docker field would too): a
-// []string as an argv (MaskArgs), a string map entry by its key's name, else
-// by its value, and every other string by MaskSecrets. Unexported fields and
-// interfaces are skipped; Config and HostConfig hold strings in neither.
+// maskEveryString masks every string VALUE reachable from v, in place,
+// rather than a named list of fields (review r2 N1: LogConfig.Config held a
+// splunk-token and a loki-url with credentials, and the next Docker field
+// would too): a []string as an argv (MaskArgs), a string map entry by its
+// key's name, else by its value, and every other string by MaskSecrets. Map
+// KEYS are not masked (they are option names, port specs and container
+// paths, and renaming a key could merge two entries). Unexported fields and
+// interfaces are skipped; the inspect types hold strings in neither.
 func maskEveryString(v reflect.Value, secrets []string) {
 	switch v.Kind() {
 	case reflect.Pointer:
