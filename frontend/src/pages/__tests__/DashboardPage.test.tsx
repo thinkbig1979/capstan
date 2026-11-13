@@ -134,10 +134,8 @@ vi.mock('@/components/dashboard/BuildCacheTab', () => ({
 vi.mock('@/components/dashboard/AttentionStrip', () => ({
   AttentionStrip: () => <div data-testid="attention-strip" />,
 }))
-vi.mock('@/components/dashboard/HostStrip', () => ({
-  HostStrip: ({ activeView }: { activeView?: string }) => (
-    <div data-testid="host-strip" data-active-view={activeView} />
-  ),
+vi.mock('@/components/dashboard/HostTiles', () => ({
+  HostTiles: () => <div data-testid="host-tiles" />,
 }))
 
 import { DashboardPage } from '../DashboardPage'
@@ -221,6 +219,13 @@ describe('DashboardPage', () => {
     dashboardStats.mockResolvedValue({ runningContainers: 0 })
     getConfig.mockResolvedValue({ stacksDirectories: [] })
     getAutoUpdatePolicies.mockResolvedValue({ globalEnabled: false, policies: [] })
+  })
+
+  // AC12(c): the host links under the stacks table are tiles now.
+  it('renders the host tiles on the Stacks tab', async () => {
+    renderPage('/')
+    expect(await screen.findByTestId('tab-stacks')).toBeInTheDocument()
+    expect(screen.getByTestId('host-tiles')).toBeInTheDocument()
   })
 
   // agent-os-a1ye.5: the /ws/events stream can go silent (a lost Docker event

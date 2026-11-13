@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, Suspense, lazy, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Navigate, useNavigate, useSearchParams } from 'react-router'
+import { Navigate, useSearchParams } from 'react-router'
 import { directoriesApi, stacksApi, dashboardApi, settingsApi } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -16,8 +16,8 @@ import { UpdatesTab } from '@/components/dashboard/UpdatesTab'
 import { BackupHistoryTab } from '@/components/dashboard/BackupHistoryTab'
 import { DashboardHeader } from '@/components/dashboard/DashboardHeader'
 import { AttentionStrip } from '@/components/dashboard/AttentionStrip'
-import { HostStrip } from '@/components/dashboard/HostStrip'
-import { DASHBOARD_TABS, type DashboardTab, type HostView } from '@/lib/app-views'
+import { HostTiles } from '@/components/dashboard/HostTiles'
+import { DASHBOARD_TABS, type DashboardTab } from '@/lib/app-views'
 import { isHostView } from '@/components/host/host-views'
 import { StacksTab } from '@/components/dashboard/StacksTab'
 import { DirectoriesTab } from '@/components/dashboard/DirectoriesTab'
@@ -72,7 +72,6 @@ export function DashboardPage() {
 
 function DashboardContent() {
   const [searchParams, setSearchParams] = useSearchParams()
-  const navigate = useNavigate()
   // The fleet (stacks) view is the landing tab; Metrics keeps its historical
   // 'overview' URL value so old ?tab=overview links still work.
   const activeTab = searchParams.get('tab') || 'stacks'
@@ -409,10 +408,7 @@ function DashboardContent() {
               autoUpdatePolicies={autoUpdatePoliciesData?.policies ?? []}
               globalAutoUpdateState={toGlobalAutoUpdateState(autoUpdatePoliciesQuery)}
             />
-            <HostStrip
-              stats={dashboardStats}
-              onNavigate={(view: HostView) => navigate(`/host/${view}`)}
-            />
+            <HostTiles />
           </ErrorBoundary>
         </TabsContent>
 

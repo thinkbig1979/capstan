@@ -22,6 +22,17 @@ export function useHostSummary() {
 }
 
 /**
+ * The headline figure (D98-B: what one click on the dialog's defaults frees)
+ * for the sidebar badge, rail dot, header chip and dashboard alert. Undefined
+ * while loading or when the last read failed, so none of them shows a figure
+ * nobody measured.
+ */
+export function useHostReclaimable(): number | undefined {
+  const { data, isError } = useHostSummary()
+  return data && !isError ? data.disk.reclaimable : undefined
+}
+
+/**
  * What the Free-up-space dialog lists. staleTime 0 and gcTime 0: the user is
  * about to delete from this list, so every opening reads it fresh.
  */

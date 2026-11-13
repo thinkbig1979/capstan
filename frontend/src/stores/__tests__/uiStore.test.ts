@@ -155,3 +155,50 @@ describe('uiStore pinnedStacks', () => {
     expect(useUIStore.getState().pinnedStacks).toEqual(['b'])
   })
 })
+
+describe('uiStore host space alert dismissal', () => {
+  // A blob saved by a build before this key existed must rehydrate to "not
+  // dismissed" (null), keeping the keys it does carry.
+  it('rehydrates an old ui-storage blob without the key as not dismissed', async () => {
+    useUIStore.setState(useUIStore.getInitialState(), true)
+    localStorage.setItem(
+      'ui-storage',
+      JSON.stringify({ state: { theme: 'system', sidebarOpen: true, sidebarWidth: 300, pinnedStacks: [] }, version: 0 }),
+    )
+    await useUIStore.persist.rehydrate()
+    // Precondition: the old blob was read.
+    expect(useUIStore.getState().sidebarWidth).toBe(300)
+    expect(useUIStore.getState().hostSpaceAlertDismissedUntil).toBeNull()
+    localStorage.removeItem('ui-storage')
+  })
+
+  it('persists a dismissal and rehydrates it', async () => {
+    useUIStore.setState(useUIStore.getInitialState(), true)
+    useUIStore.getState().dismissHostSpaceAlert()
+    const until = useUIStore.getState().hostSpaceAlertDismissedUntil
+    expect(JSON.parse(localStorage.getItem('ui-storage')!).state.hostSpaceAlertDismissedUntil).toBe(until)
+
+    useUIStore.setState({ hostSpaceAlertDismissedUntil: null })
+    localStorage.setItem(
+      'ui-storage',
+      JSON.stringify({ state: { sidebarWidth: 256, hostSpaceAlertDismissedUntil: until }, version: 0 }),
+    )
+    await useUIStore.persist.rehydrate()
+    expect(useUIStore.getState().hostSpaceAlertDismissedUntil).toBe(until)
+    localStorage.removeItem('ui-storage')
+  })
+
+  it('dismisses for 7 days from now', () => {
+    const now = Date.now()
+    useUIStore.getState().dismissHostSpaceAlert()
+    const until = useUIStore.getState().hostSpaceAlertDismissedUntil!
+    expect(until - now).toBeGreaterThanOrEqual(7 * 24 * 60 * 60 * 1000)
+    expect(until - now).toBeLessThan(7 * 24 * 60 * 60 * 1000 + 5000)
+  })
+
+  it('resetLayout clears the dismissal', () => {
+    useUIStore.getState().dismissHostSpaceAlert()
+    useUIStore.getState().resetLayout()
+    expect(useUIStore.getState().hostSpaceAlertDismissedUntil).toBeNull()
+  })
+})
