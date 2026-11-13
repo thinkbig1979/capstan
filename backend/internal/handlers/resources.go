@@ -374,9 +374,14 @@ func (h *ResourcesHandler) inspectContainer(c *gin.Context) {
 
 	// A session that has not unlocked env values must not read them here
 	// either: Config.Env holds every value the container started with,
-	// interpolated .env secrets included (agent-os-yvlh).
-	if !envUnlocked(c) && inspect.Config != nil {
-		inspect.Config.Env = maskContainerEnv(inspect.Config.Env)
+	// interpolated .env secrets included, and Cmd, Args, labels and the
+	// healthcheck can hold them too (agent-os-yvlh).
+	if !envUnlocked(c) {
+		secrets, ok := h.inspectSecrets(c, inspect)
+		if !ok {
+			return
+		}
+		maskContainerInspect(&inspect, secrets)
 	}
 
 	formatted, err := json.MarshalIndent(inspect, "", "  ")
@@ -389,11 +394,72 @@ func (h *ResourcesHandler) inspectContainer(c *gin.Context) {
 	c.Data(http.StatusOK, "application/json", formatted)
 }
 
+// inspectSecrets are the secret values of the stack that owns the inspected
+// container, found by its compose project label as lockContainerStack finds
+// it. A container no stack here manages has none: the name and flag passes
+// still apply. When the owner cannot be told (two stacks share the project,
+// or the stacks table cannot be read) the response is written and ok is
+// false: masking with the wrong set, or none, would fail open.
+func (h *ResourcesHandler) inspectSecrets(c *gin.Context, inspect container.InspectResponse) ([]string, bool) {
+	projectName := ""
+	if inspect.Config != nil {
+		projectName = inspect.Config.Labels["com.docker.compose.project"]
+	}
+	if projectName == "" {
+		return nil, true
+	}
+	stack, err := h.db.GetStackByProjectName(projectName)
+	switch {
+	case errors.Is(err, errdefs.ErrNotFound):
+		return nil, true
+	case errors.Is(err, errdefs.ErrAmbiguous):
+		refuseAmbiguousStack(c, err)
+		return nil, false
+	case err != nil:
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR",
+			"Failed to look up the stack that owns this container", err))
+		return nil, false
+	}
+	return h.docker.ComposeSecretValues(*stack), true
+}
+
+// maskContainerInspect masks, for a locked session, every inspect field that
+// can hold an env value or a secret: Env, Cmd, Entrypoint, Args, Path,
+// labels and the healthcheck, with the masker's value pass (secrets) and its
+// name and flag passes (agent-os-yvlh).
+func maskContainerInspect(inspect *container.InspectResponse, secrets []string) {
+	if inspect.ContainerJSONBase != nil {
+		inspect.Path, _ = services.MaskSecrets(inspect.Path, "", secrets)
+		inspect.Args = services.MaskArgs(inspect.Args, secrets)
+	}
+	cfg := inspect.Config
+	if cfg == nil {
+		return
+	}
+	cfg.Env = maskContainerEnv(cfg.Env, secrets)
+	cfg.Cmd = services.MaskArgs(cfg.Cmd, secrets)
+	cfg.Entrypoint = services.MaskArgs(cfg.Entrypoint, secrets)
+	if cfg.Healthcheck != nil {
+		cfg.Healthcheck.Test = services.MaskArgs(cfg.Healthcheck.Test, secrets)
+	}
+	for k, v := range cfg.Labels {
+		if services.IsSensitiveEnvVar(k, v) {
+			cfg.Labels[k] = "***"
+			continue
+		}
+		cfg.Labels[k], _ = services.MaskSecrets(v, "", secrets)
+	}
+}
+
 // maskContainerEnv masks a container's KEY=value entries the way the locked
 // env views do: the value of every entry IsSensitiveEnvVar matches becomes
-// "***". An entry with no "=" cannot be classified and is masked whole: fail
-// closed.
-func maskContainerEnv(env []string) []string {
+// "***", and every other entry goes through MaskSecrets (the stack's secret
+// values verbatim, KEY=value and flag tokens, URL credentials). An entry with
+// no "=" cannot be classified and is masked whole: fail closed.
+func maskContainerEnv(env, secrets []string) []string {
+	if env == nil {
+		return nil
+	}
 	out := make([]string, len(env))
 	for i, e := range env {
 		k, v, ok := strings.Cut(e, "=")
@@ -403,7 +469,8 @@ func maskContainerEnv(env []string) []string {
 		case services.IsSensitiveEnvVar(k, v):
 			out[i] = k + "=***"
 		default:
-			out[i] = e
+			masked, _ := services.MaskSecrets(v, "", secrets)
+			out[i] = k + "=" + masked
 		}
 	}
 	return out

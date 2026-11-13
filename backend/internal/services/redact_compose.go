@@ -180,6 +180,12 @@ func (s *DockerService) composeSecrets(stack models.Stack) []string {
 	return StackSecretValues(stack, globalPath)
 }
 
+// ComposeSecretValues is composeSecrets for the handlers: the stack's secret
+// values, masked wherever a locked view shows them verbatim (agent-os-yvlh).
+func (s *DockerService) ComposeSecretValues(stack models.Stack) []string {
+	return s.composeSecrets(stack)
+}
+
 // StackSecretValues is composeSecrets for callers without a DockerService:
 // the locked views mask these values wherever they appear verbatim
 // (agent-os-w6wx). globalPath "" reads no global.env.
