@@ -184,7 +184,8 @@ func (m *lineMasker) walk(n *yaml.Node) {
 					m.maskItemAfterEquals(c)
 				}
 				// An exec-form argv: "--password", "x" (sec D5).
-				if isSensitiveLongFlag(c.Value) && i+1 < len(n.Content) && n.Content[i+1].Kind == yaml.ScalarNode {
+				if isSensitiveLongFlag(c.Value) && i+1 < len(n.Content) && n.Content[i+1].Kind == yaml.ScalarNode &&
+					!strings.HasPrefix(n.Content[i+1].Value, "-") {
 					m.maskNode(n.Content[i+1], c)
 				}
 				continue
@@ -596,13 +597,16 @@ func MaskArgs(args, secrets []string) []string {
 	if args == nil {
 		return nil
 	}
-	out := make([]string, len(args))
-	for i, a := range args {
-		if i > 0 && isSensitiveLongFlag(args[i-1]) && a != "" && !isSecretReference(a) {
-			out[i] = secretMask
-			continue
+	out := make([]string, 0, len(args))
+	afterFlag := false
+	for _, a := range args {
+		if afterFlag && a != "" && !strings.HasPrefix(a, "-") && !isSecretReference(a) {
+			out = append(out, secretMask)
+		} else {
+			masked, _ := MaskSecrets(a, "", secrets)
+			out = append(out, masked)
 		}
-		out[i], _ = MaskSecrets(a, "", secrets)
+		afterFlag = isSensitiveLongFlag(a)
 	}
 	return out
 }
