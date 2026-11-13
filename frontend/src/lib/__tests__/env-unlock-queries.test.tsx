@@ -56,12 +56,33 @@ describe('invalidateEnvUnlockQueries (agent-os-4xsq)', () => {
 
   it('4xsq: an unmounted global env query is removed too, and an unrelated query is left alone', async () => {
     client.setQueryData(queryKeys.settings.globalEnv(), { vars: [{ key: 'API_KEY', value: 'real-secret' }] })
-    client.setQueryData(queryKeys.stack.compose('A'), { content: 'services: {}' })
+    // The unrelated query was the compose file until agent-os-w6wx put it in
+    // the set; the stack row holds no secret.
+    client.setQueryData(queryKeys.stack.detail('A'), { id: 'A' })
 
     await invalidateEnvUnlockQueries(client)
 
     expect(present(client, queryKeys.settings.globalEnv())).toBe(false)
-    expect(present(client, queryKeys.stack.compose('A'))).toBe(true)
+    expect(present(client, queryKeys.stack.detail('A'))).toBe(true)
+  })
+
+  it('w6wx: compose and git diff queries are masked while locked, so they are in the set', async () => {
+    client.setQueryData(queryKeys.stack.compose('A'), { text: 'PASSWORD: real', masked: false })
+    client.setQueryData(queryKeys.git.diff('A', 'abc'), { diff: '+PASSWORD: real' })
+    client.setQueryData(['git', 'A', 'changes', 'diff', 'compose.yaml'], { diff: '+PASSWORD: real' })
+    const queryFn = vi.fn().mockResolvedValue({ text: 'PASSWORD: ***', masked: true })
+    const observer = new QueryObserver(client, { queryKey: queryKeys.stack.compose('B'), queryFn })
+    unsubscribers.push(observer.subscribe(() => {}))
+    await settled(observer)
+
+    await invalidateEnvUnlockQueries(client)
+
+    expect(present(client, queryKeys.stack.compose('A'))).toBe(false)
+    expect(present(client, queryKeys.git.diff('A', 'abc'))).toBe(false)
+    expect(present(client, ['git', 'A', 'changes', 'diff', 'compose.yaml'])).toBe(false)
+    // The mounted compose query stays and is refetched.
+    expect(present(client, queryKeys.stack.compose('B'))).toBe(true)
+    expect(queryFn).toHaveBeenCalledTimes(2)
   })
 
   it('4xsq: the mounted global env query is invalidated and refetched, not removed', async () => {

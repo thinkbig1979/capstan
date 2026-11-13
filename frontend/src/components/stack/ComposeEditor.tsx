@@ -14,6 +14,19 @@ import { stringOr } from '@/lib/narrow'
 import { CommitPushDialog } from '@/components/git/CommitPushDialog'
 import { FileChangedNotice } from '@/components/FileChangedNotice'
 import { useExternalFileChange } from '@/hooks/useExternalFileChange'
+import { EnvUnlockDialog } from '@/components/EnvUnlockDialog'
+import { Button } from '@/components/ui/button'
+import { Lock } from 'lucide-react'
+
+/**
+ * One load of the compose file. `masked` is true when the server masked
+ * secrets in `text` for a session that has not unlocked env values
+ * (agent-os-w6wx): the editor is then read-only, and a save would be refused.
+ */
+interface ComposeLoad {
+  text: string
+  masked: boolean
+}
 
 interface ComposeEditorProps {
   stackId: string
@@ -26,7 +39,7 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
   const [lastSaved, setLastSaved] = useState('')
   // The text last loaded into the view. A fresh object per load, so the sync
   // effect below runs even when the same text is loaded twice.
-  const [loaded, setLoaded] = useState({ text: '' })
+  const [loaded, setLoaded] = useState({ text: '', masked: false })
   // selectedText/selectedTextRef stay here (not in useExtractToEnv) because
   // they're captured by the useCodeMirrorEditor onSelect option below at
   // mount time, the same way handleSaveRef is — see quirk notes in
@@ -43,9 +56,16 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
       // string-typed React state and the editor's initial document.
       // '' rather than undefined: the hydrate below skips an empty body,
       // as it always has for an absent one.
-      return stringOr((compose as { content?: unknown } | undefined)?.content, '')
+      const body = compose as { content?: unknown; maskedValues?: unknown } | undefined
+      const load: ComposeLoad = {
+        text: stringOr(body?.content, ''),
+        masked: typeof body?.maskedValues === 'number' && body.maskedValues > 0,
+      }
+      return load
     },
   })
+  const masked = data?.masked ?? false
+  const [unlockOpen, setUnlockOpen] = useState(false)
 
   // The stack row StackPage already fetched, read from the cache: `enabled:
   // false` means this observer never requests it. Decides whether the save
@@ -62,6 +82,10 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
     // must not reach the view (agent-os-umig).
     doc: loaded.text,
     ariaLabel: 'Compose file editor',
+    // The view holds "***" where secrets are. Edits kept across a re-lock
+    // stay editable: they hold no "***", and the server refuses their save
+    // until unlock.
+    readOnly: masked && loaded.masked,
     onSave: () => {
       handleSaveRef.current()
       return true
@@ -79,13 +103,17 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
     isDirty: hasUnsavedChanges,
     hydrate: (next) => {
       // '' is an absent body (see the queryFn), not a file to load.
-      if (!next) return
-      setContent(next)
-      setLastSaved(next)
-      setLoaded({ text: next })
+      if (!next.text) return
+      setContent(next.text)
+      setLastSaved(next.text)
+      setLoaded({ text: next.text, masked: next.masked })
     },
-    canHydrateWhileDirty: (next) => next === content,
-    isOwnSave: (next) => next === lastSaved,
+    // A re-lock while the editor holds unsaved edits: keep them, never load
+    // "***" over them, and raise no changed-on-disk notice for a file that
+    // did not change (agent-os-w6wx, as the env editor does, vqf5).
+    rebaseWhileDirty: (next) => next.masked,
+    canHydrateWhileDirty: (next) => next.text === content,
+    isOwnSave: (next) => next.text === lastSaved,
   })
 
   // The doc effect in useCodeMirrorEditor fires only when `doc` changes, so it
@@ -134,7 +162,28 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
         selectedText={selectedText}
         hasUnsavedChanges={hasUnsavedChanges}
         errorCount={errorCount}
+        masked={masked}
       />
+
+      {masked && (
+        <div
+          role="status"
+          className="flex flex-wrap items-center justify-between gap-3 rounded-md border bg-muted/50 px-3 py-2 text-sm"
+        >
+          <div className="flex items-center gap-2">
+            <Lock className="h-4 w-4 shrink-0" aria-hidden="true" />
+            <span>
+              {hasUnsavedChanges
+                ? 'Values locked again; unlock to save your edits.'
+                : 'Secrets in this file are hidden, so it is read-only. Unlock to view and edit it.'}
+            </span>
+          </div>
+          <Button type="button" size="sm" variant="outline" onClick={() => setUnlockOpen(true)}>
+            Unlock to edit
+          </Button>
+        </div>
+      )}
+      <EnvUnlockDialog open={unlockOpen} onOpenChange={setUnlockOpen} />
 
       {changedOnDisk && <FileChangedNotice onReload={reload} />}
 

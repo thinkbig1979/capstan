@@ -19,10 +19,16 @@ import { queryKeys } from '@/lib/query-keys'
  *
  * The stack-env keys are matched by predicate rather than by id because any
  * number of stacks may have been visited, and each one cached its own env query.
+ *
+ * The compose file and every git query (diffs of uncommitted changes and of
+ * history) are masked for a locked session too (agent-os-w6wx), so they are
+ * in the set: the git keys are matched whole (['git', id, ...]) because a
+ * diff can be cached under any of them.
  */
 export function invalidateEnvUnlockQueries(queryClient: QueryClient): Promise<void> {
   const isEnvQuery = (query: Query) =>
-    (query.queryKey[0] === 'stack' && query.queryKey[2] === 'env') ||
+    (query.queryKey[0] === 'stack' && (query.queryKey[2] === 'env' || query.queryKey[2] === 'compose')) ||
+    query.queryKey[0] === 'git' ||
     partialMatchKey(query.queryKey, queryKeys.settings.globalEnv())
 
   queryClient.removeQueries({

@@ -35,7 +35,18 @@ interface UseCodeMirrorEditorOptions {
   // Accessible name for the editor's textbox; CodeMirror renders an unnamed
   // contenteditable otherwise (axe aria-input-field-name).
   ariaLabel?: string
+  /**
+   * The document cannot be edited (CodeMirror sets aria-readonly). Switched on
+   * the live view, without a rebuild: the compose editor turns read-only while
+   * it shows masked secrets (agent-os-w6wx).
+   */
+  readOnly?: boolean
   deps?: React.DependencyList
+}
+
+// Editable is CodeMirror's default, so only the read-only side adds anything.
+function readOnlyExtension(readOnly: boolean): Extension {
+  return readOnly ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : []
 }
 
 // CodeMirror 6 creates its scroller with tabindex="-1" (@codemirror/view 6.43.13
@@ -70,8 +81,14 @@ export function useCodeMirrorEditor(
   // The theme the live view was last given, so the reconfigure effect below
   // stays silent on mount and after a rebuild, when the view is already right.
   const appliedDarkRef = useRef(false)
+  // The same pair for readOnly: the view is built with readOnlyRef's value
+  // and reconfigured when the option changes.
+  const readOnlyCompartmentRef = useRef<Compartment | null>(null)
+  const readOnlyRef = useRef(options.readOnly ?? false)
+  const appliedReadOnlyRef = useRef(false)
 
   useEffect(() => {
+    readOnlyRef.current = options.readOnly ?? false
     onSaveRef.current = options.onSave
     onChangeRef.current = options.onChange
     onSelectRef.current = options.onSelect
@@ -123,6 +140,11 @@ export function useCodeMirrorEditor(
     appliedDarkRef.current = isDarkRef.current
     extensions.push(themeCompartment.of(themeExtension(appliedDarkRef.current)))
 
+    const readOnlyCompartment = new Compartment()
+    readOnlyCompartmentRef.current = readOnlyCompartment
+    appliedReadOnlyRef.current = readOnlyRef.current
+    extensions.push(readOnlyCompartment.of(readOnlyExtension(appliedReadOnlyRef.current)))
+
     if (onChangeRef.current || onSelectRef.current) {
       extensions.push(
         EditorView.updateListener.of((update) => {
@@ -159,6 +181,7 @@ export function useCodeMirrorEditor(
       view.destroy()
       viewRef.current = null
       themeCompartmentRef.current = null
+      readOnlyCompartmentRef.current = null
     }
     // The view is rebuilt only when the caller's deps change (a different file,
     // a remounted container); the theme, doc and callbacks reach the live view
@@ -172,6 +195,15 @@ export function useCodeMirrorEditor(
     appliedDarkRef.current = isDark
     view.dispatch({ effects: compartment.reconfigure(themeExtension(isDark)) })
   }, [isDark])
+
+  const readOnly = options.readOnly ?? false
+  useEffect(() => {
+    const view = viewRef.current
+    const compartment = readOnlyCompartmentRef.current
+    if (!view || !compartment || appliedReadOnlyRef.current === readOnly) return
+    appliedReadOnlyRef.current = readOnly
+    view.dispatch({ effects: compartment.reconfigure(readOnlyExtension(readOnly)) })
+  }, [readOnly])
 
   useEffect(() => {
     const view = viewRef.current
