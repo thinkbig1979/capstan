@@ -54,6 +54,11 @@ func (d *DB) GetAutoUpdatePolicy(targetType, targetID string) (*models.AutoUpdat
 	return &p, nil
 }
 
+// UpsertAutoUpdatePolicy writes a whole policy row with INSERT OR REPLACE. It
+// is for tests and seeds only, never for a handler or the auto-update pass:
+// both write a row another writer also owns, and a whole-row write from a
+// stale copy erases that writer's changes (agent-os-71sp, agent-os-nlll).
+// The operator's writer is SetAutoUpdatePolicyEnabled.
 func (d *DB) UpsertAutoUpdatePolicy(policy *models.AutoUpdatePolicy) error {
 	query := `INSERT OR REPLACE INTO auto_update_policies (id, target_type, target_id, enabled, consecutive_failures, paused, created_at, updated_at)
 	          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
@@ -61,6 +66,36 @@ func (d *DB) UpsertAutoUpdatePolicy(policy *models.AutoUpdatePolicy) error {
 		policy.Enabled, policy.ConsecutiveFailures, policy.Paused,
 		policy.CreatedAt, policy.UpdatedAt)
 	return err
+}
+
+// SetAutoUpdatePolicyEnabled applies an operator's enable or disable to the
+// policy for a target, creating it with id newID when there is none, and
+// returns the row as stored. It writes only what the operator owns. The
+// failure count and the pause belong to the auto-update pass, which can write
+// them at any moment, so they are changed only:
+//   - on a disable, which clears both;
+//   - on a resume, which clears both, and only on the row whose id is
+//     resumeID: the caller passes the id of the row it read as paused, or ""
+//     for a plain enable.
+//
+// One statement, so nothing the pass writes between the caller's read and
+// this write is overwritten (agent-os-nlll). On conflict the row keeps its id
+// and created_at.
+func (d *DB) SetAutoUpdatePolicyEnabled(newID, targetType, targetID string, enabled bool, resumeID, now string) (*models.AutoUpdatePolicy, error) {
+	p, err := scanAutoUpdatePolicy(d.db.QueryRow(`INSERT INTO auto_update_policies
+		    (id, target_type, target_id, enabled, consecutive_failures, paused, created_at, updated_at)
+		VALUES (?, ?, ?, ?, 0, FALSE, ?, ?)
+		ON CONFLICT(target_type, target_id) DO UPDATE SET
+		    enabled = excluded.enabled,
+		    updated_at = excluded.updated_at,
+		    paused = CASE WHEN NOT excluded.enabled OR id = ? THEN FALSE ELSE paused END,
+		    consecutive_failures = CASE WHEN NOT excluded.enabled OR id = ? THEN 0 ELSE consecutive_failures END
+		RETURNING `+autoUpdatePolicyColumns,
+		newID, targetType, targetID, enabled, now, now, resumeID, resumeID))
+	if err != nil {
+		return nil, err
+	}
+	return &p, nil
 }
 
 // The two writers below are the auto-update pass's only writes to a policy.
