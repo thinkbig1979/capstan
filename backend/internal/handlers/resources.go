@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"strings"
 	"time"
 
@@ -429,31 +430,70 @@ func (h *ResourcesHandler) inspectSecrets(c *gin.Context, inspect container.Insp
 	return secrets, true
 }
 
-// maskContainerInspect masks, for a locked session, every inspect field that
-// can hold an env value or a secret: Env, Cmd, Entrypoint, Args, Path,
-// labels and the healthcheck, with the masker's value pass (secrets) and its
-// name and flag passes (agent-os-yvlh).
+// maskContainerInspect masks, for a locked session, Path, Args and every
+// string under Config and HostConfig, with the masker's value pass (secrets)
+// and its name and flag passes (agent-os-yvlh).
 func maskContainerInspect(inspect *container.InspectResponse, secrets []string) {
 	if inspect.ContainerJSONBase != nil {
 		inspect.Path, _ = services.MaskSecrets(inspect.Path, "", secrets)
 		inspect.Args = services.MaskArgs(inspect.Args, secrets)
 	}
-	cfg := inspect.Config
-	if cfg == nil {
-		return
+	if inspect.Config != nil {
+		// Env first, by its own rule: an entry with no "=" is masked whole.
+		inspect.Config.Env = maskContainerEnv(inspect.Config.Env, secrets)
+		maskEveryString(reflect.ValueOf(inspect.Config).Elem(), secrets)
 	}
-	cfg.Env = maskContainerEnv(cfg.Env, secrets)
-	cfg.Cmd = services.MaskArgs(cfg.Cmd, secrets)
-	cfg.Entrypoint = services.MaskArgs(cfg.Entrypoint, secrets)
-	if cfg.Healthcheck != nil {
-		cfg.Healthcheck.Test = services.MaskArgs(cfg.Healthcheck.Test, secrets)
+	if inspect.ContainerJSONBase != nil && inspect.HostConfig != nil {
+		maskEveryString(reflect.ValueOf(inspect.HostConfig).Elem(), secrets)
 	}
-	for k, v := range cfg.Labels {
-		if services.IsSensitiveEnvVar(k, v) {
-			cfg.Labels[k] = "***"
-			continue
+}
+
+// maskEveryString masks every string reachable from v, in place, rather than
+// a named list of fields (review r2 N1: LogConfig.Config held a splunk-token
+// and a loki-url with credentials, and the next Docker field would too): a
+// []string as an argv (MaskArgs), a string map entry by its key's name, else
+// by its value, and every other string by MaskSecrets. Unexported fields and
+// interfaces are skipped; Config and HostConfig hold strings in neither.
+func maskEveryString(v reflect.Value, secrets []string) {
+	switch v.Kind() {
+	case reflect.Pointer:
+		if !v.IsNil() {
+			maskEveryString(v.Elem(), secrets)
 		}
-		cfg.Labels[k], _ = services.MaskSecrets(v, "", secrets)
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			if f := v.Field(i); f.CanSet() {
+				maskEveryString(f, secrets)
+			}
+		}
+	case reflect.Slice:
+		if v.Type().Elem().Kind() == reflect.String {
+			args := make([]string, v.Len())
+			for i := range args {
+				args[i] = v.Index(i).String()
+			}
+			for i, a := range services.MaskArgs(args, secrets) {
+				v.Index(i).SetString(a)
+			}
+			return
+		}
+		for i := 0; i < v.Len(); i++ {
+			maskEveryString(v.Index(i), secrets)
+		}
+	case reflect.Map:
+		for _, k := range v.MapKeys() {
+			nv := reflect.New(v.Type().Elem()).Elem()
+			nv.Set(v.MapIndex(k))
+			if k.Kind() == reflect.String && nv.Kind() == reflect.String && services.IsSensitiveEnvVar(k.String(), nv.String()) {
+				nv.SetString("***")
+			} else {
+				maskEveryString(nv, secrets)
+			}
+			v.SetMapIndex(k, nv)
+		}
+	case reflect.String:
+		masked, _ := services.MaskSecrets(v.String(), "", secrets)
+		v.SetString(masked)
 	}
 }
 
