@@ -9,7 +9,7 @@
  * is Ctrl+Z on the editor, run by CodeMirror's own history keymap.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { act, fireEvent, waitFor } from '@testing-library/react'
+import { act, fireEvent, screen, waitFor } from '@testing-library/react'
 import { QueryClient } from '@tanstack/react-query'
 import { EditorView } from '@codemirror/view'
 import { renderWithProviders } from '../../../test/utils'
@@ -147,5 +147,26 @@ describe('ComposeEditor undo across a server replacement (agent-os-w6wx)', () =>
       expect(text).not.toContain('***')
     }
     expect(view.state.doc.toString()).toBe(REAL)
+  })
+
+  // Review r2 R2-D2: the selection carried across the swap, but onSelect was
+  // not called, so the remembered selection stayed "***" and Extract to .env
+  // after unlock could write VAR=***. Every swap collapses the selection.
+  it('a selection made in the masked text is gone after unlock: Extract has nothing to take', async () => {
+    disk = { content: MASKED, maskedValues: 1 }
+    const { queryClient, container } = renderEditor()
+    await waitFor(() => expect(liveView(container).state.doc.toString()).toBe(MASKED))
+    const at = MASKED.indexOf('***')
+    act(() => {
+      liveView(container).dispatch({ selection: { anchor: at, head: at + 3 } })
+    })
+
+    await serve(queryClient, { content: REAL, maskedValues: 0 }) // unlock
+    const view = liveView(container)
+    await waitFor(() => expect(view.state.doc.toString()).toBe(REAL))
+    await waitFor(() => expect(view.state.readOnly).toBe(false))
+
+    expect(screen.getByRole('button', { name: /Extract to \.env/ })).toBeDisabled()
+    expect(view.state.selection.main.empty).toBe(true)
   })
 })

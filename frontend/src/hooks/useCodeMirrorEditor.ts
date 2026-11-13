@@ -227,17 +227,20 @@ export function useCodeMirrorEditor(
   // external change) replaces the view's state rather than editing it, so
   // the replacement is not an undo step: undo after an unlock must never
   // bring masked "***" text back into an editable editor (agent-os-w6wx).
-  // The cursor (clamped) and the scroll position carry over.
+  // The cursor (clamped) and the scroll position carry over. A selection
+  // does not: it was made in the old text (possibly masked "***"), so it is
+  // collapsed and onSelect told, or the caller keeps acting on stale text
+  // (review r2 R2-D2: Extract to .env after unlock wrote VAR=***).
   useEffect(() => {
     const view = viewRef.current
     const makeState = makeStateRef.current
     if (!view || !makeState) return
     if (options.doc === view.state.doc.toString()) return
-    const { anchor, head } = view.state.selection.main
-    const clamp = (pos: number) => Math.min(pos, options.doc.length)
+    const cursor = Math.min(view.state.selection.main.head, options.doc.length)
     const scrollTop = view.scrollDOM.scrollTop
-    view.setState(makeState(options.doc, { anchor: clamp(anchor), head: clamp(head) }))
+    view.setState(makeState(options.doc, { anchor: cursor, head: cursor }))
     view.scrollDOM.scrollTop = scrollTop
+    onSelectRef.current?.('')
   }, [options.doc, options.docKey])
 
   return { viewRef, isDark }
