@@ -273,9 +273,15 @@ func (h *StacksHandler) Create(c *gin.Context) {
 		return
 	}
 
-	if err := h.scanner.ScanDirectoryWithRoot(stackDir, targetDir); err != nil {
-		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "SCANNER_ERROR", "Failed to scan new stack directory", err))
-		return
+	// The folder, its files and the row exist from here on, so a failed scan
+	// is a created stack, not a failed create (agent-os-jsp3). It is not
+	// deployed: the row lacks what only the scan fills in. The error is
+	// logged and not sent: a scan loads the compose file, and compose-go
+	// errors can quote env values.
+	scanErr := h.scanner.ScanDirectoryWithRoot(stackDir, targetDir)
+	if scanErr != nil {
+		slog.Error("scan of a newly created stack failed; the stack exists but was not deployed",
+			"id", stackID, "directory", stackDir, "error", scanErr)
 	}
 
 	// Re-read what the scan just persisted, and respond with THAT.
@@ -319,6 +325,19 @@ func (h *StacksHandler) Create(c *gin.Context) {
 	}
 
 	h.logAction(c, stackID, "create", fmt.Sprintf("Created new stack: %s", req.Name))
+
+	if scanErr != nil {
+		renderResultWithStatus(c, http.StatusMultiStatus, truth.ActionResult{
+			Outcome: truth.OutcomePartial,
+			Reason:  "stack created but not deployed: scanning its folder failed. Rescan, then start it",
+			Details: map[string]any{
+				"stack":       stack,
+				"lintResults": lintResults,
+				"deployed":    false,
+			},
+		})
+		return
+	}
 
 	// req.Deploy is false: stack created successfully, no deploy requested.
 	//
