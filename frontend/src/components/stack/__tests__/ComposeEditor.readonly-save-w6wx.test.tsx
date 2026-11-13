@@ -67,7 +67,6 @@ vi.mock('sonner', () => ({ toast: toastMocks }))
 
 import { ComposeEditor } from '../ComposeEditor'
 
-const NOTICE = 'This file changed on disk. Reload to see the new version; saving now overwrites it.'
 const REAL = 'services:\n  db:\n    environment:\n      POSTGRES_PASSWORD: hunter2\n'
 const MASKED = 'services:\n  db:\n    environment:\n      POSTGRES_PASSWORD: ***\n'
 const EDITED = 'services:\n  db:\n    image: postgres:17\n    environment:\n      POSTGRES_PASSWORD: hunter2\n'
@@ -78,12 +77,6 @@ function renderEditor() {
   })
   renderWithProviders(<ComposeEditor stackId="s1" />, { queryClient })
   return queryClient
-}
-
-async function refetch(queryClient: QueryClient) {
-  const calls = mockGetCompose.mock.calls.length
-  await act(() => queryClient.invalidateQueries({ queryKey: ['stack', 's1', 'compose'] }))
-  await waitFor(() => expect(mockGetCompose.mock.calls.length).toBeGreaterThan(calls))
 }
 
 beforeEach(() => {
