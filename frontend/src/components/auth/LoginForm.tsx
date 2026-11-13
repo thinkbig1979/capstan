@@ -1,42 +1,64 @@
-import { useState } from 'react'
-import { useForm } from 'react-hook-form'
-import { zodResolver } from '@hookform/resolvers/zod'
-import { z } from 'zod'
+import { useState, type ChangeEvent, type FormEvent } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Loader2, Eye, EyeOff } from 'lucide-react'
 
-const usernameSchema = z.string().min(3, 'Username must be at least 3 characters').max(50)
+export interface LoginFormData {
+  username: string
+  password: string
+}
 
-const loginSchema = z.object({
-  username: usernameSchema,
-  password: z.string().min(8, 'Password must be at least 8 characters'),
-})
+interface FormValues extends LoginFormData {
+  confirmPassword: string
+}
 
-// Mirrors the server rule (backend ValidatePassword) so Setup gives immediate
-// feedback instead of a late server rejection. The server additionally rejects
-// common passwords; that blocklist stays server-side.
-const setupSchema = z
-  .object({
-    username: usernameSchema,
-    password: z
-      .string()
-      .min(8, 'Password must be at least 8 characters long')
-      .max(128, 'Password must not exceed 128 characters')
-      .regex(/\p{Lu}/u, 'Password must contain at least one uppercase letter')
-      .regex(/\p{Ll}/u, 'Password must contain at least one lowercase letter')
-      .regex(/\p{N}/u, 'Password must contain at least one number')
-      .regex(/[\p{P}\p{S}]/u, 'Password must contain at least one special character'),
-    confirmPassword: z.string().min(1, 'Please confirm your password'),
-  })
-  .refine((d) => d.password === d.confirmPassword, {
-    message: 'Passwords do not match',
-    path: ['confirmPassword'],
-  })
+type FieldErrors = Partial<Record<keyof FormValues, string>>
 
-export type LoginFormData = z.infer<typeof loginSchema>
-type FormValues = LoginFormData & { confirmPassword?: string }
+// bcrypt's input limit, in UTF-8 bytes. The server (ValidatePassword) refuses
+// anything longer, so Setup says so before the request (agent-os-orxo).
+const MAX_PASSWORD_BYTES = 72
+const utf8 = new TextEncoder()
+
+function usernameError(username: string): string | undefined {
+  if (username.length < 3) return 'Username must be at least 3 characters'
+  if (username.length > 50) return 'Username must not exceed 50 characters'
+  return undefined
+}
+
+function validateLogin(values: FormValues): FieldErrors {
+  return {
+    username: usernameError(values.username),
+    password: values.password.length < 8 ? 'Password must be at least 8 characters' : undefined,
+  }
+}
+
+// Mirrors the server rule (backend ValidatePassword), in the same order, so
+// Setup gives immediate feedback instead of a late server rejection. The
+// server additionally rejects common passwords; that blocklist stays
+// server-side.
+function setupPasswordError(password: string): string | undefined {
+  if (password.length < 8) return 'Password must be at least 8 characters long'
+  if (utf8.encode(password).length > MAX_PASSWORD_BYTES) {
+    return 'Password must not exceed 72 bytes (accented and non-Latin characters count as 2-4 bytes each)'
+  }
+  if (!/\p{Lu}/u.test(password)) return 'Password must contain at least one uppercase letter'
+  if (!/\p{Ll}/u.test(password)) return 'Password must contain at least one lowercase letter'
+  if (!/\p{N}/u.test(password)) return 'Password must contain at least one number'
+  if (!/[\p{P}\p{S}]/u.test(password)) return 'Password must contain at least one special character'
+  return undefined
+}
+
+function validateSetup(values: FormValues): FieldErrors {
+  let confirmPassword: string | undefined
+  if (values.confirmPassword === '') confirmPassword = 'Please confirm your password'
+  else if (values.password !== values.confirmPassword) confirmPassword = 'Passwords do not match'
+  return {
+    username: usernameError(values.username),
+    password: setupPasswordError(values.password),
+    confirmPassword,
+  }
+}
 
 interface LoginFormProps {
   onSubmit: (data: LoginFormData) => Promise<void>
@@ -56,30 +78,40 @@ export function LoginForm({
   passwordHint = 'Minimum 8 characters',
   enforceComplexity = false,
 }: LoginFormProps) {
-  const {
-    register,
-    handleSubmit,
-    formState: { errors },
-  } = useForm<FormValues>({
-    resolver: zodResolver(enforceComplexity ? setupSchema : loginSchema),
-  })
-
+  const [values, setValues] = useState<FormValues>({ username: '', password: '', confirmPassword: '' })
+  // Errors appear on the first submit and then follow every keystroke.
+  const [submitted, setSubmitted] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
+
+  const validate = enforceComplexity ? validateSetup : validateLogin
+  const errors: FieldErrors = submitted ? validate(values) : {}
   // Login reuses an existing credential; Setup creates a new one.
   const passwordAutoComplete = enforceComplexity ? 'new-password' : 'current-password'
 
+  const setField = (field: keyof FormValues) => (e: ChangeEvent<HTMLInputElement>) =>
+    setValues((v) => ({ ...v, [field]: e.target.value }))
+
+  const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+    setSubmitted(true)
+    if (Object.values(validate(values)).some(Boolean)) return
+    void onSubmit({ username: values.username, password: values.password })
+  }
+
   return (
-    <form onSubmit={handleSubmit((data) => onSubmit(data))} className="space-y-4">
+    <form onSubmit={handleSubmit} className="space-y-4">
       <div className="space-y-2">
         <Label htmlFor="username">Username</Label>
         <Input
           id="username"
+          name="username"
           type="text"
           autoComplete="username"
           autoFocus
-          {...register('username')}
+          value={values.username}
+          onChange={setField('username')}
         />
-        {errors.username && <p className="text-sm text-destructive">{errors.username.message}</p>}
+        {errors.username && <p className="text-sm text-destructive">{errors.username}</p>}
       </div>
 
       <div className="space-y-2">
@@ -87,10 +119,12 @@ export function LoginForm({
         <div className="flex items-center gap-2">
           <Input
             id="password"
+            name="password"
             type={showPassword ? 'text' : 'password'}
             autoComplete={passwordAutoComplete}
             className="flex-1"
-            {...register('password')}
+            value={values.password}
+            onChange={setField('password')}
           />
           <Button
             type="button"
@@ -104,7 +138,7 @@ export function LoginForm({
           </Button>
         </div>
         <p className="text-sm text-muted-foreground">{passwordHint}</p>
-        {errors.password && <p className="text-sm text-destructive">{errors.password.message}</p>}
+        {errors.password && <p className="text-sm text-destructive">{errors.password}</p>}
       </div>
 
       {enforceComplexity && (
@@ -112,13 +146,13 @@ export function LoginForm({
           <Label htmlFor="confirmPassword">Confirm Password</Label>
           <Input
             id="confirmPassword"
+            name="confirmPassword"
             type={showPassword ? 'text' : 'password'}
             autoComplete="new-password"
-            {...register('confirmPassword')}
+            value={values.confirmPassword}
+            onChange={setField('confirmPassword')}
           />
-          {errors.confirmPassword && (
-            <p className="text-sm text-destructive">{errors.confirmPassword.message}</p>
-          )}
+          {errors.confirmPassword && <p className="text-sm text-destructive">{errors.confirmPassword}</p>}
         </div>
       )}
 

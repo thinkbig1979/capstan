@@ -100,6 +100,56 @@ describe('LoginForm', () => {
       expect(onSubmit).not.toHaveBeenCalled()
     })
 
+    // bcrypt refuses passwords over 72 bytes, and the server's policy now says
+    // so (agent-os-orxo). The form mirrors it in bytes, not characters.
+    const TOO_LONG = 'Password must not exceed 72 bytes (accented and non-Latin characters count as 2-4 bytes each)'
+
+    it('blocks a password over 72 bytes when enforceComplexity is set', async () => {
+      const user = userEvent.setup()
+      const onSubmit = vi.fn()
+      render(<LoginForm onSubmit={onSubmit} buttonText="Create Account" enforceComplexity />)
+
+      const password = 'Aa1!' + 'x'.repeat(69)
+      await user.type(screen.getByLabelText(/username/i), 'admin')
+      await user.type(screen.getByLabelText('Password'), password)
+      await user.type(screen.getByLabelText(/confirm password/i), password)
+      await user.click(screen.getByRole('button', { name: /create account/i }))
+
+      expect(await screen.findByText(TOO_LONG)).toBeInTheDocument()
+      expect(onSubmit).not.toHaveBeenCalled()
+    })
+
+    it('counts the 72-byte limit in bytes, not characters', async () => {
+      const user = userEvent.setup()
+      const onSubmit = vi.fn()
+      render(<LoginForm onSubmit={onSubmit} buttonText="Create Account" enforceComplexity />)
+
+      // 29 characters, 79 bytes in UTF-8.
+      const password = 'Aa1!' + '€'.repeat(25)
+      await user.type(screen.getByLabelText(/username/i), 'admin')
+      await user.type(screen.getByLabelText('Password'), password)
+      await user.type(screen.getByLabelText(/confirm password/i), password)
+      await user.click(screen.getByRole('button', { name: /create account/i }))
+
+      expect(await screen.findByText(TOO_LONG)).toBeInTheDocument()
+      expect(onSubmit).not.toHaveBeenCalled()
+    })
+
+    it('accepts a password of exactly 72 bytes', async () => {
+      const user = userEvent.setup()
+      const onSubmit = vi.fn().mockResolvedValue(undefined)
+      render(<LoginForm onSubmit={onSubmit} buttonText="Create Account" enforceComplexity />)
+
+      const password = 'Aa1!' + 'x'.repeat(68)
+      await user.type(screen.getByLabelText(/username/i), 'admin')
+      await user.type(screen.getByLabelText('Password'), password)
+      await user.type(screen.getByLabelText(/confirm password/i), password)
+      await user.click(screen.getByRole('button', { name: /create account/i }))
+
+      await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
+      expect(onSubmit.mock.calls[0][0]).toMatchObject({ username: 'admin', password })
+    })
+
     it('does not over-enforce complexity on the login form', async () => {
       const user = userEvent.setup()
       const onSubmit = vi.fn().mockResolvedValue(undefined)
