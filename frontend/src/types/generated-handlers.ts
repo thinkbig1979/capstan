@@ -97,10 +97,22 @@ export interface BuildCacheEntry {
  * ComposeResponse is the wire shape of GET /stacks/:id/compose (ComposeHandler.Get).
  */
 export interface ComposeResponse {
+  /**
+   * Content is masked (services.MaskSecrets) when Locked.
+   */
   content: string;
   filename: string;
   size: number /* int64 */;
   lastModified: string;
+  /**
+   * Locked is true for a session that has not unlocked env values.
+   */
+  locked: boolean;
+  /**
+   * MaskedValues is how many values Content has masked. Above zero, the
+   * editor is read-only and a save is refused until unlock (agent-os-w6wx).
+   */
+  maskedValues: number /* int */;
 }
 /**
  * ComposeSaveResponse is the wire shape of PUT /stacks/:id/compose (ComposeHandler.Put).

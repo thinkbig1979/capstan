@@ -35,7 +35,24 @@ interface UseCodeMirrorEditorOptions {
   // Accessible name for the editor's textbox; CodeMirror renders an unnamed
   // contenteditable otherwise (axe aria-input-field-name).
   ariaLabel?: string
+  /**
+   * The document cannot be edited (CodeMirror sets aria-readonly). Switched on
+   * the live view, without a rebuild: the compose editor turns read-only while
+   * it shows masked secrets (agent-os-w6wx).
+   */
+  readOnly?: boolean
+  /**
+   * Changes with every load the caller pushes into the view, so a load whose
+   * text equals the previous load still replaces a view that has moved on
+   * (load A, edit and save A', A comes back from disk).
+   */
+  docKey?: unknown
   deps?: React.DependencyList
+}
+
+// Editable is CodeMirror's default, so only the read-only side adds anything.
+function readOnlyExtension(readOnly: boolean): Extension {
+  return readOnly ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : []
 }
 
 // CodeMirror 6 creates its scroller with tabindex="-1" (@codemirror/view 6.43.13
@@ -70,8 +87,18 @@ export function useCodeMirrorEditor(
   // The theme the live view was last given, so the reconfigure effect below
   // stays silent on mount and after a rebuild, when the view is already right.
   const appliedDarkRef = useRef(false)
+  // The same pair for readOnly: the view is built with readOnlyRef's value
+  // and reconfigured when the option changes.
+  const readOnlyCompartmentRef = useRef<Compartment | null>(null)
+  const readOnlyRef = useRef(options.readOnly ?? false)
+  const appliedReadOnlyRef = useRef(false)
+  // Builds a state for the live view with the given doc and selection: the
+  // view's extensions, its compartments as currently applied, and a fresh
+  // undo history.
+  const makeStateRef = useRef<((doc: string, selection?: { anchor: number; head: number }) => EditorState) | null>(null)
 
   useEffect(() => {
+    readOnlyRef.current = options.readOnly ?? false
     onSaveRef.current = options.onSave
     onChangeRef.current = options.onChange
     onSelectRef.current = options.onSelect
@@ -121,7 +148,10 @@ export function useCodeMirrorEditor(
     ]
 
     appliedDarkRef.current = isDarkRef.current
-    extensions.push(themeCompartment.of(themeExtension(appliedDarkRef.current)))
+
+    const readOnlyCompartment = new Compartment()
+    readOnlyCompartmentRef.current = readOnlyCompartment
+    appliedReadOnlyRef.current = readOnlyRef.current
 
     if (onChangeRef.current || onSelectRef.current) {
       extensions.push(
@@ -143,13 +173,22 @@ export function useCodeMirrorEditor(
       )
     }
 
-    const state = EditorState.create({
-      doc: options.doc,
-      extensions,
-    })
+    // The compartments are given what is applied now, so a state built
+    // after a theme or readOnly change keeps it.
+    const makeState = (doc: string, selection?: { anchor: number; head: number }) =>
+      EditorState.create({
+        doc,
+        selection,
+        extensions: [
+          ...extensions,
+          themeCompartment.of(themeExtension(appliedDarkRef.current)),
+          readOnlyCompartment.of(readOnlyExtension(appliedReadOnlyRef.current)),
+        ],
+      })
+    makeStateRef.current = makeState
 
     const view = new EditorView({
-      state,
+      state: makeState(options.doc),
       parent: containerRef.current,
     })
 
@@ -159,6 +198,8 @@ export function useCodeMirrorEditor(
       view.destroy()
       viewRef.current = null
       themeCompartmentRef.current = null
+      readOnlyCompartmentRef.current = null
+      makeStateRef.current = null
     }
     // The view is rebuilt only when the caller's deps change (a different file,
     // a remounted container); the theme, doc and callbacks reach the live view
@@ -173,16 +214,34 @@ export function useCodeMirrorEditor(
     view.dispatch({ effects: compartment.reconfigure(themeExtension(isDark)) })
   }, [isDark])
 
+  const readOnly = options.readOnly ?? false
   useEffect(() => {
     const view = viewRef.current
-    if (!view) return
-    const currentDoc = view.state.doc.toString()
-    if (options.doc !== currentDoc) {
-      view.dispatch({
-        changes: { from: 0, to: currentDoc.length, insert: options.doc },
-      })
-    }
-  }, [options.doc])
+    const compartment = readOnlyCompartmentRef.current
+    if (!view || !compartment || appliedReadOnlyRef.current === readOnly) return
+    appliedReadOnlyRef.current = readOnly
+    view.dispatch({ effects: compartment.reconfigure(readOnlyExtension(readOnly)) })
+  }, [readOnly])
+
+  // A doc pushed in from outside (a load from the server, a re-lock, an
+  // external change) replaces the view's state rather than editing it, so
+  // the replacement is not an undo step: undo after an unlock must never
+  // bring masked "***" text back into an editable editor (agent-os-w6wx).
+  // The cursor (clamped) and the scroll position carry over. A selection
+  // does not: it was made in the old text (possibly masked "***"), so it is
+  // collapsed and onSelect told, or the caller keeps acting on stale text
+  // (review r2 R2-D2: Extract to .env after unlock wrote VAR=***).
+  useEffect(() => {
+    const view = viewRef.current
+    const makeState = makeStateRef.current
+    if (!view || !makeState) return
+    if (options.doc === view.state.doc.toString()) return
+    const cursor = Math.min(view.state.selection.main.head, options.doc.length)
+    const scrollTop = view.scrollDOM.scrollTop
+    view.setState(makeState(options.doc, { anchor: cursor, head: cursor }))
+    view.scrollDOM.scrollTop = scrollTop
+    onSelectRef.current?.('')
+  }, [options.doc, options.docKey])
 
   return { viewRef, isDark }
 }

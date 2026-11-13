@@ -242,6 +242,31 @@ describe('useCreateStack — partial outcome (created but not deployed)', () => 
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['directories'] })
   })
 
+  // agent-os-jsp3: a failed scan after the create is created-with-warning
+  // (207 partial, stack_crud.go), never "Create failed".
+  it('shows the created-not-deployed warning once when the post-create scan failed', async () => {
+    const stack = { id: 'abc~test:default', status: 'stopped' }
+    const reason = 'stack created but not deployed: scanning its folder failed. Rescan, then start it'
+    mockCreate.mockRejectedValue({
+      outcome: 'partial',
+      reason,
+      details: { stack, lintResults: [{ level: 'warning', line: 1, message: 'm', rule: 'r' }], deployed: false },
+    })
+    const { wrapper, queryClient } = createWrapper()
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries')
+    const { result } = renderHook(() => useCreateStack(), { wrapper })
+
+    result.current.mutate(SAMPLE_INPUT)
+
+    await waitFor(() => expect(result.current.isError).toBe(true))
+
+    expect(mockToastWarning).toHaveBeenCalledTimes(1)
+    expect(mockToastWarning).toHaveBeenCalledWith(reason)
+    expect(mockToastError).not.toHaveBeenCalled()
+    expect(mockToastSuccess).not.toHaveBeenCalled()
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['stacks'] })
+  })
+
   it('does NOT invalidate stacks on genuine create failure (no stack in error body)', async () => {
     // A genuine failure has no stack field; the directory was not created.
     mockCreate.mockRejectedValue({ error: 'Stack directory already exists' })

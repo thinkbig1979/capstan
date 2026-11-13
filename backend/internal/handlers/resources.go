@@ -6,6 +6,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"reflect"
+	"strings"
 	"time"
 
 	"github.com/docker/docker/api/types/build"
@@ -371,6 +373,18 @@ func (h *ResourcesHandler) inspectContainer(c *gin.Context) {
 		return
 	}
 
+	// A session that has not unlocked env values must not read them here
+	// either: Config.Env holds every value the container started with,
+	// interpolated .env secrets included, and Cmd, Args, labels and the
+	// healthcheck can hold them too (agent-os-yvlh).
+	if !envUnlocked(c) {
+		secrets, ok := h.inspectSecrets(c, inspect)
+		if !ok {
+			return
+		}
+		maskContainerInspect(&inspect, secrets)
+	}
+
 	formatted, err := json.MarshalIndent(inspect, "", "  ")
 	if err != nil {
 		slog.Error("Failed to format inspect output", "id", id, "error", err)
@@ -379,6 +393,160 @@ func (h *ResourcesHandler) inspectContainer(c *gin.Context) {
 	}
 
 	c.Data(http.StatusOK, "application/json", formatted)
+}
+
+// inspectSecrets are the secret values of the stack that owns the inspected
+// container, found by its compose project label as lockContainerStack finds
+// it. A container no stack here manages has none: the name and flag passes
+// still apply. When the owner cannot be told (two stacks share the project,
+// or the stacks table cannot be read) the response is written and ok is
+// false: masking with the wrong set, or none, would fail open.
+func (h *ResourcesHandler) inspectSecrets(c *gin.Context, inspect container.InspectResponse) ([]string, bool) {
+	projectName := ""
+	if inspect.Config != nil {
+		projectName = inspect.Config.Labels["com.docker.compose.project"]
+	}
+	if projectName == "" {
+		return nil, true
+	}
+	stack, err := h.db.GetStackByProjectName(projectName)
+	switch {
+	case errors.Is(err, errdefs.ErrNotFound):
+		return nil, true
+	case errors.Is(err, errdefs.ErrAmbiguous):
+		refuseAmbiguousStack(c, err)
+		return nil, false
+	case err != nil:
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR",
+			"Failed to look up the stack that owns this container", err))
+		return nil, false
+	}
+	secrets, err := h.docker.ComposeSecretValues(*stack)
+	if err != nil {
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR",
+			"Failed to read the secrets of the stack that owns this container", err))
+		return nil, false
+	}
+	return secrets, true
+}
+
+// maskContainerInspect masks, for a locked session, every string the stack's
+// compose file or its running service can put in the inspect document, with
+// the masker's value pass (secrets) and its name and flag passes
+// (agent-os-yvlh): Path, Args, Name, the security labels, State.Error, the
+// healthcheck output, and every string value under Config, HostConfig,
+// Mounts and NetworkSettings (review r3: Mounts[].Source served the bind
+// path HostConfig.Binds starred). Left as Docker sent them, because the
+// daemon generates them: ID, Created, Image (a digest), the
+// resolv/hostname/hosts/log paths, Driver, Platform, ExecIDs, GraphDriver,
+// the sizes, State's status and timestamps, and ImageManifestDescriptor.
+func maskContainerInspect(inspect *container.InspectResponse, secrets []string) {
+	mask := func(s *string) { *s, _ = services.MaskSecrets(*s, "", secrets) }
+	if inspect.ContainerJSONBase != nil {
+		mask(&inspect.Path)
+		inspect.Args = services.MaskArgs(inspect.Args, secrets)
+		for _, s := range []*string{&inspect.Name, &inspect.AppArmorProfile, &inspect.MountLabel, &inspect.ProcessLabel} {
+			mask(s)
+		}
+		if inspect.State != nil {
+			mask(&inspect.State.Error)
+			if inspect.State.Health != nil {
+				for _, r := range inspect.State.Health.Log {
+					if r != nil {
+						mask(&r.Output)
+					}
+				}
+			}
+		}
+	}
+	if inspect.Config != nil {
+		// Env first, by its own rule: an entry with no "=" is masked whole.
+		inspect.Config.Env = maskContainerEnv(inspect.Config.Env, secrets)
+		maskEveryString(reflect.ValueOf(inspect.Config).Elem(), secrets)
+	}
+	if inspect.ContainerJSONBase != nil && inspect.HostConfig != nil {
+		maskEveryString(reflect.ValueOf(inspect.HostConfig).Elem(), secrets)
+	}
+	maskEveryString(reflect.ValueOf(inspect.Mounts), secrets)
+	if inspect.NetworkSettings != nil {
+		maskEveryString(reflect.ValueOf(inspect.NetworkSettings).Elem(), secrets)
+	}
+}
+
+// maskEveryString masks every string VALUE reachable from v, in place,
+// rather than a named list of fields (review r2 N1: LogConfig.Config held a
+// splunk-token and a loki-url with credentials, and the next Docker field
+// would too): a []string as an argv (MaskArgs), a string map entry by its
+// key's name, else by its value, and every other string by MaskSecrets. Map
+// KEYS are not masked (they are option names, port specs and container
+// paths, and renaming a key could merge two entries). Unexported fields and
+// interfaces are skipped; the inspect types hold strings in neither.
+func maskEveryString(v reflect.Value, secrets []string) {
+	switch v.Kind() {
+	case reflect.Pointer:
+		if !v.IsNil() {
+			maskEveryString(v.Elem(), secrets)
+		}
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			if f := v.Field(i); f.CanSet() {
+				maskEveryString(f, secrets)
+			}
+		}
+	case reflect.Slice:
+		if v.Type().Elem().Kind() == reflect.String {
+			args := make([]string, v.Len())
+			for i := range args {
+				args[i] = v.Index(i).String()
+			}
+			for i, a := range services.MaskArgs(args, secrets) {
+				v.Index(i).SetString(a)
+			}
+			return
+		}
+		for i := 0; i < v.Len(); i++ {
+			maskEveryString(v.Index(i), secrets)
+		}
+	case reflect.Map:
+		for _, k := range v.MapKeys() {
+			nv := reflect.New(v.Type().Elem()).Elem()
+			nv.Set(v.MapIndex(k))
+			if k.Kind() == reflect.String && nv.Kind() == reflect.String && services.IsSensitiveEnvVar(k.String(), nv.String()) {
+				nv.SetString("***")
+			} else {
+				maskEveryString(nv, secrets)
+			}
+			v.SetMapIndex(k, nv)
+		}
+	case reflect.String:
+		masked, _ := services.MaskSecrets(v.String(), "", secrets)
+		v.SetString(masked)
+	}
+}
+
+// maskContainerEnv masks a container's KEY=value entries the way the locked
+// env views do: the value of every entry IsSensitiveEnvVar matches becomes
+// "***", and every other entry goes through MaskSecrets (the stack's secret
+// values verbatim, KEY=value and flag tokens, URL credentials). An entry with
+// no "=" cannot be classified and is masked whole: fail closed.
+func maskContainerEnv(env, secrets []string) []string {
+	if env == nil {
+		return nil
+	}
+	out := make([]string, len(env))
+	for i, e := range env {
+		k, v, ok := strings.Cut(e, "=")
+		switch {
+		case !ok:
+			out[i] = "***"
+		case services.IsSensitiveEnvVar(k, v):
+			out[i] = k + "=***"
+		default:
+			masked, _ := services.MaskSecrets(v, "", secrets)
+			out[i] = k + "=" + masked
+		}
+	}
+	return out
 }
 
 func (h *ResourcesHandler) listVolumes(c *gin.Context) {

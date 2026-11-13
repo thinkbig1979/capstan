@@ -8,7 +8,8 @@
  * useCodeMirrorEditor is mocked, as in the other ComposeEditor tests. The mock
  * keeps one mutable view text and copies a changed `doc` into it, the way the
  * real hook's doc effect does (hooks/useCodeMirrorEditor.ts, the
- * `[options.doc]` effect). `view.text` is therefore what the user sees.
+ * `[options.doc, options.docKey]` effect). `view.text` is therefore what the
+ * user sees.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { act, screen, waitFor, fireEvent } from '@testing-library/react'
@@ -24,7 +25,7 @@ const mockDispatch = vi.fn((tr: { changes: { from: number; to: number; insert: s
 let capturedOnChange: ((content: string) => void) | undefined
 
 vi.mock('@/hooks/useCodeMirrorEditor', () => ({
-  useCodeMirrorEditor: vi.fn((_ref: unknown, opts: { doc: string; onChange?: (c: string) => void }) => {
+  useCodeMirrorEditor: vi.fn((_ref: unknown, opts: { doc: string; docKey?: unknown; onChange?: (c: string) => void }) => {
     const viewRef = useRef<unknown>(null)
     viewRef.current = {
       state: { doc: { toString: () => view.text }, selection: { main: { from: 0, to: 0 } } },
@@ -32,9 +33,11 @@ vi.mock('@/hooks/useCodeMirrorEditor', () => ({
       destroy: vi.fn(),
     }
     capturedOnChange = opts.onChange
+    // As the real hook: a new doc, or a new load (docKey) of the same text,
+    // replaces a view that has moved on.
     useEffect(() => {
       if (opts.doc !== view.text) view.text = opts.doc
-    }, [opts.doc])
+    }, [opts.doc, opts.docKey])
     return { viewRef, isDark: false }
   }),
 }))
@@ -255,7 +258,7 @@ describe('ComposeEditor after a git pull (agent-os-umig)', () => {
     // reached the editor (observed: green at base). Wait for it to land.
     const key = ['stack', 's1', 'compose']
     await waitFor(() => expect(queryClient.getQueryState(key)?.fetchStatus).toBe('idle'))
-    expect(queryClient.getQueryData(key)).toBe(EDITED)
+    expect(queryClient.getQueryData(key)).toEqual({ text: EDITED, masked: false })
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 20))
     })
@@ -288,7 +291,7 @@ describe('ComposeEditor after a git pull (agent-os-umig)', () => {
     await act(async () => release())
     const key = ['stack', 's1', 'compose']
     await waitFor(() => expect(queryClient.getQueryState(key)?.fetchStatus).toBe('idle'))
-    expect(queryClient.getQueryData(key)).toBe(EDITED)
+    expect(queryClient.getQueryData(key)).toEqual({ text: EDITED, masked: false })
 
     // Back to the saved text: clean again, view shows EDITED.
     type(EDITED)
@@ -296,7 +299,7 @@ describe('ComposeEditor after a git pull (agent-os-umig)', () => {
 
     await pullTo(ORIGINAL)
 
-    await waitFor(() => expect(queryClient.getQueryData(key)).toBe(ORIGINAL))
+    await waitFor(() => expect(queryClient.getQueryData(key)).toEqual({ text: ORIGINAL, masked: false }))
     await waitFor(() => expect(view.text).toBe(ORIGINAL))
     expect(screen.queryByText(NOTICE)).not.toBeInTheDocument()
   })

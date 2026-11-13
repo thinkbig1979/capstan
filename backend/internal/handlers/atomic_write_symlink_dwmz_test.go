@@ -98,7 +98,7 @@ func TestWriteFileAtomic_RefusesUnwritableLinkShapes_dwmz(t *testing.T) {
 				require.NoError(t, os.Symlink("other.yaml", filepath.Join(dir, "compose.yaml")))
 				require.NoError(t, os.Symlink("compose.yaml", filepath.Join(dir, "other.yaml")))
 			},
-			wantErr: "compose.yaml",
+			wantErr: "cannot be followed",
 		},
 		"to a directory": {
 			setup: func(t *testing.T, dir string) {

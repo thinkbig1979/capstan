@@ -45,7 +45,7 @@ function extractLintResults(data: CreateStackResult): LintResult[] | undefined {
  */
 function isCreatedButNotDeployed(
   data: unknown,
-): data is { outcome: 'partial'; reason: string; details: { stack: Stack; lintResults?: LintResult[] } } {
+): data is { outcome: 'partial'; reason: string; details: { stack: Stack } } {
   if (typeof data !== 'object' || data === null) return false
   const d = data as Record<string, unknown>
   if (d.outcome !== 'partial') return false
@@ -70,11 +70,10 @@ export function useCreateStack() {
         // The stack exists in the DB — the UI must show it.
         toast.warning(data.reason || 'Stack created but not deployed')
       } else if (data.outcome === 'success') {
-        // Preserve lint-result toast differentiation.
+        // A 2xx never carries error-level lint: the server refuses those with
+        // a 422 before it creates anything (agent-os-jsp3).
         const lintResults = extractLintResults(data)
-        if (lintResults?.some((r) => r.level === 'error')) {
-          toastInvalid('Stack created but has lint errors')
-        } else if (lintResults?.some((r) => r.level === 'warning')) {
+        if (lintResults?.some((r) => r.level === 'warning')) {
           toast.warning('Stack created but has lint warnings')
         } else {
           toast.success('Stack created successfully')
@@ -93,12 +92,7 @@ export function useCreateStack() {
       if (isCreatedButNotDeployed(error)) {
         queryClient.invalidateQueries({ queryKey: queryKeys.directories() })
         queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
-        const lintResults = error.details.lintResults
-        if (lintResults?.some((r) => r.level === 'error')) {
-          toast.warning(`Stack created but not deployed — lint errors present: ${error.reason}`)
-        } else {
-          toast.warning(error.reason || 'Stack created but not deployed')
-        }
+        toast.warning(error.reason || 'Stack created but not deployed')
         return
       }
 

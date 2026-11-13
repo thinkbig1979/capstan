@@ -373,12 +373,7 @@ func (h *SettingsHandler) UpdateGlobalEnv(c *gin.Context) {
 
 	if err := writeEnvFileAtomic(globalEnvPath, content); err != nil {
 		slog.Error("Failed to write global environment file", "error", err)
-		handleError(c, models.NewAppErrorWithCause(
-			http.StatusInternalServerError,
-			"INTERNAL_ERROR",
-			"Failed to write global environment file",
-			err,
-		))
+		handleError(c, writeFailureError(err, "INTERNAL_ERROR", "Failed to write global environment file"))
 		return
 	}
 

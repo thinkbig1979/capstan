@@ -433,7 +433,7 @@ func (h *EnvHandler) Put(c *gin.Context) {
 	}
 
 	if err := writeEnvFileAtomic(envPath, content); err != nil {
-		renderResult(c, truth.Failed("failed to write env file", err))
+		renderWriteFailure(c, err, "failed to write env file", "")
 		return
 	}
 
@@ -542,7 +542,7 @@ func (h *EnvHandler) Create(c *gin.Context) {
 	}
 
 	if err := writeEnvFileAtomic(envPath, content); err != nil {
-		renderResult(c, truth.Failed("failed to create env file", err))
+		renderWriteFailure(c, err, "failed to create env file", "")
 		return
 	}
 

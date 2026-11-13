@@ -26,7 +26,7 @@ func TestLinterService_Lint_ValidCompose(t *testing.T) {
           memory: 512M
 `
 
-	results, err := service.Lint(content)
+	results, err := service.LintCompose(content, t.TempDir(), LintEnv{}, true)
 	assert.NoError(t, err)
 	assert.Len(t, results, 0)
 }
@@ -44,7 +44,7 @@ func TestLinterService_Lint_MissingImage(t *testing.T) {
           memory: 512M
 `
 
-	results, err := service.Lint(content)
+	results, err := service.LintCompose(content, t.TempDir(), LintEnv{}, true)
 	assert.NoError(t, err)
 	assert.Len(t, results, 1)
 
@@ -67,7 +67,7 @@ func TestLinterService_Lint_LatestTag(t *testing.T) {
           memory: 512M
 `
 
-	results, err := service.Lint(content)
+	results, err := service.LintCompose(content, t.TempDir(), LintEnv{}, true)
 	assert.NoError(t, err)
 	assert.Len(t, results, 1)
 
@@ -89,7 +89,7 @@ func TestLinterService_Lint_NoRestartPolicy(t *testing.T) {
           memory: 512M
 `
 
-	results, err := service.Lint(content)
+	results, err := service.LintCompose(content, t.TempDir(), LintEnv{}, true)
 	assert.NoError(t, err)
 	assert.Len(t, results, 1)
 
@@ -113,7 +113,7 @@ func TestLinterService_Lint_PrivilegedMode(t *testing.T) {
           memory: 512M
 `
 
-	results, err := service.Lint(content)
+	results, err := service.LintCompose(content, t.TempDir(), LintEnv{}, true)
 	assert.NoError(t, err)
 	assert.Len(t, results, 1)
 
@@ -137,7 +137,7 @@ func TestLinterService_Lint_HostNetwork(t *testing.T) {
           memory: 512M
 `
 
-	results, err := service.Lint(content)
+	results, err := service.LintCompose(content, t.TempDir(), LintEnv{}, true)
 	assert.NoError(t, err)
 	assert.Len(t, results, 1)
 
@@ -155,7 +155,7 @@ func TestLinterService_Lint_NoResourceLimits(t *testing.T) {
     restart: unless-stopped
 `
 
-	results, err := service.Lint(content)
+	results, err := service.LintCompose(content, t.TempDir(), LintEnv{}, true)
 	assert.NoError(t, err)
 
 	assert.Len(t, results, 1)
@@ -175,7 +175,7 @@ func TestLinterService_Lint_MultipleIssues(t *testing.T) {
     privileged: true
 `
 
-	results, err := service.Lint(content)
+	results, err := service.LintCompose(content, t.TempDir(), LintEnv{}, true)
 	assert.NoError(t, err)
 	assert.GreaterOrEqual(t, len(results), 4)
 
@@ -199,7 +199,7 @@ func TestLinterService_Lint_InvalidYAML(t *testing.T) {
     invalid: [unclosed list
 `
 
-	results, err := service.Lint(content)
+	results, err := service.LintCompose(content, t.TempDir(), LintEnv{}, true)
 	assert.NoError(t, err)
 	assert.Len(t, results, 1)
 
@@ -221,7 +221,7 @@ func TestLinterService_Lint_ResultSorting(t *testing.T) {
     restart: always
 `
 
-	results, err := service.Lint(content)
+	results, err := service.LintCompose(content, t.TempDir(), LintEnv{}, true)
 	assert.NoError(t, err)
 	assert.Greater(t, len(results), 0)
 
@@ -317,7 +317,7 @@ func TestLintResult_LevelPriority(t *testing.T) {
     privileged: true
 `
 
-	results, err := service.Lint(content)
+	results, err := service.LintCompose(content, t.TempDir(), LintEnv{}, true)
 	assert.NoError(t, err)
 
 	levelOrder := make(map[string]int)

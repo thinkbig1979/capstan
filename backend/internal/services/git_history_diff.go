@@ -85,7 +85,12 @@ type historyDiff struct {
 // historyDiff runs from dirPath; every pathspec carries top magic, so the
 // folder the request named can't narrow or widen anything. parents are oid's
 // parents (none for a root commit).
-func (s *GitService) historyDiff(dirPath string, cred gitCreds, oid string, parents []string) (*historyDiff, error) {
+//
+// With mask non-nil (a session that has not unlocked env values,
+// agent-os-w6wx) the patch is printed with full context and masked by
+// MaskFullContextDiff, and a merge is shown against its first parent: a
+// combined diff's sides cannot be rebuilt line by line.
+func (s *GitService) historyDiff(dirPath string, cred gitCreds, oid string, parents []string, mask *diffMasking) (*historyDiff, error) {
 	top, bare, err := s.historyTop(dirPath, cred)
 	if err != nil {
 		return nil, err
@@ -132,10 +137,17 @@ func (s *GitService) historyDiff(dirPath string, cred gitCreds, oid string, pare
 		res.hidden = res.files
 		return res, nil
 	}
-	args := append(append(append([]string{}, historyShowArgs...), oid, "--"), pathspecs...)
+	args := append([]string{}, historyShowArgs...)
+	if mask != nil {
+		args = append(args, "--diff-merges=first-parent", fullContextArg)
+	}
+	args = append(append(args, oid, "--"), pathspecs...)
 	diff, _, err := s.gitRun(dirPath, cred, showEnv, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get diff: %w", err)
+	}
+	if mask != nil {
+		diff = MaskFullContextDiff(diff, mask.secrets)
 	}
 	res.diff = strings.TrimSpace(diff)
 	return res, nil

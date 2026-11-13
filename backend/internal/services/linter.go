@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
+	"github.com/compose-spec/compose-go/v2/dotenv"
 	"github.com/compose-spec/compose-go/v2/loader"
+	"github.com/compose-spec/compose-go/v2/template"
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"gopkg.in/yaml.v3"
@@ -19,11 +23,79 @@ func NewLinterService() *LinterService {
 	return &LinterService{}
 }
 
-func (l *LinterService) Lint(content string) ([]models.LintResult, error) {
-	return l.LintWithDir(content, "/tmp")
+// LintCompose lints content as `docker compose` would load it from workingDir
+// with env as its interpolation environment (agent-os-siou). There is no
+// variant without an env: linting with none is what made every file using
+// ${VAR:?msg} unsavable, so a caller has to state which env it means.
+//
+// What is a fact about the environment rather than the file is a warning, not
+// an error, because the value often lands in a separate step (the env editor,
+// global env): a required variable with no value ("required-variable"), an
+// env_file that is not on disk yet ("missing-env-file"), env files that could
+// not be read ("env-unresolved").
+//
+// No message ever comes from a lint with the real secret values: every
+// variable whose value the masker treats as secret is interpolated as
+// lintPlaceholder instead (interpolationVars), and only that run's results
+// are returned. compose-go quotes interpolated values in its errors, and it
+// quotes them transformed (a size field cut at its last digit, a cast error
+// or a duration escaped by strconv.Quote), so replacing the verbatim value
+// afterwards cannot cover them; these results reach sessions that have not
+// unlocked env values, 422 bodies and logs. Every message is still redacted
+// with the secret values, for a secret the content itself spells out.
+//
+// unlocked is whether the session has unlocked env values (envUnlocked).
+// Locked, the placeholder run alone decides validity: a verdict that
+// depended on the real values would let a locked session bisect a numeric
+// secret through a port range (review r3 Q4-1). When it fails and a
+// placeholder was substituted, one lockedPlaceholderNote says why the error
+// may not hold for the real values. Unlocked, validity is decided with the
+// real values: "0" is not a valid value everywhere a secret-looking variable
+// can go (a volume source, a container name), and the stack deploys with the
+// real ones (review r2 R2-D1). That run's messages are never returned. When
+// only the real run passes, the placeholder run's errors are dropped; when
+// only the real run fails, one error with no compose-go text
+// (realValuesError) says so.
+func (l *LinterService) LintCompose(content, workingDir string, env LintEnv, unlocked bool) ([]models.LintResult, error) {
+	secrets := env.secretValues()
+	placeholder := env.interpolationVars(secrets)
+	results, err := l.lintCompose(content, workingDir, placeholder)
+	if err != nil {
+		return nil, err
+	}
+	lockedNote := false
+	switch {
+	case sameVars(placeholder.Vars, env.Vars):
+	case !unlocked:
+		lockedNote = hasErrorResult(results)
+	default:
+		real, err := l.lintCompose(content, workingDir, env)
+		if err != nil {
+			return nil, err
+		}
+		switch realFails, placeholderFails := hasErrorResult(real), hasErrorResult(results); {
+		case !realFails && placeholderFails:
+			results = withoutErrors(results)
+		case realFails && !placeholderFails:
+			results = append(results, realValuesError)
+			l.sortResults(results)
+		}
+	}
+	for i := range results {
+		results[i].Message = redactComposeOutput(results[i].Message, secrets)
+	}
+	if lockedNote {
+		// After the redaction: the note's fixed text is the same for every
+		// secret value.
+		results = append(results, lockedPlaceholderNote)
+		l.sortResults(results)
+	}
+	return results, nil
 }
 
-func (l *LinterService) LintWithDir(content string, workingDir string) ([]models.LintResult, error) {
+// lintCompose lints with vars as the interpolation environment, which
+// interpolationVars has already cleared of secrets.
+func (l *LinterService) lintCompose(content, workingDir string, env LintEnv) ([]models.LintResult, error) {
 	var results []models.LintResult
 
 	var parsed map[string]interface{}
@@ -50,19 +122,52 @@ func (l *LinterService) LintWithDir(content string, workingDir string) ([]models
 		}}, nil
 	}
 
-	configDetails := types.ConfigDetails{
-		ConfigFiles: []types.ConfigFile{
-			{
-				Content:  []byte(content),
-				Filename: "docker-compose.yml",
-			},
-		},
-		WorkingDir: workingDir,
+	if env.Unresolved {
+		results = append(results, models.LintResult{
+			Level:   "warning",
+			Line:    1,
+			Message: "The stack's env files could not be read, so variables were checked against no values. Deploy reads the same files and may fail; check the env file's syntax.",
+			Rule:    "env-unresolved",
+		})
 	}
 
-	composeConfig, err := loader.LoadWithContext(context.Background(), configDetails, func(o *loader.Options) {
-		o.SetProjectName("compose-linter", true)
-	})
+	vars := make(map[string]string, len(env.Vars))
+	for k, v := range env.Vars {
+		vars[k] = v
+	}
+	load := func() (*types.Project, error) {
+		return loader.LoadWithContext(context.Background(), types.ConfigDetails{
+			ConfigFiles: []types.ConfigFile{{Content: []byte(content), Filename: "docker-compose.yml"}},
+			WorkingDir:  workingDir,
+			Environment: vars,
+		}, func(o *loader.Options) {
+			o.SetProjectName("compose-linter", true)
+			// env_file contents are not needed to lint, and a file the
+			// create request has not written yet must not fail the load.
+			// A missing one is reported as a warning below.
+			o.SkipResolveEnvironment = true
+		})
+	}
+
+	// compose-go stops at the first required variable with no value. Each
+	// one is named in a warning and loaded again as lintPlaceholder, until
+	// none is left, so the file is still checked interpolated: an
+	// uninterpolated reload failed every interpolated typed field (ports,
+	// cpus, mem_limit, replicas), set or not (review cor D1). The names are
+	// compose-go's own, so a commented-out or escaped reference is never one.
+	composeConfig, err := load()
+	var missing *template.MissingRequiredError
+	for tries := 0; err != nil && errors.As(err, &missing) && tries < maxMissingRequired; tries++ {
+		name := missing.Variable
+		results = append(results, models.LintResult{
+			Level:   "warning",
+			Line:    findVarLine(content, name),
+			Message: fmt.Sprintf("Required variable %s has no value. Deploy will fail until %s is set in the stack's .env or the global environment.", name, name),
+			Rule:    "required-variable",
+		})
+		vars[name] = lintPlaceholder
+		composeConfig, err = load()
+	}
 	if err != nil {
 		composeErr := err.Error()
 		line := extractLineNumber(composeErr)
@@ -73,8 +178,11 @@ func (l *LinterService) LintWithDir(content string, workingDir string) ([]models
 			Message: composeErr,
 			Rule:    "compose-structure",
 		})
+		l.sortResults(results)
 		return results, nil
 	}
+
+	results = append(results, l.missingEnvFiles(content, workingDir, composeConfig)...)
 
 	for serviceName, service := range composeConfig.Services {
 		line := l.findServiceLine(content, serviceName)
@@ -214,4 +322,237 @@ func extractLineNumber(errMsg string) int {
 	}
 
 	return 1
+}
+
+// LintEnv is the interpolation environment a compose file is linted with.
+type LintEnv struct {
+	// Vars are the variables compose would interpolate with.
+	Vars map[string]string
+	// Unresolved is true when the env files could not be read; Vars then
+	// holds what could be resolved without them.
+	Unresolved bool
+	// Secrets are the env files' secret values, as StackSecretValues finds
+	// them. A variable whose value holds one is never interpolated as itself.
+	Secrets []string
+}
+
+// realValuesError is the one result for a file that loads with the
+// placeholder but not with the real values. It quotes nothing: compose-go's
+// text for the real run would quote, possibly transformed, a secret.
+// lockedPlaceholderNote goes with a locked lint that failed after a
+// placeholder was substituted: the error may be the stand-in's, not the
+// file's.
+var lockedPlaceholderNote = models.LintResult{
+	Level:   "info",
+	Line:    1,
+	Message: "Some values are hidden while locked, so lint checked this file with stand-ins for them. If an error points at a field that uses one of those values, unlock to check it with the real values.",
+	Rule:    "locked-placeholder",
+}
+
+var realValuesError = models.LintResult{
+	Level:   "error",
+	Line:    1,
+	Message: "This file does not load with the stack's environment values; check the variables used in typed fields (ports, cpus, mem_limit, durations, counts).",
+	Rule:    "compose-structure",
+}
+
+func hasErrorResult(results []models.LintResult) bool {
+	for _, r := range results {
+		if r.Level == "error" {
+			return true
+		}
+	}
+	return false
+}
+
+func withoutErrors(results []models.LintResult) []models.LintResult {
+	out := results[:0:0]
+	for _, r := range results {
+		if r.Level != "error" {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func sameVars(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if w, ok := b[k]; !ok || w != v {
+			return false
+		}
+	}
+	return true
+}
+
+// lintPlaceholder is what a secret, or a required variable with no value, is
+// interpolated as. "0" decodes in every typed field a variable usually feeds
+// (ports, cpus, mem_limit, pids_limit, stop_grace_period, deploy.replicas).
+// It can still fail where "0" is not valid (a volume source, a container
+// name): LintCompose's doc says who decides then.
+const lintPlaceholder = "0"
+
+// interpolationVars is e with every secret value replaced by lintPlaceholder:
+// a variable IsSensitiveEnvVar matches (its name, or URL credentials in its
+// value), or whose value holds one of secrets. An empty value stays empty, so
+// ${X:?} still reports it missing.
+func (e LintEnv) interpolationVars(secrets []string) LintEnv {
+	vars := make(map[string]string, len(e.Vars))
+	for k, v := range e.Vars {
+		if v != "" && (IsSensitiveEnvVar(k, v) || containsAny(v, secrets)) {
+			v = lintPlaceholder
+		}
+		vars[k] = v
+	}
+	return LintEnv{Vars: vars, Unresolved: e.Unresolved, Secrets: e.Secrets}
+}
+
+func containsAny(s string, subs []string) bool {
+	for _, sub := range subs {
+		if sub != "" && strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// StackLintEnv is the environment `docker compose` interpolates the stack's
+// compose file with: composeEnvironment, the exact mode deploy uses.
+func StackLintEnv(st models.Stack, globalEnvPath string) LintEnv {
+	vars, err := composeEnvironment(st, globalEnvPath)
+	if err != nil {
+		// err is neither logged nor returned: compose-go quotes the offending
+		// line, which can be a secret (resolveComposeEnv's doc comment).
+		return LintEnv{Vars: processComposeEnv(), Unresolved: true, Secrets: StackSecretValues(st, globalEnvPath)}
+	}
+	return LintEnv{Vars: vars, Secrets: StackSecretValues(st, globalEnvPath)}
+}
+
+// NewLintEnv is the environment for a stack whose env file is not on disk:
+// global.env with envText (the env file the request will write) laid over it.
+// envText "" lints with global.env alone.
+func NewLintEnv(globalEnvPath, envText string) LintEnv {
+	secrets := StackSecretValues(models.Stack{}, globalEnvPath)
+	envs, err := resolveComposeEnv(models.Stack{}, globalEnvPath, composeEnvExact)
+	if err != nil {
+		return LintEnv{Vars: processComposeEnv(), Unresolved: true, Secrets: secrets}.WithEnvText(envText)
+	}
+	return LintEnv{Vars: envs[0], Secrets: secrets}.WithEnvText(envText)
+}
+
+// WithEnvText lays the env file content envText over e, parsed by compose-go's
+// dotenv as compose reads an --env-file, with the compose child's own
+// environment still winning, as in composeEnvExact. A key the replaced env
+// file set and envText drops stays in Vars: that only spares a warning.
+func (e LintEnv) WithEnvText(envText string) LintEnv {
+	if envText == "" {
+		return e
+	}
+	vars := make(map[string]string, len(e.Vars))
+	for k, v := range e.Vars {
+		vars[k] = v
+	}
+	secrets := append(append([]string{}, e.Secrets...), sensitiveEnvValues(envText)...)
+	parsed, err := dotenv.UnmarshalWithLookup(envText, func(k string) (string, bool) {
+		v, ok := vars[k]
+		return v, ok
+	})
+	if err != nil {
+		return LintEnv{Vars: vars, Unresolved: true, Secrets: secrets}
+	}
+	for k, v := range parsed {
+		vars[k] = v
+	}
+	for k, v := range processComposeEnv() {
+		vars[k] = v
+	}
+	return LintEnv{Vars: vars, Unresolved: e.Unresolved, Secrets: secrets}
+}
+
+// secretValues are e's Secrets plus the values of e's sensitive variables,
+// longest first, as composeSecrets returns them for compose output.
+func (e LintEnv) secretValues() []string {
+	var secrets []string
+	seen := map[string]bool{}
+	add := func(v string) {
+		if len(v) >= composeSecretMinLen && !seen[v] {
+			seen[v] = true
+			secrets = append(secrets, v)
+		}
+	}
+	for _, v := range e.Secrets {
+		add(v)
+	}
+	for k, v := range e.Vars {
+		if IsSensitiveEnvVar(k, v) {
+			add(v)
+		}
+	}
+	sort.Slice(secrets, func(i, j int) bool { return len(secrets[i]) > len(secrets[j]) })
+	return secrets
+}
+
+// processComposeEnv is the compose child's own environment, which
+// resolveComposeEnv lays over every env file.
+func processComposeEnv() map[string]string {
+	env := map[string]string{}
+	for _, kv := range dockerEnv() {
+		if k, v, ok := strings.Cut(kv, "="); ok {
+			env[k] = v
+		}
+	}
+	return env
+}
+
+// maxMissingRequired bounds the reloads for missing required variables; a
+// file with more is reported as the error compose-go gives for the next one.
+const maxMissingRequired = 100
+
+// findVarLine is the first line of content that references ${name, or 1.
+func findVarLine(content, name string) int {
+	for i, line := range strings.Split(content, "\n") {
+		if strings.Contains(line, "${"+name) {
+			return i + 1
+		}
+	}
+	return 1
+}
+
+// missingEnvFiles warns about each required env_file that is not on disk,
+// only when workingDir exists: a stack being created has no folder yet, and
+// its .env comes from the same request.
+func (l *LinterService) missingEnvFiles(content, workingDir string, project *types.Project) []models.LintResult {
+	fi, err := os.Stat(workingDir)
+	if err != nil {
+		// No folder yet (create), or one compose could not read either:
+		// nothing on disk to check the env files against.
+		return nil
+	}
+	if !fi.IsDir() {
+		return nil
+	}
+	var results []models.LintResult
+	for name, svc := range project.Services {
+		for _, ef := range svc.EnvFiles {
+			if !bool(ef.Required) {
+				continue
+			}
+			p := ef.Path
+			if !filepath.IsAbs(p) {
+				p = filepath.Join(workingDir, p)
+			}
+			if _, err := os.Stat(p); err == nil { //geterrors:ignore existence probe: any stat failure means compose cannot read it either, which is what the warning says
+				continue
+			}
+			results = append(results, models.LintResult{
+				Level:   "warning",
+				Line:    l.findServiceLine(content, name),
+				Message: fmt.Sprintf("Service '%s' names env_file %s, which does not exist. Deploy will fail until it is created, or mark it `required: false`.", name, p),
+				Rule:    "missing-env-file",
+			})
+		}
+	}
+	return results
 }

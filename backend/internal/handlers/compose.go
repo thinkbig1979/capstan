@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -99,12 +100,109 @@ func (h *ComposeHandler) Get(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, ComposeResponse{
+	resp := ComposeResponse{
 		Content:      string(content),
 		Filename:     stack.ComposeFile,
 		Size:         fileInfo.Size(),
 		LastModified: fileInfo.ModTime().Format(time.RFC3339),
-	})
+		Locked:       !envUnlocked(c),
+	}
+	// A session that has not unlocked env values must not read the secrets
+	// the env views hide from it (agent-os-w6wx).
+	if resp.Locked {
+		resp.Content, resp.MaskedValues = services.MaskSecrets(resp.Content, stack.ComposeFile, h.stackSecrets(*stack))
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// stackSecrets are the stack's env values, masked wherever a locked view
+// shows them verbatim.
+func (h *ComposeHandler) stackSecrets(stack models.Stack) []string {
+	return services.StackSecretValues(stack, globalEnvPath(h.config))
+}
+
+// refuseMaskedSave answers and returns true when this save of content must
+// not run, because it would write a masked "***" over a secret
+// (agent-os-w6wx). Both checks read the file on disk, not the request's
+// claims, so a stale or forged client cannot get past them:
+//
+//   - A session that has not unlocked env values gets 403 when the file
+//     holds a value the GET masked for it: what its editor holds is "***"
+//     where a secret was.
+//   - An unlocked session gets 409 when a line of content equals the masked
+//     form of a line on disk that the masker changed: the editor holds text
+//     from a locked view (an undo back past an unlock did that), and saving
+//     it would overwrite the secret.
+//
+// A link the write would refuse answers that refusal (409); any other
+// failure to read the file refuses too: fail closed.
+func (h *ComposeHandler) refuseMaskedSave(c *gin.Context, stack *models.Stack, composePath, content string) bool {
+	unlocked := envUnlocked(c)
+	if unlocked && !strings.Contains(content, services.SecretMask) {
+		return false // nothing masked can be in it
+	}
+	target, info, err := resolveWriteTarget(composePath)
+	if err != nil {
+		handleError(c, writeFailureError(err, "READ_ERROR", "Failed to read the compose file on disk"))
+		return true
+	}
+	if info == nil {
+		return false // nothing on disk yet, nothing to overwrite
+	}
+	//nolint:gosec // target is the compose path resolved by resolveWriteTarget; only masked lines are compared, nothing of it is returned
+	disk, err := os.ReadFile(target)
+	if err != nil {
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "READ_ERROR", "Failed to read the compose file on disk", err))
+		return true
+	}
+	masked, n := services.MaskSecrets(string(disk), stack.ComposeFile, h.stackSecrets(*stack))
+	if !unlocked {
+		if n > 0 {
+			c.JSON(http.StatusForbidden, models.NewAppError(
+				http.StatusForbidden,
+				models.ErrForbidden,
+				"Re-enter your password to edit a compose file that holds secrets",
+			))
+			return true
+		}
+		return false
+	}
+	if n > 0 && holdsMaskedLine(content, string(disk), masked) {
+		c.JSON(http.StatusConflict, models.NewAppError(
+			http.StatusConflict,
+			models.ErrValidation,
+			"This save holds masked values (***) from a locked view and would overwrite the secrets they hide; reload the file and try again",
+		))
+		return true
+	}
+	return false
+}
+
+// holdsMaskedLine reports whether a line of content equals the masked form of
+// a line the masker changed in disk (masked is disk masked, line for line). A
+// masked form that is also a line of disk as written is not counted: the
+// file really holds it.
+func holdsMaskedLine(content, disk, masked string) bool {
+	diskLines, maskedLines := strings.Split(disk, "\n"), strings.Split(masked, "\n")
+	if len(diskLines) != len(maskedLines) {
+		return true // MaskSecrets keeps the line count; fail closed if not
+	}
+	raw := make(map[string]bool, len(diskLines))
+	for _, l := range diskLines {
+		raw[l] = true
+	}
+	forms := map[string]bool{}
+	for i, l := range maskedLines {
+		if l != diskLines[i] && !raw[l] {
+			forms[l] = true
+		}
+	}
+	for _, l := range strings.Split(content, "\n") {
+		if forms[l] {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *ComposeHandler) Put(c *gin.Context) {
@@ -139,21 +237,19 @@ func (h *ComposeHandler) Put(c *gin.Context) {
 	}
 	defer releaseLock()
 
-	lintResults, err := h.linter.LintWithDir(req.Content, stack.Directory)
+	// Before the lint: a refused save answers 403 or 409, whatever the lint
+	// would say.
+	if h.refuseMaskedSave(c, stack, composePath, req.Content) {
+		return
+	}
+
+	lintResults, err := h.linter.LintCompose(req.Content, stack.Directory, services.StackLintEnv(*stack, globalEnvPath(h.config)), envUnlocked(c))
 	if err != nil {
 		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "LINT_ERROR", "Failed to lint compose file", err))
 		return
 	}
 
-	hasErrors := false
-	for _, result := range lintResults {
-		if result.Level == "error" {
-			hasErrors = true
-			break
-		}
-	}
-
-	if hasErrors {
+	if lintHasErrors(lintResults) {
 		c.JSON(http.StatusUnprocessableEntity, models.NewAppErrorWithDetails(
 			http.StatusUnprocessableEntity,
 			models.ErrComposeValidation,
@@ -176,7 +272,7 @@ func (h *ComposeHandler) Put(c *gin.Context) {
 	}
 
 	if err := writeComposeFileAtomic(composePath, []byte(req.Content)); err != nil {
-		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "WRITE_ERROR", "Failed to write compose file", err))
+		handleError(c, writeFailureError(err, "WRITE_ERROR", "Failed to write compose file"))
 		return
 	}
 
@@ -195,7 +291,7 @@ func (h *ComposeHandler) Lint(c *gin.Context) {
 	if err != nil && !errors.Is(err, errdefs.ErrNotFound) {
 		// agent-os-7lg1 judgement call: Lint works standalone — a genuine DB
 		// fault here only degrades the working directory used for linting
-		// (falls back to /tmp below), so it is worth an operator-visible log
+		// (none, below), so it is worth an operator-visible log
 		// line but not worth failing a lint request that never required the
 		// stack to exist. Unlike the other 13 db.GetStack sites in this
 		// package, there is no 404 arm here to preserve: this call never
@@ -213,29 +309,46 @@ func (h *ComposeHandler) Lint(c *gin.Context) {
 		return
 	}
 
-	workingDir := "/tmp"
+	// No stack row: lint as for a stack that has no folder yet, with
+	// global.env alone.
+	workingDir := ""
+	env := services.NewLintEnv(globalEnvPath(h.config), "")
 	if stack != nil {
 		workingDir = stack.Directory
+		env = services.StackLintEnv(*stack, globalEnvPath(h.config))
 	}
 
-	lintResults, err := h.linter.LintWithDir(req.Content, workingDir)
+	lintResults, err := h.linter.LintCompose(req.Content, workingDir, env, envUnlocked(c))
 	if err != nil {
 		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "LINT_ERROR", "Failed to lint compose file", err))
 		return
 	}
 
-	hasErrors := false
-	for _, result := range lintResults {
-		if result.Level == "error" {
-			hasErrors = true
-			break
-		}
-	}
-
 	c.JSON(http.StatusOK, LintResponse{
-		Valid:       !hasErrors,
+		Valid:       !lintHasErrors(lintResults),
 		LintResults: lintResults,
 	})
+}
+
+// lintHasErrors is the one save gate on lint results: any error-level result
+// refuses the save (or reports the content invalid). Warnings never do.
+func lintHasErrors(results []models.LintResult) bool {
+	for _, r := range results {
+		if r.Level == "error" {
+			return true
+		}
+	}
+	return false
+}
+
+// globalEnvPath is global.env under the data directory, "" without one, so a
+// test config with no DataDir never reads a global.env from the working
+// directory.
+func globalEnvPath(cfg *config.Config) string {
+	if cfg == nil || cfg.DataDir == "" {
+		return ""
+	}
+	return filepath.Join(cfg.DataDir, "global.env")
 }
 
 func (h *ComposeHandler) logAction(c *gin.Context, stackID, action, detail string) {
@@ -257,7 +370,7 @@ func restoreEnv(envPath string, originalBytes []byte) {
 	// implementation that must stay in sync with the 0600 mode requirement
 	// instead of two that can drift apart (agent-os-i94).
 	//nolint:errcheck // best-effort restore; nothing further to do on failure
-	_ = writeEnvFileAtomic(envPath, string(originalBytes))
+	_ = writeEnvFileAtomic(envPath, string(originalBytes)) //writerefusal:ignore best-effort restore, nothing is rendered
 }
 
 // ComposeEnvRequest is the body for the atomic PUT /api/v1/stacks/:id/compose-env
@@ -361,22 +474,32 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 	}
 	defer releaseLock()
 
+	// Before the lint: a refused save answers 403 or 409, whatever the lint
+	// would say.
+	if h.refuseMaskedSave(c, stack, composePath, req.ComposeContent) {
+		return
+	}
+
 	// ── Lint compose before touching disk ──────────────────────────────────
-	lintResults, err := h.linter.LintWithDir(req.ComposeContent, stack.Directory)
+	// The env half of this save is the env compose will read, so a variable
+	// it sets counts as set.
+	lintEnv := services.StackLintEnv(*stack, globalEnvPath(h.config))
+	if hasEnvUpdate {
+		lintEnv = lintEnv.WithEnvText(envContent)
+	}
+	lintResults, err := h.linter.LintCompose(req.ComposeContent, stack.Directory, lintEnv, envUnlocked(c))
 	if err != nil {
 		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "LINT_ERROR", "Failed to lint compose file", err))
 		return
 	}
-	for _, r := range lintResults {
-		if r.Level == "error" {
-			c.JSON(http.StatusUnprocessableEntity, models.NewAppErrorWithDetails(
-				http.StatusUnprocessableEntity,
-				models.ErrComposeValidation,
-				"Compose file validation failed",
-				gin.H{"lintResults": lintResults},
-			))
-			return
-		}
+	if lintHasErrors(lintResults) {
+		c.JSON(http.StatusUnprocessableEntity, models.NewAppErrorWithDetails(
+			http.StatusUnprocessableEntity,
+			models.ErrComposeValidation,
+			"Compose file validation failed",
+			gin.H{"lintResults": lintResults},
+		))
+		return
 	}
 
 	if err := validateStackPath(composePath, h.config); err != nil {
@@ -448,7 +571,7 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 		// version here downgraded the file's mode on every save because
 		// os.Rename replaces the destination inode wholesale.
 		if err := writeEnvFileAtomic(envPath, envContent); err != nil {
-			renderResult(c, truth.Failed("failed to write env file; compose unchanged", err))
+			renderWriteFailure(c, err, "failed to write env file", "; compose unchanged")
 			return
 		}
 
@@ -464,10 +587,12 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 	// ── Write compose.yaml ──────────────────────────────────────────────────
 	if err := writeComposeFileAtomic(composePath, []byte(req.ComposeContent)); err != nil {
 		// Compose write failed after .env was already replaced — restore .env.
+		note := ""
 		if hasEnvUpdate && envPath != "" {
 			restoreEnv(envPath, originalEnv)
+			note = "; env rolled back"
 		}
-		renderResult(c, truth.Failed("failed to write compose file; env rolled back", err))
+		renderWriteFailure(c, err, "failed to write compose file", note)
 		return
 	}
 
@@ -478,7 +603,7 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 		rollbackErr := ""
 		if originalCompose != nil {
 			//nolint:gosec // composePath was validated against the configured stacks directories above (validateStackPath, symlink-aware) — see README.md "Command execution and file access"
-			if rErr := writeComposeFileAtomic(composePath, originalCompose); rErr != nil {
+			if rErr := writeComposeFileAtomic(composePath, originalCompose); rErr != nil { //writerefusal:ignore rollback; its text already goes to details.rollbackError
 				rollbackErr = rErr.Error()
 			}
 		}

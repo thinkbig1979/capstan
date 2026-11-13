@@ -157,21 +157,15 @@ func (h *StacksHandler) Create(c *gin.Context) {
 		return
 	}
 
-	lintResults, err := h.linter.Lint(req.ComposeContent)
+	// Linted where it will live, with the env it will deploy with: global.env
+	// plus the .env this request writes.
+	lintResults, err := h.linter.LintCompose(req.ComposeContent, stackDir, services.NewLintEnv(globalEnvPath(h.config), req.EnvContent), envUnlocked(c))
 	if err != nil {
 		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "LINT_ERROR", "Failed to lint compose file", err))
 		return
 	}
 
-	hasErrors := false
-	for _, result := range lintResults {
-		if result.Level == "error" {
-			hasErrors = true
-			break
-		}
-	}
-
-	if hasErrors {
+	if lintHasErrors(lintResults) {
 		c.JSON(http.StatusUnprocessableEntity, models.NewAppErrorWithDetails(
 			http.StatusUnprocessableEntity,
 			models.ErrComposeValidation,
@@ -191,7 +185,7 @@ func (h *StacksHandler) Create(c *gin.Context) {
 	composePath := filepath.Join(stackDir, "compose.yaml")
 	if err := writeComposeFileAtomic(composePath, []byte(req.ComposeContent)); err != nil {
 		os.RemoveAll(stackDir)
-		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "WRITE_ERROR", "Failed to write compose file", err))
+		handleError(c, writeFailureError(err, "WRITE_ERROR", "Failed to write compose file"))
 		return
 	}
 
@@ -200,7 +194,7 @@ func (h *StacksHandler) Create(c *gin.Context) {
 		envPath := filepath.Join(stackDir, ".env")
 		if err := writeEnvFileAtomic(envPath, req.EnvContent); err != nil {
 			os.RemoveAll(stackDir)
-			handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "WRITE_ERROR", "Failed to write env file", err))
+			handleError(c, writeFailureError(err, "WRITE_ERROR", "Failed to write env file"))
 			return
 		}
 		envFile = ".env"
@@ -279,9 +273,15 @@ func (h *StacksHandler) Create(c *gin.Context) {
 		return
 	}
 
-	if err := h.scanner.ScanDirectoryWithRoot(stackDir, targetDir); err != nil {
-		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "SCANNER_ERROR", "Failed to scan new stack directory", err))
-		return
+	// The folder, its files and the row exist from here on, so a failed scan
+	// is a created stack, not a failed create (agent-os-jsp3). It is not
+	// deployed: the row lacks what only the scan fills in. The error is
+	// logged and not sent: a scan loads the compose file, and compose-go
+	// errors can quote env values.
+	scanErr := h.scanner.ScanDirectoryWithRoot(stackDir, targetDir)
+	if scanErr != nil {
+		slog.Error("scan of a newly created stack failed; the stack exists but was not deployed",
+			"id", stackID, "directory", stackDir, "error", scanErr)
 	}
 
 	// Re-read what the scan just persisted, and respond with THAT.
@@ -325,6 +325,19 @@ func (h *StacksHandler) Create(c *gin.Context) {
 	}
 
 	h.logAction(c, stackID, "create", fmt.Sprintf("Created new stack: %s", req.Name))
+
+	if scanErr != nil {
+		renderResultWithStatus(c, http.StatusMultiStatus, truth.ActionResult{
+			Outcome: truth.OutcomePartial,
+			Reason:  "stack created but not deployed: scanning its folder failed. Rescan, then start it",
+			Details: map[string]any{
+				"stack":       stack,
+				"lintResults": lintResults,
+				"deployed":    false,
+			},
+		})
+		return
+	}
 
 	// req.Deploy is false: stack created successfully, no deploy requested.
 	//

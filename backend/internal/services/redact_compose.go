@@ -177,7 +177,24 @@ func (s *DockerService) composeSecrets(stack models.Stack) []string {
 	if s.config != nil && s.config.DataDir != "" {
 		globalPath = filepath.Join(s.config.DataDir, "global.env")
 	}
+	return StackSecretValues(stack, globalPath)
+}
 
+// ComposeSecretValues is composeSecrets for the handlers: the stack's secret
+// values, masked wherever a locked view shows them verbatim (agent-os-yvlh).
+// A nil service has no config to find global.env with, so it answers
+// ErrDockerUnavailable rather than a set that may be missing values.
+func (s *DockerService) ComposeSecretValues(stack models.Stack) ([]string, error) {
+	if s == nil {
+		return nil, ErrDockerUnavailable
+	}
+	return s.composeSecrets(stack), nil
+}
+
+// StackSecretValues is composeSecrets for callers without a DockerService:
+// the locked views mask these values wherever they appear verbatim
+// (agent-os-w6wx). globalPath "" reads no global.env.
+func StackSecretValues(stack models.Stack, globalPath string) []string {
 	seen := map[string]bool{}
 	var secrets []string
 	add := func(v string) {

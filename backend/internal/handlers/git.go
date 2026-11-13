@@ -67,6 +67,17 @@ func (h *GitHandler) stackDir(stackID string) (string, error) {
 	return normalizedDir, nil
 }
 
+// stackSecrets are the stack's env values, masked wherever a locked diff
+// shows them verbatim. A stack that cannot be read adds none; the key, URL
+// and flag passes still apply.
+func (h *GitHandler) stackSecrets(stackID string) []string {
+	stack, err := h.db.GetStack(stackID)
+	if err != nil {
+		return nil
+	}
+	return services.StackSecretValues(*stack, globalEnvPath(h.config))
+}
+
 func (h *GitHandler) resolvePathFromStack(c *gin.Context) (string, string, error) {
 	stackID := c.Query("stackId")
 	if stackID != "" {
@@ -342,7 +353,14 @@ func (h *GitHandler) GetChangeDiff(c *gin.Context) {
 		handleError(c, err)
 		return
 	}
-	result, err := h.git.GetChangeDiff(absPath, path)
+	// A session that has not unlocked env values gets every file's diff
+	// masked (agent-os-w6wx); env files are hidden for every session.
+	var result *models.GitChangeDiff
+	if envUnlocked(c) {
+		result, err = h.git.GetChangeDiff(absPath, path)
+	} else {
+		result, err = h.git.GetChangeDiffMasked(absPath, path, h.stackSecrets(stackID))
+	}
 	if err != nil {
 		handleError(c, err)
 		return
@@ -497,7 +515,7 @@ func (h *GitHandler) GetLog(c *gin.Context) {
 }
 
 func (h *GitHandler) GetDiff(c *gin.Context) {
-	absPath, _, err := h.resolvePathFromStack(c)
+	absPath, stackID, err := h.resolvePathFromStack(c)
 	if err != nil {
 		handleError(c, err)
 		return
@@ -514,7 +532,19 @@ func (h *GitHandler) GetDiff(c *gin.Context) {
 		return
 	}
 
-	result, err := h.git.GetDiff(absPath, hash)
+	// Masked for a session that has not unlocked env values, as
+	// GetChangeDiff is. With ?dir= there is no stack, so no env values to
+	// mask verbatim; the key, URL and flag passes still apply.
+	var result *models.DiffResult
+	if envUnlocked(c) {
+		result, err = h.git.GetDiff(absPath, hash)
+	} else {
+		var secrets []string
+		if stackID != "" {
+			secrets = h.stackSecrets(stackID)
+		}
+		result, err = h.git.GetDiffMasked(absPath, hash, secrets)
+	}
 	if err != nil {
 		handleError(c, err)
 		return
