@@ -122,22 +122,15 @@ func (h *StacksHandler) Lint(c *gin.Context) {
 		return
 	}
 
-	lintResults, err := h.linter.Lint(req.Compose)
+	// No stack yet (the create dialog): global.env alone, no folder.
+	lintResults, err := h.linter.LintCompose(req.Compose, "", services.NewLintEnv(globalEnvPath(h.config), ""))
 	if err != nil {
 		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "LINT_ERROR", "Failed to lint compose file", err))
 		return
 	}
 
-	hasErrors := false
-	for _, result := range lintResults {
-		if result.Level == "error" {
-			hasErrors = true
-			break
-		}
-	}
-
 	c.JSON(http.StatusOK, gin.H{
-		"valid":       !hasErrors,
+		"valid":       !lintHasErrors(lintResults),
 		"lintResults": lintResults,
 	})
 }

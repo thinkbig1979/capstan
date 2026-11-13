@@ -157,21 +157,15 @@ func (h *StacksHandler) Create(c *gin.Context) {
 		return
 	}
 
-	lintResults, err := h.linter.Lint(req.ComposeContent)
+	// Linted where it will live, with the env it will deploy with: global.env
+	// plus the .env this request writes.
+	lintResults, err := h.linter.LintCompose(req.ComposeContent, stackDir, services.NewLintEnv(globalEnvPath(h.config), req.EnvContent))
 	if err != nil {
 		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "LINT_ERROR", "Failed to lint compose file", err))
 		return
 	}
 
-	hasErrors := false
-	for _, result := range lintResults {
-		if result.Level == "error" {
-			hasErrors = true
-			break
-		}
-	}
-
-	if hasErrors {
+	if lintHasErrors(lintResults) {
 		c.JSON(http.StatusUnprocessableEntity, models.NewAppErrorWithDetails(
 			http.StatusUnprocessableEntity,
 			models.ErrComposeValidation,

@@ -139,21 +139,13 @@ func (h *ComposeHandler) Put(c *gin.Context) {
 	}
 	defer releaseLock()
 
-	lintResults, err := h.linter.LintWithDir(req.Content, stack.Directory)
+	lintResults, err := h.linter.LintCompose(req.Content, stack.Directory, services.StackLintEnv(*stack, globalEnvPath(h.config)))
 	if err != nil {
 		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "LINT_ERROR", "Failed to lint compose file", err))
 		return
 	}
 
-	hasErrors := false
-	for _, result := range lintResults {
-		if result.Level == "error" {
-			hasErrors = true
-			break
-		}
-	}
-
-	if hasErrors {
+	if lintHasErrors(lintResults) {
 		c.JSON(http.StatusUnprocessableEntity, models.NewAppErrorWithDetails(
 			http.StatusUnprocessableEntity,
 			models.ErrComposeValidation,
@@ -213,29 +205,46 @@ func (h *ComposeHandler) Lint(c *gin.Context) {
 		return
 	}
 
-	workingDir := "/tmp"
+	// No stack row: lint as for a stack that has no folder yet, with
+	// global.env alone.
+	workingDir := ""
+	env := services.NewLintEnv(globalEnvPath(h.config), "")
 	if stack != nil {
 		workingDir = stack.Directory
+		env = services.StackLintEnv(*stack, globalEnvPath(h.config))
 	}
 
-	lintResults, err := h.linter.LintWithDir(req.Content, workingDir)
+	lintResults, err := h.linter.LintCompose(req.Content, workingDir, env)
 	if err != nil {
 		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "LINT_ERROR", "Failed to lint compose file", err))
 		return
 	}
 
-	hasErrors := false
-	for _, result := range lintResults {
-		if result.Level == "error" {
-			hasErrors = true
-			break
-		}
-	}
-
 	c.JSON(http.StatusOK, LintResponse{
-		Valid:       !hasErrors,
+		Valid:       !lintHasErrors(lintResults),
 		LintResults: lintResults,
 	})
+}
+
+// lintHasErrors is the one save gate on lint results: any error-level result
+// refuses the save (or reports the content invalid). Warnings never do.
+func lintHasErrors(results []models.LintResult) bool {
+	for _, r := range results {
+		if r.Level == "error" {
+			return true
+		}
+	}
+	return false
+}
+
+// globalEnvPath is global.env under the data directory, "" without one, so a
+// test config with no DataDir never reads a global.env from the working
+// directory.
+func globalEnvPath(cfg *config.Config) string {
+	if cfg == nil || cfg.DataDir == "" {
+		return ""
+	}
+	return filepath.Join(cfg.DataDir, "global.env")
 }
 
 func (h *ComposeHandler) logAction(c *gin.Context, stackID, action, detail string) {
@@ -362,21 +371,25 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 	defer releaseLock()
 
 	// ── Lint compose before touching disk ──────────────────────────────────
-	lintResults, err := h.linter.LintWithDir(req.ComposeContent, stack.Directory)
+	// The env half of this save is the env compose will read, so a variable
+	// it sets counts as set.
+	lintEnv := services.StackLintEnv(*stack, globalEnvPath(h.config))
+	if hasEnvUpdate {
+		lintEnv = lintEnv.WithEnvText(envContent)
+	}
+	lintResults, err := h.linter.LintCompose(req.ComposeContent, stack.Directory, lintEnv)
 	if err != nil {
 		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "LINT_ERROR", "Failed to lint compose file", err))
 		return
 	}
-	for _, r := range lintResults {
-		if r.Level == "error" {
-			c.JSON(http.StatusUnprocessableEntity, models.NewAppErrorWithDetails(
-				http.StatusUnprocessableEntity,
-				models.ErrComposeValidation,
-				"Compose file validation failed",
-				gin.H{"lintResults": lintResults},
-			))
-			return
-		}
+	if lintHasErrors(lintResults) {
+		c.JSON(http.StatusUnprocessableEntity, models.NewAppErrorWithDetails(
+			http.StatusUnprocessableEntity,
+			models.ErrComposeValidation,
+			"Compose file validation failed",
+			gin.H{"lintResults": lintResults},
+		))
+		return
 	}
 
 	if err := validateStackPath(composePath, h.config); err != nil {
