@@ -3,8 +3,13 @@ package handlers
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
+
+	"github.com/gin-gonic/gin"
+	"github.com/thinkbig1979/capstan/backend/internal/models"
+	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
 
 // composeFileMode is the mode of a compose file that does not exist yet.
@@ -59,10 +64,10 @@ func resolveWriteTarget(path string) (string, os.FileInfo, error) {
 		resolved, err := filepath.EvalSymlinks(path)
 		if errors.Is(err, os.ErrNotExist) {
 			dest, _ := os.Readlink(path) //nolint:errcheck // only decorates the message; Lstat just saw a link here
-			return "", nil, fmt.Errorf("%s is a symlink to a missing file (%s); fix or remove the link, then save again", name, dest)
+			return "", nil, &writeRefusal{msg: fmt.Sprintf("%s is a symlink to a missing file (%s); fix or remove the link, then save again", name, dest)}
 		}
 		if err != nil {
-			return "", nil, fmt.Errorf("%s is a symlink that cannot be followed (%w); fix or remove the link, then save again", name, err)
+			return "", nil, &writeRefusal{msg: fmt.Sprintf("%s is a symlink that cannot be followed (%v); fix or remove the link, then save again", name, err)}
 		}
 		if info, err = os.Stat(resolved); err != nil {
 			return "", nil, fmt.Errorf("check %s's link target: %w", name, err)
@@ -70,9 +75,40 @@ func resolveWriteTarget(path string) (string, os.FileInfo, error) {
 		target = resolved
 	}
 	if !info.Mode().IsRegular() {
-		return "", nil, fmt.Errorf("%s is not a regular file (%s); nothing written", name, info.Mode().Type())
+		return "", nil, &writeRefusal{msg: fmt.Sprintf("%s is not a regular file (%s); nothing written", name, info.Mode().Type())}
 	}
 	return target, info, nil
+}
+
+// writeRefusal is resolveWriteTarget refusing a path because of the user's
+// own link or file (a dangling or looping link, a target that is not a regular
+// file). Its text says what to do, so it is answered 409 with that text
+// (agent-os-4hxa). Every other write error is a server fault and stays a 500
+// whose cause is logged, not sent: it can name OS internals.
+type writeRefusal struct{ msg string }
+
+func (e *writeRefusal) Error() string { return e.msg }
+
+// writeFailureError is the AppError for a write helper's error: 409 with the
+// refusal's text, or a 500 carrying code and message with err as its cause.
+func writeFailureError(err error, code, message string) *models.AppError {
+	var refusal *writeRefusal
+	if errors.As(err, &refusal) {
+		return models.NewAppError(http.StatusConflict, models.ErrValidation, refusal.msg)
+	}
+	return models.NewAppErrorWithCause(http.StatusInternalServerError, code, message, err)
+}
+
+// renderWriteFailure renders a write helper's error as a failed ActionResult:
+// 409 with the refusal's text, or 500 with reason. note is appended to either
+// (what else the handler undid, say).
+func renderWriteFailure(c *gin.Context, err error, reason, note string) {
+	var refusal *writeRefusal
+	if errors.As(err, &refusal) {
+		renderResultWithStatus(c, http.StatusConflict, truth.Failed(refusal.msg+note, err))
+		return
+	}
+	renderResult(c, truth.Failed(reason+note, err))
 }
 
 // renameIntoPlace is writeFileAtomic for a path already resolved by

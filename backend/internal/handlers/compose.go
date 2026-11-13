@@ -168,7 +168,7 @@ func (h *ComposeHandler) Put(c *gin.Context) {
 	}
 
 	if err := writeComposeFileAtomic(composePath, []byte(req.Content)); err != nil {
-		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "WRITE_ERROR", "Failed to write compose file", err))
+		handleError(c, writeFailureError(err, "WRITE_ERROR", "Failed to write compose file"))
 		return
 	}
 
@@ -266,7 +266,7 @@ func restoreEnv(envPath string, originalBytes []byte) {
 	// implementation that must stay in sync with the 0600 mode requirement
 	// instead of two that can drift apart (agent-os-i94).
 	//nolint:errcheck // best-effort restore; nothing further to do on failure
-	_ = writeEnvFileAtomic(envPath, string(originalBytes))
+	_ = writeEnvFileAtomic(envPath, string(originalBytes)) //writerefusal:ignore best-effort restore, nothing is rendered
 }
 
 // ComposeEnvRequest is the body for the atomic PUT /api/v1/stacks/:id/compose-env
@@ -461,7 +461,7 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 		// version here downgraded the file's mode on every save because
 		// os.Rename replaces the destination inode wholesale.
 		if err := writeEnvFileAtomic(envPath, envContent); err != nil {
-			renderResult(c, truth.Failed("failed to write env file; compose unchanged", err))
+			renderWriteFailure(c, err, "failed to write env file", "; compose unchanged")
 			return
 		}
 
@@ -477,10 +477,12 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 	// ── Write compose.yaml ──────────────────────────────────────────────────
 	if err := writeComposeFileAtomic(composePath, []byte(req.ComposeContent)); err != nil {
 		// Compose write failed after .env was already replaced — restore .env.
+		note := ""
 		if hasEnvUpdate && envPath != "" {
 			restoreEnv(envPath, originalEnv)
+			note = "; env rolled back"
 		}
-		renderResult(c, truth.Failed("failed to write compose file; env rolled back", err))
+		renderWriteFailure(c, err, "failed to write compose file", note)
 		return
 	}
 
@@ -491,7 +493,7 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 		rollbackErr := ""
 		if originalCompose != nil {
 			//nolint:gosec // composePath was validated against the configured stacks directories above (validateStackPath, symlink-aware) — see README.md "Command execution and file access"
-			if rErr := writeComposeFileAtomic(composePath, originalCompose); rErr != nil {
+			if rErr := writeComposeFileAtomic(composePath, originalCompose); rErr != nil { //writerefusal:ignore rollback; its text already goes to details.rollbackError
 				rollbackErr = rErr.Error()
 			}
 		}
