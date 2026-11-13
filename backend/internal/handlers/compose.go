@@ -243,7 +243,7 @@ func (h *ComposeHandler) Put(c *gin.Context) {
 		return
 	}
 
-	lintResults, err := h.linter.LintCompose(req.Content, stack.Directory, services.StackLintEnv(*stack, globalEnvPath(h.config)))
+	lintResults, err := h.linter.LintCompose(req.Content, stack.Directory, services.StackLintEnv(*stack, globalEnvPath(h.config)), envUnlocked(c))
 	if err != nil {
 		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "LINT_ERROR", "Failed to lint compose file", err))
 		return
@@ -318,7 +318,7 @@ func (h *ComposeHandler) Lint(c *gin.Context) {
 		env = services.StackLintEnv(*stack, globalEnvPath(h.config))
 	}
 
-	lintResults, err := h.linter.LintCompose(req.Content, workingDir, env)
+	lintResults, err := h.linter.LintCompose(req.Content, workingDir, env, envUnlocked(c))
 	if err != nil {
 		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "LINT_ERROR", "Failed to lint compose file", err))
 		return
@@ -487,7 +487,7 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 	if hasEnvUpdate {
 		lintEnv = lintEnv.WithEnvText(envContent)
 	}
-	lintResults, err := h.linter.LintCompose(req.ComposeContent, stack.Directory, lintEnv)
+	lintResults, err := h.linter.LintCompose(req.ComposeContent, stack.Directory, lintEnv, envUnlocked(c))
 	if err != nil {
 		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "LINT_ERROR", "Failed to lint compose file", err))
 		return

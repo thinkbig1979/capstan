@@ -123,7 +123,7 @@ func (h *StacksHandler) Lint(c *gin.Context) {
 	}
 
 	// No stack yet (the create dialog): global.env alone, no folder.
-	lintResults, err := h.linter.LintCompose(req.Compose, "", services.NewLintEnv(globalEnvPath(h.config), ""))
+	lintResults, err := h.linter.LintCompose(req.Compose, "", services.NewLintEnv(globalEnvPath(h.config), ""), envUnlocked(c))
 	if err != nil {
 		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "LINT_ERROR", "Failed to lint compose file", err))
 		return

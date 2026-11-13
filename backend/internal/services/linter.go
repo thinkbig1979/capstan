@@ -34,30 +34,41 @@ func NewLinterService() *LinterService {
 // env_file that is not on disk yet ("missing-env-file"), env files that could
 // not be read ("env-unresolved").
 //
-// A secret never reaches compose-go: every variable whose value the masker
-// treats as secret is interpolated as lintPlaceholder instead
-// (interpolationVars). compose-go quotes interpolated values in its errors,
-// and it quotes them transformed (a size field cut at its last digit, a cast
-// error or a duration escaped by strconv.Quote), so replacing the verbatim
-// value afterwards cannot cover them; these results reach sessions that have
-// not unlocked env values, 422 bodies and logs. A secret's value never decides
-// whether a legitimate file is valid. Every message is still redacted with
-// the secret values, for a secret the content itself spells out.
+// No message ever comes from a lint with the real secret values: every
+// variable whose value the masker treats as secret is interpolated as
+// lintPlaceholder instead (interpolationVars), and only that run's results
+// are returned. compose-go quotes interpolated values in its errors, and it
+// quotes them transformed (a size field cut at its last digit, a cast error
+// or a duration escaped by strconv.Quote), so replacing the verbatim value
+// afterwards cannot cover them; these results reach sessions that have not
+// unlocked env values, 422 bodies and logs. Every message is still redacted
+// with the secret values, for a secret the content itself spells out.
 //
-// Whether the file is valid is still decided with the real values: "0" is not
-// a valid value everywhere a secret-looking variable can go (a volume source,
-// a container name), and the stack deploys with the real ones (review r2
-// R2-D1). That run's messages are never returned. When only the real run
-// passes, the placeholder run's errors are dropped; when only the real run
-// fails, one error with no compose-go text (realValuesError) says so.
-func (l *LinterService) LintCompose(content, workingDir string, env LintEnv) ([]models.LintResult, error) {
+// unlocked is whether the session has unlocked env values (envUnlocked).
+// Locked, the placeholder run alone decides validity: a verdict that
+// depended on the real values would let a locked session bisect a numeric
+// secret through a port range (review r3 Q4-1). When it fails and a
+// placeholder was substituted, one lockedPlaceholderNote says why the error
+// may not hold for the real values. Unlocked, validity is decided with the
+// real values: "0" is not a valid value everywhere a secret-looking variable
+// can go (a volume source, a container name), and the stack deploys with the
+// real ones (review r2 R2-D1). That run's messages are never returned. When
+// only the real run passes, the placeholder run's errors are dropped; when
+// only the real run fails, one error with no compose-go text
+// (realValuesError) says so.
+func (l *LinterService) LintCompose(content, workingDir string, env LintEnv, unlocked bool) ([]models.LintResult, error) {
 	secrets := env.secretValues()
 	placeholder := env.interpolationVars(secrets)
 	results, err := l.lintCompose(content, workingDir, placeholder)
 	if err != nil {
 		return nil, err
 	}
-	if !sameVars(placeholder.Vars, env.Vars) {
+	lockedNote := false
+	switch {
+	case sameVars(placeholder.Vars, env.Vars):
+	case !unlocked:
+		lockedNote = hasErrorResult(results)
+	default:
 		real, err := l.lintCompose(content, workingDir, env)
 		if err != nil {
 			return nil, err
@@ -72,6 +83,12 @@ func (l *LinterService) LintCompose(content, workingDir string, env LintEnv) ([]
 	}
 	for i := range results {
 		results[i].Message = redactComposeOutput(results[i].Message, secrets)
+	}
+	if lockedNote {
+		// After the redaction: the note's fixed text is the same for every
+		// secret value.
+		results = append(results, lockedPlaceholderNote)
+		l.sortResults(results)
 	}
 	return results, nil
 }
@@ -322,6 +339,16 @@ type LintEnv struct {
 // realValuesError is the one result for a file that loads with the
 // placeholder but not with the real values. It quotes nothing: compose-go's
 // text for the real run would quote, possibly transformed, a secret.
+// lockedPlaceholderNote goes with a locked lint that failed after a
+// placeholder was substituted: the error may be the stand-in's, not the
+// file's.
+var lockedPlaceholderNote = models.LintResult{
+	Level:   "info",
+	Line:    1,
+	Message: "Some values are hidden while locked, so lint checked this file with stand-ins for them. If an error points at a field that uses one of those values, unlock to check it with the real values.",
+	Rule:    "locked-placeholder",
+}
+
 var realValuesError = models.LintResult{
 	Level:   "error",
 	Line:    1,
@@ -362,8 +389,9 @@ func sameVars(a, b map[string]string) bool {
 
 // lintPlaceholder is what a secret, or a required variable with no value, is
 // interpolated as. "0" decodes in every typed field a variable usually feeds
-// (ports, cpus, mem_limit, pids_limit, stop_grace_period, deploy.replicas), so
-// the stand-in raises no error of its own.
+// (ports, cpus, mem_limit, pids_limit, stop_grace_period, deploy.replicas).
+// It can still fail where "0" is not valid (a volume source, a container
+// name): LintCompose's doc says who decides then.
 const lintPlaceholder = "0"
 
 // interpolationVars is e with every secret value replaced by lintPlaceholder:

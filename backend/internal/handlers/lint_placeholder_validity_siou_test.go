@@ -12,8 +12,9 @@ import (
 
 // agent-os-siou review r2 (R2-D1): linting with "0" in place of every secret
 // refused deployable files whose secret-looking variable feeds a field "0"
-// is not valid for. Validity is now decided on the REAL values; messages come
-// only from the placeholder run, so no secret reaches a response.
+// is not valid for. For an unlocked session validity is now decided on the
+// REAL values; messages come only from the placeholder run, so no secret
+// reaches a response.
 func TestComposePut_PlaceholderDoesNotRefuseDeployableFiles_siou(t *testing.T) {
 	cases := map[string]struct{ env, compose string }{
 		"key file as a volume source": {"TLS_KEY_FILE=/etc/ssl/private/site.key\n",
@@ -34,13 +35,15 @@ func TestComposePut_PlaceholderDoesNotRefuseDeployableFiles_siou(t *testing.T) {
 	}
 }
 
-// Real values fail, the placeholder passes: one generic error, no text from
-// the real run (which would quote the secret).
+// Unlocked, real values fail, the placeholder passes: one generic error, no
+// text from the real run (which would quote the secret). A locked session
+// never gets a verdict from the real values (review r3 Q4-1,
+// TestComposeLint_LockedVerdictDoesNotDependOnSecret_siou).
 func TestComposeLint_RealValuesFailGivesGenericError_siou(t *testing.T) {
 	const secret = "Qk8vTz3wPm"
 	h, id, _ := composeStackSiou(t, "services:\n  db:\n    image: nginx:1.27\n", "DB_PASSWORD="+secret+"\n")
 	router := gin.New()
-	router.POST("/stacks/:id/compose/lint", h.Lint) // locked
+	router.POST("/stacks/:id/compose/lint", unlockedSiou, h.Lint)
 	w := doJSONSiou(t, router, http.MethodPost, "/stacks/"+id+"/compose/lint",
 		map[string]string{"content": "services:\n  db:\n    image: nginx:1.27\n    restart: always\n    cpus: ${DB_PASSWORD}\n"})
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())

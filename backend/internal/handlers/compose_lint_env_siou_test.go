@@ -185,11 +185,13 @@ func TestComposeLint_LockedSessionNeverSeesEnvValue_siou(t *testing.T) {
 		return resp, w.Body.String()
 	}
 
-	// The real value does not decode as cpus, so the file is invalid (R2-D1),
-	// and the one error says so without quoting the real run.
+	// The real value does not decode as cpus, but a locked verdict comes from
+	// the placeholder alone (review r3 Q4-1): telling numeric from not would
+	// be a bit of the secret. Unlocked, the real run decides
+	// (TestComposeLint_RealValuesFailGivesGenericError_siou).
 	resp, body := lint("services:\n  db:\n    image: postgres:16\n    restart: unless-stopped\n    cpus: ${DB_PASSWORD}\n")
-	assert.False(t, resp.Valid, "%+v", resp.LintResults)
-	assert.Contains(t, body, "does not load with the stack's environment values", body)
+	assert.True(t, resp.Valid, "%+v", resp.LintResults)
+	assert.NotContains(t, body, "does not load with the stack's environment values", body)
 
 	resp, body = lint("services:\n  db:\n    image: postgres:16\n    restart: unless-stopped\n    cpus: ${PLAIN}\n")
 	assert.False(t, resp.Valid, "a non-secret variable is interpolated as itself: %+v", resp.LintResults)

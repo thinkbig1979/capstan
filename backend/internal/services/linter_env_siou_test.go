@@ -27,7 +27,7 @@ func rulesSiou(results []models.LintResult) map[string][]models.LintResult {
 
 func TestLinterService_RequiredVarSetInEnv_siou(t *testing.T) {
 	results, err := NewLinterService().LintCompose(requiredVarComposeSiouSvc, t.TempDir(),
-		LintEnv{Vars: map[string]string{"DB_PASS": "hunter2", "OTHER_REQ": ""}})
+		LintEnv{Vars: map[string]string{"DB_PASS": "hunter2", "OTHER_REQ": ""}}, true)
 	require.NoError(t, err)
 
 	byRule := rulesSiou(results)
@@ -40,7 +40,7 @@ func TestLinterService_RequiredVarSetInEnv_siou(t *testing.T) {
 }
 
 func TestLinterService_RequiredVarUnset_siou(t *testing.T) {
-	results, err := NewLinterService().LintCompose(requiredVarComposeSiouSvc, t.TempDir(), LintEnv{})
+	results, err := NewLinterService().LintCompose(requiredVarComposeSiouSvc, t.TempDir(), LintEnv{}, true)
 	require.NoError(t, err)
 
 	for _, r := range results {
@@ -59,7 +59,7 @@ func TestLinterService_RequiredVarUnset_siou(t *testing.T) {
 // :? refuses an empty value, ? does not.
 func TestLinterService_RequiredVarEmptyColonForm_siou(t *testing.T) {
 	results, err := NewLinterService().LintCompose(requiredVarComposeSiouSvc, t.TempDir(),
-		LintEnv{Vars: map[string]string{"DB_PASS": "", "OTHER_REQ": ""}})
+		LintEnv{Vars: map[string]string{"DB_PASS": "", "OTHER_REQ": ""}}, true)
 	require.NoError(t, err)
 	byRule := rulesSiou(results)
 	require.Len(t, byRule["required-variable"], 1, "%+v", results)
@@ -68,7 +68,7 @@ func TestLinterService_RequiredVarEmptyColonForm_siou(t *testing.T) {
 
 func TestLinterService_EscapedReferenceIsNotRequired_siou(t *testing.T) {
 	compose := "services:\n  web:\n    image: nginx:1.27\n    command: echo $${LITERAL:?x} ${DB_PASS:?y}\n"
-	results, err := NewLinterService().LintCompose(compose, t.TempDir(), LintEnv{})
+	results, err := NewLinterService().LintCompose(compose, t.TempDir(), LintEnv{}, true)
 	require.NoError(t, err)
 	byRule := rulesSiou(results)
 	require.Len(t, byRule["required-variable"], 1, "%+v", results)
@@ -81,7 +81,7 @@ func TestLinterService_MissingEnvFileIsWarning_siou(t *testing.T) {
 	compose := "services:\n  web:\n    image: nginx:1.27\n    env_file: .env\n  opt:\n    image: nginx:1.27\n    env_file:\n      - path: ./optional.env\n        required: false\n"
 	dir := t.TempDir()
 
-	results, err := NewLinterService().LintCompose(compose, dir, LintEnv{})
+	results, err := NewLinterService().LintCompose(compose, dir, LintEnv{}, true)
 	require.NoError(t, err)
 	for _, r := range results {
 		assert.NotEqual(t, "error", r.Level, "%+v", r)
@@ -93,12 +93,12 @@ func TestLinterService_MissingEnvFileIsWarning_siou(t *testing.T) {
 
 	// Present on disk: no warning.
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".env"), []byte("A=1\n"), 0o600))
-	results, err = NewLinterService().LintCompose(compose, dir, LintEnv{})
+	results, err = NewLinterService().LintCompose(compose, dir, LintEnv{}, true)
 	require.NoError(t, err)
 	assert.Empty(t, rulesSiou(results)["missing-env-file"], "%+v", results)
 
 	// Create: the folder does not exist yet.
-	results, err = NewLinterService().LintCompose(compose, filepath.Join(dir, "not-yet"), LintEnv{})
+	results, err = NewLinterService().LintCompose(compose, filepath.Join(dir, "not-yet"), LintEnv{}, true)
 	require.NoError(t, err)
 	for _, r := range results {
 		assert.NotEqual(t, "error", r.Level, "%+v", r)
@@ -114,7 +114,7 @@ func TestLinterService_MessagesNeverQuoteSensitiveValues_siou(t *testing.T) {
 	const secret = "hunter2SECRETsvc"
 	env := LintEnv{Vars: map[string]string{"DB_PASSWORD": secret, "PLAIN": "visible"}}
 	structure := func(compose string) []models.LintResult {
-		results, err := NewLinterService().LintCompose(compose, t.TempDir(), env)
+		results, err := NewLinterService().LintCompose(compose, t.TempDir(), env, true)
 		require.NoError(t, err)
 		var out []models.LintResult
 		for _, r := range results {
@@ -180,7 +180,7 @@ func TestStackLintEnv_UnreadableEnvFileWarns_siou(t *testing.T) {
 	env := StackLintEnv(models.Stack{Directory: dir, ComposeFile: "compose.yaml", EnvFile: ".env"}, "")
 	require.True(t, env.Unresolved)
 
-	results, err := NewLinterService().LintCompose("services:\n  web:\n    image: nginx:1.27\n", dir, env)
+	results, err := NewLinterService().LintCompose("services:\n  web:\n    image: nginx:1.27\n", dir, env, true)
 	require.NoError(t, err)
 	unresolved := rulesSiou(results)["env-unresolved"]
 	require.Len(t, unresolved, 1, "%+v", results)
@@ -201,7 +201,7 @@ func TestLinterService_MissingRequiredKeepsTypedFieldsValid_siou(t *testing.T) {
 		"      # D: ${COMMENTED_OUT:?not a reference}\n"
 	results, err := NewLinterService().LintCompose(compose, t.TempDir(), LintEnv{Vars: map[string]string{
 		"HOST_PORT": "8081", "CPUS": "0.5", "MEM": "256m", "SET_ONE": "x",
-	}})
+	}}, true)
 	require.NoError(t, err)
 	for _, r := range results {
 		assert.NotEqual(t, "error", r.Level, "%+v", r)
