@@ -15,7 +15,7 @@ import { BackupToggle } from '@/components/dashboard/BackupToggle'
 import { BackupPoliciesRefreshNotice } from '@/components/dashboard/BackupPoliciesRefreshNotice'
 import { TabErrorBoundary } from '@/components/TabErrorBoundary'
 import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
-import { Info } from 'lucide-react'
+import { Info, LayoutDashboard, FileCode, ScrollText, SquareTerminal, ChartColumn, Activity, type LucideIcon } from 'lucide-react'
 import { useSearchParams } from 'react-router'
 import { useAutoUpdatePolicies } from '@/hooks/useResources'
 import { useMetricsBase } from '@/hooks/useMetricsBase'
@@ -162,6 +162,15 @@ function OverviewTabContent({
   )
 }
 
+const STACK_TAB_ICONS: Record<StackTab, LucideIcon> = {
+  overview: LayoutDashboard,
+  editor: FileCode,
+  logs: ScrollText,
+  terminal: SquareTerminal,
+  metrics: ChartColumn,
+  activity: Activity,
+}
+
 const STACK_TAB_LABELS: Record<StackTab, string> = {
   overview: 'Overview',
   editor: 'Editor',
@@ -184,7 +193,7 @@ export function StackDetail({ stack, activeTab, onTabChange }: StackDetailProps)
           value={activeTab}
           onValueChange={onTabChange}
           variant="line"
-          tabs={STACK_TABS.map((value) => ({ value, label: STACK_TAB_LABELS[value] }))}
+          tabs={STACK_TABS.map((value) => ({ value, label: STACK_TAB_LABELS[value], icon: STACK_TAB_ICONS[value] }))}
         />
 
         <TabsContent value="overview" className="mt-4">
