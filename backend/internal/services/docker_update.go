@@ -18,6 +18,7 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/mount"
 	dockernet "github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -672,6 +673,67 @@ func withoutImageDefaults(cfg *container.Config, hostCfg *container.HostConfig, 
 	return &out
 }
 
+// withAnonymousVolumes returns a copy of a container's HostConfig that mounts
+// each of its anonymous volumes by name at the same path, so the container
+// recreated from it keeps their data (agent-os-3mox). An anonymous volume (a
+// `-v /path`, an image's VOLUME, a `--mount type=volume` without a source) is
+// one the HostConfig names no source for, and Docker gives every such mount
+// point a fresh, empty volume at create. The old one was left dangling, where
+// the next default volume prune deletes it.
+//
+// It reads the container's actual mounts, not its Config: withoutImageDefaults
+// drops the image's VOLUMEs from the Config, and a `--mount` volume never
+// appears there. "Anonymous" is any volume mount at a destination no bind and
+// no sourced mount names, not the com.docker.volume.anonymous label, which a
+// `--mount` volume created with its own labels does not carry. A volume is
+// carried even when the new image no longer declares its path, as compose does.
+func withAnonymousVolumes(hostCfg *container.HostConfig, mounts []container.MountPoint) *container.HostConfig {
+	out := container.HostConfig{}
+	if hostCfg != nil {
+		out = *hostCfg
+	}
+	out.Mounts = slices.Clone(out.Mounts)
+
+	named := map[string]bool{}
+	for _, b := range out.Binds {
+		// "source:destination[:options]"; Capstan runs Linux daemons only.
+		if parts := strings.Split(b, ":"); len(parts) >= 2 {
+			named[parts[1]] = true
+		}
+	}
+	for _, m := range out.Mounts {
+		if m.Type != mount.TypeVolume || m.Source != "" {
+			named[m.Target] = true
+		}
+	}
+
+	carried := false
+	for _, mp := range mounts {
+		if mp.Type != mount.TypeVolume || mp.Name == "" || named[mp.Destination] {
+			continue
+		}
+		named[mp.Destination] = true
+		carried = true
+		if i := slices.IndexFunc(out.Mounts, func(m mount.Mount) bool { return m.Target == mp.Destination }); i >= 0 {
+			// The user's own --mount without a source: keep its options.
+			out.Mounts[i].Source = mp.Name
+			continue
+		}
+		m := mount.Mount{Type: mount.TypeVolume, Source: mp.Name, Target: mp.Destination, ReadOnly: !mp.RW}
+		if mp.Driver != "" && mp.Driver != "local" {
+			// So the daemon looks the volume up under its own driver, not
+			// the default one. Not tested on a plugin driver: inferred from
+			// the API's VolumeOptions.DriverConfig.
+			m.VolumeOptions = &mount.VolumeOptions{DriverConfig: &mount.Driver{Name: mp.Driver}}
+		}
+		out.Mounts = append(out.Mounts, m)
+	}
+	if !carried {
+		return hostCfg
+	}
+	return &out
+}
+
 // dropKeys returns a copy of m without the keys drop reports, or nil for nil.
 func dropKeys[K ~string, V any](m map[K]V, drop func(string) bool) map[K]V {
 	if m == nil {
@@ -742,6 +804,7 @@ func (s *DockerService) recreateStandaloneContainer(
 		return "", fmt.Errorf("inspecting the current image: %w", err)
 	}
 	config := withoutImageDefaults(inspect.Config, inspect.HostConfig, oldImage)
+	hostConfig := withAnonymousVolumes(inspect.HostConfig, inspect.Mounts)
 
 	setStatus(StatusRecreating)
 	say(StreamStatus, "==> Recreating "+name)
@@ -774,7 +837,7 @@ func (s *DockerService) recreateStandaloneContainer(
 		}
 	}
 
-	newContainer, err := api.ContainerCreate(ctx, config, inspect.HostConfig, netConfig, nil, name)
+	newContainer, err := api.ContainerCreate(ctx, config, hostConfig, netConfig, nil, name)
 	if err != nil {
 		err = fmt.Errorf("creating container: %w", err)
 		return "", errors.Join(err, s.restoreOld(ctx, "", kept, name, wasRunning, say))
