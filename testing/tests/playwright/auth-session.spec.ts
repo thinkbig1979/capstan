@@ -317,7 +317,7 @@ test.describe('Auth session E2E', () => {
     // AuthPage.tsx:42 navigates('/') on success; App.tsx:112 no longer pins
     // to /setup once needsSetup flips false in the store (authStore.ts:41).
     await sharedPage.waitForURL((u) => u.pathname === '/', { timeout: 15_000 })
-    await expect(sharedPage.getByRole('link', { name: 'Settings', exact: true })).toBeVisible({
+    await expect(sharedPage.locator('header').getByRole('link', { name: 'Settings', exact: true })).toBeVisible({
       timeout: 10_000,
     })
   })
@@ -502,7 +502,9 @@ test.describe('Auth session E2E', () => {
     // how the redirect diagnosed above first surfaced — as an opaque
     // "element was detached from the DOM, retrying" against a link that was
     // never the problem.
-    const settingsLink = sharedPage.getByRole('link', { name: 'Settings', exact: true })
+    // The header gear, not the sidebar nav's Settings link (agent-os-hzxs added
+    // a second link with the same name).
+    const settingsLink = sharedPage.locator('header').getByRole('link', { name: 'Settings', exact: true })
     await expect(settingsLink).toBeVisible({ timeout: 10_000 })
     await settingsLink.click()
     await sharedPage.waitForURL((u) => u.pathname === '/settings', { timeout: 15_000 })
