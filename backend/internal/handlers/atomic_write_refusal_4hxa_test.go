@@ -209,7 +209,8 @@ func TestGlobalEnvPut_DanglingLinkAnswers409_4hxa(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "fix or remove the link")
 }
 
-// The guard: every write*FileAtomic call in the handlers either routes its
+// The guard: every call in the handlers that can return a write refusal
+// (write*FileAtomic, resolveWriteTarget, renameIntoPlace) either routes its
 // error through writeFailureError / renderWriteFailure, or carries
 // //writerefusal:ignore with the reason. go:embed, so an -overlay mutant of a
 // handler file is what this reads.
@@ -217,7 +218,7 @@ func TestGlobalEnvPut_DanglingLinkAnswers409_4hxa(t *testing.T) {
 //go:embed *.go
 var handlerSources4hxa embed.FS
 
-var writeCallRe4hxa = regexp.MustCompile(`\bwrite(Compose|Env)?FileAtomic\(`)
+var writeCallRe4hxa = regexp.MustCompile(`\b(resolveWriteTarget|write\w*FileAtomic|renameIntoPlace)\(`)
 
 func TestWriteHelperCallsMapRefusals_4hxa(t *testing.T) {
 	entries, err := handlerSources4hxa.ReadDir(".")

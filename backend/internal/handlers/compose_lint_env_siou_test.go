@@ -196,3 +196,19 @@ func TestComposeLint_LockedSessionNeverSeesEnvValue_siou(t *testing.T) {
 	assert.False(t, resp.Valid, "%+v", resp.LintResults)
 	assert.Contains(t, body, "***", "a secret the content spells out is starred: %s", body)
 }
+
+// Review cor C1: Put's env wiring had no test that could fail. A missing
+// variable is a warning, so the 200 above holds with no env at all; the
+// warning's ABSENCE is what shows the stack's .env was used. REGION is not a
+// sensitive name, so it is interpolated as itself.
+func TestComposePut_LintsWithStackEnv_siou(t *testing.T) {
+	compose := "services:\n  web:\n    image: nginx:1.27\n    restart: always\n    environment:\n      REGION: ${REGION:?set REGION}\n"
+	h, id, _ := composeStackSiou(t, "services:\n  web:\n    image: nginx:1.27\n", "REGION=eu-west\n")
+	router := gin.New()
+	router.PUT("/stacks/:id/compose", unlockedSiou, h.Put)
+
+	w := doJSONSiou(t, router, http.MethodPut, "/stacks/"+id+"/compose", map[string]string{"content": compose})
+
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	assert.NotContains(t, w.Body.String(), "required-variable", "REGION is set in the stack's .env: %s", w.Body.String())
+}
