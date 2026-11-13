@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -94,34 +93,42 @@ func (l *LinterService) lintCompose(content, workingDir string, env LintEnv) ([]
 		})
 	}
 
-	load := func(skipInterpolation bool) (*types.Project, error) {
+	vars := make(map[string]string, len(env.Vars))
+	for k, v := range env.Vars {
+		vars[k] = v
+	}
+	load := func() (*types.Project, error) {
 		return loader.LoadWithContext(context.Background(), types.ConfigDetails{
 			ConfigFiles: []types.ConfigFile{{Content: []byte(content), Filename: "docker-compose.yml"}},
 			WorkingDir:  workingDir,
-			Environment: env.Vars,
+			Environment: vars,
 		}, func(o *loader.Options) {
 			o.SetProjectName("compose-linter", true)
 			// env_file contents are not needed to lint, and a file the
 			// create request has not written yet must not fail the load.
 			// A missing one is reported as a warning below.
 			o.SkipResolveEnvironment = true
-			o.SkipInterpolation = skipInterpolation
 		})
 	}
 
-	composeConfig, err := load(false)
+	// compose-go stops at the first required variable with no value. Each
+	// one is named in a warning and loaded again as lintPlaceholder, until
+	// none is left, so the file is still checked interpolated: an
+	// uninterpolated reload failed every interpolated typed field (ports,
+	// cpus, mem_limit, replicas), set or not (review cor D1). The names are
+	// compose-go's own, so a commented-out or escaped reference is never one.
+	composeConfig, err := load()
 	var missing *template.MissingRequiredError
-	if err != nil && errors.As(err, &missing) {
-		for _, name := range missingRequiredVars(content, env.Vars, missing.Variable) {
-			results = append(results, models.LintResult{
-				Level:   "warning",
-				Line:    findVarLine(content, name),
-				Message: fmt.Sprintf("Required variable %s has no value. Deploy will fail until %s is set in the stack's .env or the global environment.", name, name),
-				Rule:    "required-variable",
-			})
-		}
-		// Load again uninterpolated, so the service checks still run.
-		composeConfig, err = load(true)
+	for tries := 0; err != nil && errors.As(err, &missing) && tries < maxMissingRequired; tries++ {
+		name := missing.Variable
+		results = append(results, models.LintResult{
+			Level:   "warning",
+			Line:    findVarLine(content, name),
+			Message: fmt.Sprintf("Required variable %s has no value. Deploy will fail until %s is set in the stack's .env or the global environment.", name, name),
+			Rule:    "required-variable",
+		})
+		vars[name] = lintPlaceholder
+		composeConfig, err = load()
 	}
 	if err != nil {
 		composeErr := err.Error()
@@ -409,30 +416,9 @@ func processComposeEnv() map[string]string {
 	return env
 }
 
-// requiredRefRe finds ${NAME:?...} and ${NAME?...}. Group 1 is the character
-// before "${" (so an escaped $${ is skipped), 2 the name, 3 is ":" for the
-// form that also refuses an empty value.
-var requiredRefRe = regexp.MustCompile(`(^|[^$])\$\{([A-Za-z_][A-Za-z0-9_]*)(:?)\?`)
-
-// missingRequiredVars names every required variable in content that vars
-// leaves without a value, the one compose-go reported first. compose-go stops
-// at the first; one lint should name all of them.
-func missingRequiredVars(content string, vars map[string]string, first string) []string {
-	names := []string{first}
-	seen := map[string]bool{first: true}
-	for _, m := range requiredRefRe.FindAllStringSubmatch(content, -1) {
-		name := m[2]
-		if seen[name] {
-			continue
-		}
-		v, ok := vars[name]
-		if !ok || (m[3] == ":" && v == "") {
-			seen[name] = true
-			names = append(names, name)
-		}
-	}
-	return names
-}
+// maxMissingRequired bounds the reloads for missing required variables; a
+// file with more is reported as the error compose-go gives for the next one.
+const maxMissingRequired = 100
 
 // findVarLine is the first line of content that references ${name, or 1.
 func findVarLine(content, name string) int {

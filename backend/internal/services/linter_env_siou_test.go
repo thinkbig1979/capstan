@@ -185,3 +185,29 @@ func TestStackLintEnv_UnreadableEnvFileWarns_siou(t *testing.T) {
 		assert.NotContains(t, r.Message, secret)
 	}
 }
+
+// Review cor D1: a missing required variable reloaded the file UNinterpolated,
+// so every interpolated typed field (ports, cpus, mem_limit, replicas) failed
+// to decode, even when its own variable was set, and the save got a 422.
+// Missing variables now stand in as a placeholder; each gets one warning.
+func TestLinterService_MissingRequiredKeepsTypedFieldsValid_siou(t *testing.T) {
+	compose := "services:\n  web:\n    image: nginx:1.27\n    restart: always\n" +
+		"    ports:\n      - \"${HOST_PORT:-8080}:80\"\n    cpus: ${CPUS}\n    mem_limit: ${MEM}\n" +
+		"    deploy:\n      replicas: ${REPLICAS:?set REPLICAS}\n" +
+		"    environment:\n      A: ${MISSING_ONE:?needed}\n      B: ${MISSING_TWO?needed}\n      C: ${SET_ONE:?needed}\n" +
+		"      # D: ${COMMENTED_OUT:?not a reference}\n"
+	results, err := NewLinterService().LintCompose(compose, t.TempDir(), LintEnv{Vars: map[string]string{
+		"HOST_PORT": "8081", "CPUS": "0.5", "MEM": "256m", "SET_ONE": "x",
+	}})
+	require.NoError(t, err)
+	for _, r := range results {
+		assert.NotEqual(t, "error", r.Level, "%+v", r)
+	}
+	var named []string
+	for _, r := range rulesSiou(results)["required-variable"] {
+		assert.Equal(t, "warning", r.Level)
+		named = append(named, strings.Fields(r.Message)[2])
+	}
+	assert.ElementsMatch(t, []string{"REPLICAS", "MISSING_ONE", "MISSING_TWO"}, named,
+		"one warning per missing variable, none for a set one or a comment: %+v", results)
+}
