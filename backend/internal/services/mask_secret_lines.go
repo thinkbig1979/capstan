@@ -49,9 +49,16 @@ const secretMask = userinfoPlaceholder
 // IsSensitiveEnvKey does; a wrongly hidden value costs one unlock.
 //
 // Free text is covered where it names the key: `--db-password=x` and
-// `PASSWORD=x` tokens anywhere on a line. Residual, not covered: a secret
-// that no sensitive name points at and that is not in the stack's env files
-// (`command: hunter2`).
+// `PASSWORD=x` tokens anywhere on a line, and a long flag whose name holds a
+// sensitive word followed by its value as the next token: `--password x` on
+// a line, `"--password", "x"` in a flow sequence, and `- --password` then
+// `- x` as the next item of a YAML sequence that parses. Not covered: short
+// flags (`-p x`, `-px`; -p is usually a port), the next-item form in a YAML
+// file that does not parse, and a secret that no sensitive name points at
+// and that is not in the stack's env files (`command: hunter2`).
+//
+// An alias under a sensitive key masks its anchor's value where the anchor
+// is defined, whatever that key is.
 func MaskSecrets(text, filePath string, secrets []string) (string, int) {
 	if text == "" {
 		return text, 0
@@ -89,6 +96,9 @@ type lineMasker struct {
 	// later pass does not count it again.
 	masked []bool
 	count  int
+	// anchorsMasked are the anchors an alias under a sensitive key has
+	// already masked.
+	anchorsMasked map[*yaml.Node]bool
 }
 
 // isSecretReference reports whether a value is only a variable reference
@@ -164,10 +174,14 @@ func (m *lineMasker) walk(n *yaml.Node) {
 			}
 		}
 	case yaml.SequenceNode:
-		for _, c := range n.Content {
+		for i, c := range n.Content {
 			if c.Kind == yaml.ScalarNode {
 				if key, val, ok := strings.Cut(c.Value, "="); ok && IsSensitiveEnvVar(strings.TrimSpace(key), val) && !isSecretReference(val) {
 					m.maskItemAfterEquals(c)
+				}
+				// An exec-form argv: "--password", "x" (sec D5).
+				if isSensitiveLongFlag(c.Value) && i+1 < len(n.Content) && n.Content[i+1].Kind == yaml.ScalarNode {
+					m.maskNode(n.Content[i+1], c)
 				}
 				continue
 			}
@@ -175,6 +189,16 @@ func (m *lineMasker) walk(n *yaml.Node) {
 		}
 	}
 }
+
+// isSensitiveLongFlag reports whether tok is a long flag with no value of
+// its own whose name IsSensitiveEnvKey matches: --password, --db-token. Short
+// flags never are: -p is usually a port.
+func isSensitiveLongFlag(tok string) bool {
+	name, ok := strings.CutPrefix(tok, "--")
+	return ok && longFlagNameRe.MatchString(name) && IsSensitiveEnvKey(name)
+}
+
+var longFlagNameRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.\-]*$`)
 
 // maskNode masks the value v of sensitive key k: a scalar's text, or every
 // scalar under a mapping or sequence.
@@ -197,8 +221,17 @@ func (m *lineMasker) maskNode(v, k *yaml.Node) {
 			m.maskNode(c, k)
 		}
 	case yaml.AliasNode:
-		// The anchor's value is masked where it is defined, if its key is
-		// sensitive; an alias holds no text of its own.
+		// An alias holds no text of its own: the value shows where its
+		// anchor is defined, under whatever key that is (sec D4). Mask it
+		// there, its continuation measured from the anchor's own line.
+		if v.Alias != nil && !m.anchorsMasked[v.Alias] {
+			if m.anchorsMasked == nil {
+				m.anchorsMasked = map[*yaml.Node]bool{}
+			}
+			// Once per anchor: an alias inside its own anchor would recurse.
+			m.anchorsMasked[v.Alias] = true
+			m.maskNode(v.Alias, nil)
+		}
 	}
 }
 
@@ -217,6 +250,14 @@ func (m *lineMasker) maskScalar(n, k *yaml.Node) {
 	if col > len(line) {
 		m.maskFrom(li, len(line))
 		return
+	}
+	// yaml.v3 places an anchored node at its anchor: the value starts after
+	// "&name ", and the name stays visible.
+	if n.Anchor != "" && strings.HasPrefix(line[col:], "&"+n.Anchor) {
+		col += 1 + len(n.Anchor)
+		for col < len(line) && (line[col] == ' ' || line[col] == '\t') {
+			col++
+		}
 	}
 	switch n.Style {
 	case yaml.LiteralStyle, yaml.FoldedStyle:
@@ -334,6 +375,9 @@ func (m *lineMasker) linePass() {
 		}
 		if !m.masked[i] {
 			m.maskInlineKV(i)
+		}
+		if !m.masked[i] {
+			m.maskFlagNextToken(i)
 		}
 	}
 }
@@ -494,6 +538,71 @@ func (m *lineMasker) maskInlineKV(i int) {
 	}
 }
 
+// flagNextTokenRe is a long flag followed by its value as a separate token on
+// the same line: `--password x` in free text, or `"--password", "x"` in a
+// flow sequence. Group 1 is the flag name; the match ends where the value
+// starts.
+var flagNextTokenRe = regexp.MustCompile(`(?:^|[\s"'\[,(])--([A-Za-z][A-Za-z0-9_.\-]*)["']?(?:\s*,\s*|\s+)`)
+
+// maskFlagNextToken masks the value token after every sensitive long flag on
+// line i (sec D5): up to the next space, quote, comma, bracket or #, the
+// value's own quotes kept. A reference, or a next token that is itself a
+// flag, stays visible.
+func (m *lineMasker) maskFlagNextToken(i int) {
+	for {
+		line := m.lines[i]
+		changed := false
+		for _, loc := range flagNextTokenRe.FindAllStringSubmatchIndex(line, -1) {
+			if !IsSensitiveEnvKey(line[loc[2]:loc[3]]) {
+				continue
+			}
+			start := loc[1]
+			if start < len(line) && (line[start] == '"' || line[start] == '\'') {
+				start++
+			}
+			end := start
+			if strings.HasPrefix(line[start:], "${") {
+				if e := strings.IndexByte(line[start:], '}'); e >= 0 {
+					end = start + e + 1
+				}
+			}
+			for end < len(line) && !strings.ContainsRune(" \t\"',]})#", rune(line[end])) {
+				end++
+			}
+			v := line[start:end]
+			if v == "" || v == secretMask || isSecretReference(v) || strings.HasPrefix(v, "-") {
+				continue
+			}
+			m.lines[i] = line[:start] + secretMask + line[end:]
+			m.count++
+			changed = true
+			break
+		}
+		if !changed {
+			return
+		}
+	}
+}
+
+// MaskArgs masks an argv for a locked session (container inspect's Cmd,
+// Entrypoint, Args, Healthcheck.Test): each element through MaskSecrets's
+// line, URL and value passes, and the element after a sensitive long flag
+// (isSensitiveLongFlag) whole. nil stays nil.
+func MaskArgs(args, secrets []string) []string {
+	if args == nil {
+		return nil
+	}
+	out := make([]string, len(args))
+	for i, a := range args {
+		if i > 0 && isSensitiveLongFlag(args[i-1]) && a != "" && !isSecretReference(a) {
+			out[i] = secretMask
+			continue
+		}
+		out[i], _ = MaskSecrets(a, "", secrets)
+	}
+	return out
+}
+
 // splitTrailingComment splits " # comment" off an unquoted value.
 func splitTrailingComment(s string) (value, comment string) {
 	t := strings.TrimLeft(s, " \t")
@@ -530,8 +639,14 @@ var hunkHeaderRe = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? 
 //
 // Hunk headers are rebuilt without git's trailing function-context text, which
 // quotes a line from outside the hunk. File headers, binary notices and mode
-// lines are kept as git printed them. A hunk whose counts do not match its
-// body is masked line by line with no context, failing closed.
+// lines are kept as git printed them.
+//
+// A hunk body is read by its header's counts, never by line prefix: a removed
+// "-- comment" prints as "--- comment" and an added "++ x" as "+++ x", and a
+// body ended there printed the rest of the file raw (sec D2). A body that does
+// not add up (a short, long or unparseable hunk, a stray line in it, or a
+// body line outside any hunk) fails closed for the whole diff: only its
+// "diff --git" lines are returned.
 func MaskFullContextDiff(diff string, secrets []string) string {
 	if diff == "" {
 		return diff
@@ -559,18 +674,85 @@ func MaskFullContextDiff(diff string, secrets []string) string {
 			out = append(out, line)
 			i++
 		case strings.HasPrefix(line, "@@ "):
-			j := i + 1
-			for j < len(lines) && len(lines[j]) > 0 && strings.ContainsRune(" +-\\", rune(lines[j][0])) &&
-				!strings.HasPrefix(lines[j], "--- ") && !strings.HasPrefix(lines[j], "+++ ") {
-				j++
+			end, ok := hunkBodyEnd(line, lines, i+1)
+			if !ok {
+				return failClosedDiff(lines)
 			}
-			// A context line whose content is empty prints as " ", never "";
-			// a body ends at the first empty line or the next header.
-			out = append(out, maskHunk(line, lines[i+1:j], filePath, secrets)...)
-			i = j
+			hunk, ok := maskHunk(line, lines[i+1:end], filePath, secrets)
+			if !ok {
+				return failClosedDiff(lines)
+			}
+			out = append(out, hunk...)
+			i = end
+		case line != "" && strings.ContainsRune(" +-\\", rune(line[0])):
+			// A body line outside any hunk: the counts did not add up.
+			return failClosedDiff(lines)
 		default:
 			out = append(out, line)
 			i++
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+// hunkBodyEnd is the index just past the body of the hunk whose header is
+// header and whose body starts at lines[from]: exactly the header's old and
+// new counts (an omitted count is 1), plus any "\ No newline" markers. ok is
+// false when the body does not add up.
+func hunkBodyEnd(header string, lines []string, from int) (int, bool) {
+	m := hunkHeaderRe.FindStringSubmatch(header)
+	if m == nil {
+		return 0, false
+	}
+	wantOld, wantNew := hunkNum(m[2], -1), hunkNum(m[4], -1)
+	if m[2] == "" {
+		wantOld = 1
+	}
+	if m[4] == "" {
+		wantNew = 1
+	}
+	if wantOld < 0 || wantNew < 0 {
+		return 0, false
+	}
+	oldN, newN := 0, 0
+	j := from
+	for ; j < len(lines) && (oldN < wantOld || newN < wantNew); j++ {
+		l := lines[j]
+		if l == "" {
+			return 0, false
+		}
+		switch l[0] {
+		case ' ':
+			oldN++
+			newN++
+		case '-':
+			oldN++
+		case '+':
+			newN++
+		case '\\':
+		default:
+			return 0, false
+		}
+		if oldN > wantOld || newN > wantNew {
+			return 0, false
+		}
+	}
+	if oldN != wantOld || newN != wantNew {
+		return 0, false
+	}
+	for j < len(lines) && strings.HasPrefix(lines[j], "\\") {
+		j++
+	}
+	return j, true
+}
+
+// failClosedDiff is what a diff whose structure could not be followed shows:
+// which files changed, and no line of them.
+func failClosedDiff(lines []string) string {
+	var out []string
+	for _, l := range lines {
+		if strings.HasPrefix(l, "diff --git ") {
+			out = append(out, l)
 		}
 	}
 	return strings.Join(out, "\n")
@@ -585,27 +767,12 @@ type diffOp struct {
 	maskTx string
 }
 
-func maskHunk(header string, body []string, filePath string, secrets []string) []string {
+// maskHunk masks one hunk whose body hunkBodyEnd has already measured. ok is
+// false when it cannot be rebuilt, and the caller fails closed.
+func maskHunk(header string, body []string, filePath string, secrets []string) ([]string, bool) {
 	m := hunkHeaderRe.FindStringSubmatch(header)
-	failClosed := func() []string {
-		out := []string{hunkHeaderRe.FindString(header)}
-		for _, l := range body {
-			if l == "" || l[0] == '\\' {
-				out = append(out, l)
-				continue
-			}
-			masked, _ := MaskSecrets(l[1:], filePath, secrets)
-			if masked == l[1:] && strings.TrimSpace(l[1:]) != "" {
-				// Seen out of context, an unchanged line may still sit
-				// inside a multi-line value.
-				masked = secretMask
-			}
-			out = append(out, l[:1]+masked)
-		}
-		return out
-	}
 	if m == nil {
-		return failClosed()
+		return nil, false
 	}
 	oldStart, newStart := hunkNum(m[1], 0), hunkNum(m[3], 0)
 
@@ -613,9 +780,6 @@ func maskHunk(header string, body []string, filePath string, secrets []string) [
 	var oldLines, newLines []string
 	oldNo, newNo := oldStart, newStart
 	for _, l := range body {
-		if l == "" {
-			continue
-		}
 		if l[0] == '\\' {
 			if len(ops) > 0 {
 				ops[len(ops)-1].noEOL = true
@@ -636,12 +800,9 @@ func maskHunk(header string, body []string, filePath string, secrets []string) [
 			newLines = append(newLines, op.text)
 			newNo++
 		default:
-			return failClosed()
+			return nil, false
 		}
 		ops = append(ops, op)
-	}
-	if (m[2] != "" && hunkNum(m[2], -1) != len(oldLines)) || (m[4] != "" && hunkNum(m[4], -1) != len(newLines)) {
-		return failClosed()
 	}
 
 	maskedOld, _ := MaskSecrets(strings.Join(oldLines, "\n"), filePath, secrets)
@@ -654,7 +815,7 @@ func maskHunk(header string, body []string, filePath string, secrets []string) [
 		mn = nil
 	}
 	if len(mo) != len(oldLines) || len(mn) != len(newLines) {
-		return failClosed()
+		return nil, false
 	}
 	oi, ni := 0, 0
 	for k := range ops {
@@ -673,7 +834,7 @@ func maskHunk(header string, body []string, filePath string, secrets []string) [
 			ni++
 		}
 	}
-	return recutHunks(ops)
+	return recutHunks(ops), true
 }
 
 // recutHunks emits ops as unified-diff hunks with diffContextLines of
