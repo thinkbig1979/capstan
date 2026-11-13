@@ -15,6 +15,8 @@ interface ComposeToolbarProps {
   errorCount: number
   /** The file shows masked secrets: extracting a selection could copy "***" into .env (agent-os-w6wx). */
   masked?: boolean
+  /** The editor shows masked text and cannot be edited: Save would send "***" (agent-os-w6wx). */
+  readOnly?: boolean
 }
 
 export function ComposeToolbar({
@@ -29,11 +31,12 @@ export function ComposeToolbar({
   hasUnsavedChanges,
   errorCount,
   masked = false,
+  readOnly = false,
 }: ComposeToolbarProps) {
   return (
     <div className="flex items-center justify-between gap-2">
       <div className="flex items-center gap-2 flex-wrap">
-        <Button onClick={onSave} disabled={isLoading || isSaving || !hasUnsavedChanges || isLintingBeforeSave}>
+        <Button onClick={onSave} disabled={isLoading || isSaving || !hasUnsavedChanges || isLintingBeforeSave || readOnly}>
           <Save className="mr-2 h-4 w-4" />
           {isLintingBeforeSave ? 'Validating...' : isSaving ? 'Saving...' : 'Save'}
         </Button>

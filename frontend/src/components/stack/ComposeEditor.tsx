@@ -66,6 +66,10 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
   })
   const masked = data?.masked ?? false
   const [unlockOpen, setUnlockOpen] = useState(false)
+  // The view shows "***" where secrets are. Edits kept across a re-lock
+  // stay editable: they hold no "***", and the server refuses their save
+  // until unlock.
+  const readOnly = masked && loaded.masked
 
   // The stack row StackPage already fetched, read from the cache: `enabled:
   // false` means this observer never requests it. Decides whether the save
@@ -85,12 +89,10 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
     // view that has moved on (load A, edit and save A', A comes back).
     docKey: loaded,
     ariaLabel: 'Compose file editor',
-    // The view holds "***" where secrets are. Edits kept across a re-lock
-    // stay editable: they hold no "***", and the server refuses their save
-    // until unlock.
-    readOnly: masked && loaded.masked,
+    readOnly,
+    // Ctrl+S is a no-op while read-only: the view holds masked text.
     onSave: () => {
-      handleSaveRef.current()
+      if (!readOnly) handleSaveRef.current()
       return true
     },
     onChange: setContent,
@@ -143,7 +145,9 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
   return (
     <div className="space-y-4">
       <ComposeToolbar
-        onSave={() => handleSave()}
+        onSave={() => {
+          if (!readOnly) handleSave()
+        }}
         onLint={handleLint}
         onExtract={handleExtractToEnv}
         isLoading={isPending}
@@ -154,6 +158,7 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
         hasUnsavedChanges={hasUnsavedChanges}
         errorCount={errorCount}
         masked={masked}
+        readOnly={readOnly}
       />
 
       {masked && (
