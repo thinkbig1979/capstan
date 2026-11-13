@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"maps"
+	"path"
 	"slices"
 	"sort"
 	"strings"
@@ -684,46 +685,69 @@ func withoutImageDefaults(cfg *container.Config, hostCfg *container.HostConfig, 
 // It reads the container's actual mounts, not its Config: withoutImageDefaults
 // drops the image's VOLUMEs from the Config, and a `--mount` volume never
 // appears there. "Anonymous" is any volume mount at a destination no bind and
-// no sourced mount names, not the com.docker.volume.anonymous label, which a
-// `--mount` volume created with its own labels does not carry. A volume is
-// carried even when the new image no longer declares its path, as compose does.
+// no sourced mount names. It is not keyed on the com.docker.volume.anonymous
+// label: whether a `--mount` volume created with its own labels carries that
+// label varies by daemon (on Docker 26.1.5 it did not, OBSERVED in the
+// agent-os-3mox probe). A volume is carried even when the new image no longer
+// declares its path, as compose does.
+//
+// Destinations are compared path.Clean'ed: the HostConfig keeps a destination
+// as the user typed it ("/data/"), while the daemon reports the mount point
+// cleaned ("/data"), and a raw comparison would mount a named volume a second
+// time and fail every update with "Duplicate mount point". A one-part bind
+// ("/data", which the API accepts as an anonymous volume) is rewritten to
+// name its volume rather than gaining a second mount beside it.
 func withAnonymousVolumes(hostCfg *container.HostConfig, mounts []container.MountPoint) *container.HostConfig {
 	out := container.HostConfig{}
 	if hostCfg != nil {
 		out = *hostCfg
 	}
+	out.Binds = slices.Clone(out.Binds)
 	out.Mounts = slices.Clone(out.Mounts)
 
 	named := map[string]bool{}
-	for _, b := range out.Binds {
-		// "source:destination[:options]"; Capstan runs Linux daemons only.
-		if parts := strings.Split(b, ":"); len(parts) >= 2 {
-			named[parts[1]] = true
+	anonBinds := map[string]int{} // destination -> index of a one-part bind
+	for i, b := range out.Binds {
+		// "destination" or "source:destination[:options]"; Capstan runs
+		// Linux daemons only.
+		parts := strings.Split(b, ":")
+		if len(parts) == 1 {
+			anonBinds[path.Clean(parts[0])] = i
+			continue
 		}
+		named[path.Clean(parts[1])] = true
 	}
 	for _, m := range out.Mounts {
 		if m.Type != mount.TypeVolume || m.Source != "" {
-			named[m.Target] = true
+			named[path.Clean(m.Target)] = true
 		}
 	}
 
 	carried := false
 	for _, mp := range mounts {
-		if mp.Type != mount.TypeVolume || mp.Name == "" || named[mp.Destination] {
+		dest := path.Clean(mp.Destination)
+		if mp.Type != mount.TypeVolume || mp.Name == "" || named[dest] {
 			continue
 		}
-		named[mp.Destination] = true
+		named[dest] = true
 		carried = true
-		if i := slices.IndexFunc(out.Mounts, func(m mount.Mount) bool { return m.Target == mp.Destination }); i >= 0 {
+		if i, ok := anonBinds[dest]; ok {
+			out.Binds[i] = mp.Name + ":" + out.Binds[i]
+			continue
+		}
+		if i := slices.IndexFunc(out.Mounts, func(m mount.Mount) bool {
+			return m.Type == mount.TypeVolume && m.Source == "" && path.Clean(m.Target) == dest
+		}); i >= 0 {
 			// The user's own --mount without a source: keep its options.
 			out.Mounts[i].Source = mp.Name
 			continue
 		}
-		m := mount.Mount{Type: mount.TypeVolume, Source: mp.Name, Target: mp.Destination, ReadOnly: !mp.RW}
+		m := mount.Mount{Type: mount.TypeVolume, Source: mp.Name, Target: dest, ReadOnly: !mp.RW}
 		if mp.Driver != "" && mp.Driver != "local" {
-			// So the daemon looks the volume up under its own driver, not
-			// the default one. Not tested on a plugin driver: inferred from
-			// the API's VolumeOptions.DriverConfig.
+			// An existing volume is found by name on any driver; this only
+			// matters if the volume is gone by the time of the create, when
+			// it is then made again on its own driver, not the default one.
+			// Not tested on a plugin driver.
 			m.VolumeOptions = &mount.VolumeOptions{DriverConfig: &mount.Driver{Name: mp.Driver}}
 		}
 		out.Mounts = append(out.Mounts, m)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path"
 	"strings"
 	"sync"
 	"testing"
@@ -27,7 +28,9 @@ import (
 // allocation: a bind or a mount with a source is used as named, every other
 // volume mount point (HostConfig.Mounts without a source, Config.Volumes, the
 // image's VOLUMEs) gets a fresh volume, and two mounts at one destination are
-// refused, as the daemon refuses them.
+// refused, as the daemon refuses them. Destinations are compared path.Clean'ed,
+// as the daemon's Linux mount parser cleans them, and a one-part bind ("/data")
+// is an anonymous volume, as that parser reads it.
 type anonvolDocker struct {
 	*ohiyDocker
 
@@ -47,6 +50,18 @@ const (
 	namedMount = "named2"          // --mount type=volume,source=named2,target=/named2
 	anonRemote = "anon0000remote"  // -v /remote with --volume-driver=example-driver
 )
+
+// newAnonvolDockerWith holds one running container with the given HostConfig
+// binds, mounts and volumes-from, and the mount points the daemon reports for it.
+func newAnonvolDockerWith(t *testing.T, own container.Config, binds []string, mounts []mount.Mount, volumesFrom []string, points []container.MountPoint) *anonvolDocker {
+	t.Helper()
+	d := newOhiyDocker(t, own)
+	old := d.containers[ohiyOldID]
+	old.host.Binds = binds
+	old.host.Mounts = mounts
+	old.host.VolumesFrom = volumesFrom
+	return &anonvolDocker{ohiyDocker: d, mounts: map[string][]container.MountPoint{ohiyOldID: points}}
+}
 
 func newAnonvolDocker(t *testing.T) *anonvolDocker {
 	t.Helper()
@@ -156,16 +171,21 @@ func (w *anonvolDocker) allocate(cfg *container.Config, host *container.HostConf
 	if host != nil {
 		for _, b := range host.Binds {
 			parts := strings.Split(b, ":")
-			mp := container.MountPoint{Type: mount.TypeVolume, Name: parts[0], Destination: parts[1], RW: true}
-			if strings.HasPrefix(parts[0], "/") {
-				mp = container.MountPoint{Type: mount.TypeBind, Source: parts[0], Destination: parts[1]}
+			var mp container.MountPoint
+			switch {
+			case len(parts) == 1:
+				mp = container.MountPoint{Type: mount.TypeVolume, Name: freshName(), Destination: path.Clean(parts[0]), RW: true}
+			case strings.HasPrefix(parts[0], "/"):
+				mp = container.MountPoint{Type: mount.TypeBind, Source: parts[0], Destination: path.Clean(parts[1])}
+			default:
+				mp = container.MountPoint{Type: mount.TypeVolume, Name: parts[0], Destination: path.Clean(parts[1]), RW: true}
 			}
 			if err := add(mp); err != nil {
 				return nil, err
 			}
 		}
 		for _, m := range host.Mounts {
-			mp := container.MountPoint{Type: m.Type, Destination: m.Target, RW: !m.ReadOnly}
+			mp := container.MountPoint{Type: m.Type, Destination: path.Clean(m.Target), RW: !m.ReadOnly}
 			switch m.Type {
 			case mount.TypeVolume:
 				mp.Name = m.Source
@@ -181,7 +201,8 @@ func (w *anonvolDocker) allocate(cfg *container.Config, host *container.HostConf
 		}
 	}
 	for _, vols := range []map[string]struct{}{cfg.Volumes, imgVolumes} {
-		for dest := range vols {
+		for spec := range vols {
+			dest := path.Clean(spec)
 			if taken[dest] {
 				continue // a mount at this destination takes precedence
 			}
@@ -332,5 +353,102 @@ func TestStandaloneUpdateAnonymousVolumeRollbackKeepsVolumesOhiy(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestStandaloneUpdateAnonymousVolumeDestinationShapesOhiy: destination shapes
+// the daemon accepts but stores differently from how it reports them. A
+// HostConfig keeps a destination as typed ("/pg/") while the mount point
+// reports it cleaned ("/pg"), and the API accepts a one-part bind ("/single")
+// as an anonymous volume. Each must be recognised as the mount it already is,
+// or the carry adds a second mount at the same path and every update is refused
+// with "Duplicate mount point", including for containers with only named
+// volumes. Each runs two updates: the second starts from what the first made.
+func TestStandaloneUpdateAnonymousVolumeDestinationShapesOhiy(t *testing.T) {
+	cases := []struct {
+		name        string
+		binds       []string
+		mounts      []mount.Mount
+		volumesFrom []string
+		points      []container.MountPoint
+		want        map[string]string // destination -> volume name after each update
+		check       func(t *testing.T, first container.HostConfig)
+	}{
+		{
+			name:   "named -v with a trailing slash",
+			binds:  []string{"pgdata:/var/lib/postgresql/data/"},
+			points: []container.MountPoint{{Type: mount.TypeVolume, Name: "pgdata", Destination: "/var/lib/postgresql/data", Driver: "local", RW: true}},
+			want:   map[string]string{"/var/lib/postgresql/data": "pgdata"},
+			check: func(t *testing.T, h container.HostConfig) {
+				assert.Equal(t, []string{"pgdata:/var/lib/postgresql/data/"}, h.Binds)
+				assert.Empty(t, h.Mounts, "a named volume is not carried a second time")
+			},
+		},
+		{
+			name:   "named --mount with a trailing slash",
+			mounts: []mount.Mount{{Type: mount.TypeVolume, Source: "n", Target: "/n/"}},
+			points: []container.MountPoint{{Type: mount.TypeVolume, Name: "n", Destination: "/n", Driver: "local", RW: true}},
+			want:   map[string]string{"/n": "n"},
+			check: func(t *testing.T, h container.HostConfig) {
+				assert.Equal(t, []mount.Mount{{Type: mount.TypeVolume, Source: "n", Target: "/n/"}}, h.Mounts)
+			},
+		},
+		{
+			name:   "anonymous --mount with a trailing slash",
+			mounts: []mount.Mount{{Type: mount.TypeVolume, Target: "/mnt3/", VolumeOptions: &mount.VolumeOptions{Labels: map[string]string{"k": "v"}}}},
+			points: []container.MountPoint{{Type: mount.TypeVolume, Name: "anon0000mnt3", Destination: "/mnt3", Driver: "local", RW: true}},
+			want:   map[string]string{"/mnt3": "anon0000mnt3"},
+			check: func(t *testing.T, h container.HostConfig) {
+				assert.Equal(t, []mount.Mount{{Type: mount.TypeVolume, Source: "anon0000mnt3", Target: "/mnt3/",
+					VolumeOptions: &mount.VolumeOptions{Labels: map[string]string{"k": "v"}}}}, h.Mounts,
+					"the user's own mount gets the source; no second mount")
+			},
+		},
+		{
+			name:   "one-part API bind",
+			binds:  []string{"/single"},
+			points: []container.MountPoint{{Type: mount.TypeVolume, Name: "anon0000single", Destination: "/single", Driver: "local", RW: true}},
+			want:   map[string]string{"/single": "anon0000single"},
+			check: func(t *testing.T, h container.HostConfig) {
+				assert.Equal(t, []string{"anon0000single:/single"}, h.Binds, "the bind names the old volume")
+				assert.Empty(t, h.Mounts, "carried through the bind, not a second mount")
+			},
+		},
+		{
+			name:        "read-only volume from --volumes-from",
+			volumesFrom: []string{"other:ro"},
+			points:      []container.MountPoint{{Type: mount.TypeVolume, Name: "anon0000ro", Destination: "/ro", Driver: "local", RW: false}},
+			want:        map[string]string{"/ro": "anon0000ro"},
+			check: func(t *testing.T, h container.HostConfig) {
+				assert.Equal(t, []mount.Mount{{Type: mount.TypeVolume, Source: "anon0000ro", Target: "/ro", ReadOnly: true}}, h.Mounts,
+					"a read-only volume stays read-only")
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newAnonvolDockerWith(t, container.Config{}, tc.binds, tc.mounts, tc.volumesFrom, tc.points)
+			s := &DockerService{updateClient: w}
+
+			id := ohiyOldID
+			for round := 1; round <= 2; round++ {
+				_, ar := s.UpdateContainer(context.Background(), id, nil)
+				require.NotEqual(t, truth.OutcomeFailed, ar.Outcome, "update %d: reason %q err %v", round, ar.Reason, ar.Err)
+				c := w.snapshot()[ohiyOldName]
+				require.NotEqual(t, id, c.id, "update %d recreated the container", round)
+				id = c.id
+				if round == 1 {
+					tc.check(t, w.lastHost(t))
+				}
+				got := w.mountsOf(id)
+				for dest, name := range tc.want {
+					assert.Equal(t, name, got[dest].Name, "update %d: the volume at %s", round, dest)
+				}
+				if dest := "/ro"; tc.want[dest] != "" {
+					assert.False(t, got[dest].RW, "update %d: %s stays read-only", round, dest)
+				}
+			}
+			w.assertNoRemoveDeletesVolumes(t)
+		})
 	}
 }

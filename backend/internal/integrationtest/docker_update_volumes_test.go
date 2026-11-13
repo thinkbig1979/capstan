@@ -25,6 +25,9 @@ import (
 // `--mount type=volume,target=/mnt2` (a source-less HostConfig.Mounts entry),
 // and the named-volume control, which always survived. A second update checks
 // that the carried mounts do not collide with themselves on the next recreate.
+// A named volume at a destination typed with a trailing slash ("/slash/") is
+// stored that way in the HostConfig and reported cleaned in the mounts; a
+// carry that compares the two raw mounts it twice and every update is refused.
 //
 // The image-declared VOLUME case is covered by the fake-daemon test in
 // services: updateTestImage declares no VOLUME, and an image built here could
@@ -38,10 +41,11 @@ func Test_UpdateContainer_Standalone_KeepsAnonymousVolumeData(t *testing.T) {
 
 	name := fmt.Sprintf("capstan-it-3mox-%d", time.Now().UnixNano())
 	named := name + "-named"
+	slash := name + "-slash"
 	leftover := "^/" + name + "-capstan-old-"
 
 	var mu sync.Mutex
-	volumes := map[string]bool{named: true}
+	volumes := map[string]bool{named: true, slash: true}
 	collect := func() {
 		out, err := exec.Command("docker", "inspect", "-f",
 			`{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}} {{end}}{{end}}`, name).CombinedOutput()
@@ -74,13 +78,14 @@ func Test_UpdateContainer_Standalone_KeepsAnonymousVolumeData(t *testing.T) {
 		"-v", "/data",
 		"--mount", "type=volume,target=/mnt2,volume-label=capstan-it-3mox=1",
 		"-v", named+":/named",
+		"-v", slash+":/slash/",
 		updateTestImage, "sleep", "600").CombinedOutput()
 	require.NoError(t, err, "docker run: %s", strings.TrimSpace(string(out)))
 	id := strings.TrimSpace(string(out))
 	collect()
 
 	out, err = exec.Command("docker", "exec", name, "sh", "-c",
-		"echo keep-data > /data/f && echo keep-mnt2 > /mnt2/f && echo keep-named > /named/f").CombinedOutput()
+		"echo keep-data > /data/f && echo keep-mnt2 > /mnt2/f && echo keep-named > /named/f && echo keep-slash > /slash/f").CombinedOutput()
 	require.NoError(t, err, "writing the files: %s", strings.TrimSpace(string(out)))
 
 	svc := newDockerService(t, t.TempDir())
@@ -98,7 +103,7 @@ func Test_UpdateContainer_Standalone_KeepsAnonymousVolumeData(t *testing.T) {
 		require.NotEqual(t, id, newID, "update %d recreated the container", round)
 		id = newID
 
-		for path, want := range map[string]string{"/data/f": "keep-data", "/mnt2/f": "keep-mnt2", "/named/f": "keep-named"} {
+		for path, want := range map[string]string{"/data/f": "keep-data", "/mnt2/f": "keep-mnt2", "/named/f": "keep-named", "/slash/f": "keep-slash"} {
 			out, err := exec.Command("docker", "exec", name, "cat", path).CombinedOutput()
 			assert.NoError(t, err, "update %d: %s is readable: %s", round, path, strings.TrimSpace(string(out)))
 			assert.Equal(t, want, strings.TrimSpace(string(out)), "update %d: %s", round, path)
@@ -108,7 +113,7 @@ func Test_UpdateContainer_Standalone_KeepsAnonymousVolumeData(t *testing.T) {
 			`{{range .Mounts}}{{.Destination}} {{end}}`, name).CombinedOutput()
 		require.NoError(t, err, strings.TrimSpace(string(out)))
 		dests := strings.Fields(string(out))
-		assert.ElementsMatch(t, []string{"/data", "/mnt2", "/named"}, dests,
+		assert.ElementsMatch(t, []string{"/data", "/mnt2", "/named", "/slash"}, dests,
 			"update %d: one mount per destination", round)
 
 		out, err = exec.Command("docker", "ps", "-aq", "--filter", "name="+leftover).CombinedOutput()
