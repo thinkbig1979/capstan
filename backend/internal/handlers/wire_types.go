@@ -106,10 +106,16 @@ type BuildCacheEntry struct {
 
 // ComposeResponse is the wire shape of GET /stacks/:id/compose (ComposeHandler.Get).
 type ComposeResponse struct {
+	// Content is masked (services.MaskSecrets) when Locked.
 	Content      string `json:"content"`
 	Filename     string `json:"filename"`
 	Size         int64  `json:"size"`
 	LastModified string `json:"lastModified"`
+	// Locked is true for a session that has not unlocked env values.
+	Locked bool `json:"locked"`
+	// MaskedValues is how many values Content has masked. Above zero, the
+	// editor is read-only and a save is refused until unlock (agent-os-w6wx).
+	MaskedValues int `json:"maskedValues"`
 }
 
 // ComposeSaveResponse is the wire shape of PUT /stacks/:id/compose (ComposeHandler.Put).

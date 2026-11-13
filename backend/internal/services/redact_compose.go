@@ -177,7 +177,13 @@ func (s *DockerService) composeSecrets(stack models.Stack) []string {
 	if s.config != nil && s.config.DataDir != "" {
 		globalPath = filepath.Join(s.config.DataDir, "global.env")
 	}
+	return StackSecretValues(stack, globalPath)
+}
 
+// StackSecretValues is composeSecrets for callers without a DockerService:
+// the locked views mask these values wherever they appear verbatim
+// (agent-os-w6wx). globalPath "" reads no global.env.
+func StackSecretValues(stack models.Stack, globalPath string) []string {
 	seen := map[string]bool{}
 	var secrets []string
 	add := func(v string) {

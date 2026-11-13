@@ -123,6 +123,20 @@ func (s *GitService) GetChanges(dirPath string) (*models.GitChangesResult, error
 // covers a rename's original path and env symlinks), never from the
 // requested path.
 func (s *GitService) GetChangeDiff(dirPath, path string) (*models.GitChangeDiff, error) {
+	return s.getChangeDiff(dirPath, path, nil)
+}
+
+// GetChangeDiffMasked is GetChangeDiff for a session that has not unlocked
+// env values (agent-os-w6wx): the file's whole diff is fetched and masked with
+// MaskFullContextDiff, secrets being the stack's env values to mask verbatim.
+func (s *GitService) GetChangeDiffMasked(dirPath, path string, secrets []string) (*models.GitChangeDiff, error) {
+	return s.getChangeDiff(dirPath, path, &diffMasking{secrets: secrets})
+}
+
+// diffMasking asks a diff for a locked session; nil means unmasked.
+type diffMasking struct{ secrets []string }
+
+func (s *GitService) getChangeDiff(dirPath, path string, mask *diffMasking) (*models.GitChangeDiff, error) {
 	status, err := s.GetStatus(dirPath)
 	if err != nil {
 		return nil, err
@@ -158,9 +172,17 @@ func (s *GitService) GetChangeDiff(dirPath, path string) (*models.GitChangeDiff,
 	if change.OrigPath != "" {
 		pathspecs = append(pathspecs, change.OrigPath)
 	}
-	diff, _, err := s.gitRun(top, cred, []string{"GIT_LITERAL_PATHSPECS=1"}, append(changeDiffArgs, pathspecs...)...)
+	args := append([]string{}, changeDiffArgs...)
+	if mask != nil {
+		// changeDiffArgs ends in "--": the option goes before it.
+		args = append(append(args[:len(args)-1:len(args)-1], fullContextArg), "--")
+	}
+	diff, _, err := s.gitRun(top, cred, []string{"GIT_LITERAL_PATHSPECS=1"}, append(args, pathspecs...)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read the diff: %w", err)
+	}
+	if mask != nil {
+		diff = MaskFullContextDiff(diff, mask.secrets)
 	}
 	return &models.GitChangeDiff{Path: path, Diff: diff}, nil
 }

@@ -1580,10 +1580,16 @@ func (s *GitService) getLogCLI(dirPath string, limit, offset int) (*models.LogRe
 }
 
 func (s *GitService) GetDiff(dirPath string, commitHash string) (*models.DiffResult, error) {
-	return s.getDiffCLI(dirPath, commitHash)
+	return s.getDiffCLI(dirPath, commitHash, nil)
 }
 
-func (s *GitService) getDiffCLI(dirPath string, commitHash string) (*models.DiffResult, error) {
+// GetDiffMasked is GetDiff for a session that has not unlocked env values
+// (agent-os-w6wx); see historyDiff.
+func (s *GitService) GetDiffMasked(dirPath string, commitHash string, secrets []string) (*models.DiffResult, error) {
+	return s.getDiffCLI(dirPath, commitHash, &diffMasking{secrets: secrets})
+}
+
+func (s *GitService) getDiffCLI(dirPath string, commitHash string, mask *diffMasking) (*models.DiffResult, error) {
 	// Resolved once for the whole diff request (agent-os-9ha) — see
 	// getStatusCLI for why.
 	cred := s.gitCredentials(dirPath)
@@ -1640,7 +1646,7 @@ func (s *GitService) getDiffCLI(dirPath string, commitHash string) (*models.Diff
 	// The patch with every env file left out; see git_history_diff.go. Its
 	// file list is complete, root and merge commits included, and holds the
 	// hidden files too.
-	hd, err := s.historyDiff(dirPath, cred, oid, strings.Fields(parentsOut))
+	hd, err := s.historyDiff(dirPath, cred, oid, strings.Fields(parentsOut), mask)
 	if err != nil {
 		return nil, err
 	}

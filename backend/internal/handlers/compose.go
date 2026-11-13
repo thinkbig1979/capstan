@@ -99,12 +99,61 @@ func (h *ComposeHandler) Get(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, ComposeResponse{
+	resp := ComposeResponse{
 		Content:      string(content),
 		Filename:     stack.ComposeFile,
 		Size:         fileInfo.Size(),
 		LastModified: fileInfo.ModTime().Format(time.RFC3339),
-	})
+		Locked:       !envUnlocked(c),
+	}
+	// A session that has not unlocked env values must not read the secrets
+	// the env views hide from it (agent-os-w6wx).
+	if resp.Locked {
+		resp.Content, resp.MaskedValues = services.MaskSecrets(resp.Content, stack.ComposeFile, h.stackSecrets(*stack))
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// stackSecrets are the stack's env values, masked wherever a locked view
+// shows them verbatim.
+func (h *ComposeHandler) stackSecrets(stack models.Stack) []string {
+	return services.StackSecretValues(stack, globalEnvPath(h.config))
+}
+
+// refuseLockedSecretsSave answers and returns true when this save must not
+// run: the session has not unlocked env values and the file on disk holds a
+// value the GET masked for it, so what the editor holds is "***" where a
+// secret was, and saving it would overwrite the secret (agent-os-w6wx). It is
+// checked on disk, not on the request, so a stale or forged client cannot
+// get past it. A link the write would refuse answers that refusal (409); any
+// other failure to read the file refuses too: fail closed.
+func (h *ComposeHandler) refuseLockedSecretsSave(c *gin.Context, stack *models.Stack, composePath string) bool {
+	if envUnlocked(c) {
+		return false
+	}
+	target, info, err := resolveWriteTarget(composePath)
+	if err != nil {
+		handleError(c, writeFailureError(err, "READ_ERROR", "Failed to read the compose file on disk"))
+		return true
+	}
+	if info == nil {
+		return false // nothing on disk yet, nothing to overwrite
+	}
+	//nolint:gosec // target is the compose path resolved by resolveWriteTarget; only a count of masked values leaves this function
+	content, err := os.ReadFile(target)
+	if err != nil {
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "READ_ERROR", "Failed to read the compose file on disk", err))
+		return true
+	}
+	if _, n := services.MaskSecrets(string(content), stack.ComposeFile, h.stackSecrets(*stack)); n > 0 {
+		c.JSON(http.StatusForbidden, models.NewAppError(
+			http.StatusForbidden,
+			models.ErrForbidden,
+			"Re-enter your password to edit a compose file that holds secrets",
+		))
+		return true
+	}
+	return false
 }
 
 func (h *ComposeHandler) Put(c *gin.Context) {
@@ -138,6 +187,11 @@ func (h *ComposeHandler) Put(c *gin.Context) {
 		return
 	}
 	defer releaseLock()
+
+	// Before the lint: a refused save answers 403, whatever the content.
+	if h.refuseLockedSecretsSave(c, stack, composePath) {
+		return
+	}
 
 	lintResults, err := h.linter.LintCompose(req.Content, stack.Directory, services.StackLintEnv(*stack, globalEnvPath(h.config)))
 	if err != nil {
@@ -369,6 +423,11 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 		return
 	}
 	defer releaseLock()
+
+	// Before the lint: a refused save answers 403, whatever the content.
+	if h.refuseLockedSecretsSave(c, stack, composePath) {
+		return
+	}
 
 	// ── Lint compose before touching disk ──────────────────────────────────
 	// The env half of this save is the env compose will read, so a variable
