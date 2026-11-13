@@ -150,6 +150,40 @@ describe('LoginForm', () => {
       expect(onSubmit.mock.calls[0][0]).toMatchObject({ username: 'admin', password })
     })
 
+    // react-hook-form moved focus to the first invalid field on a failed
+    // submit; the plain-state rewrite has to keep that cue (agent-os-orxo).
+    it('focuses the first invalid field after a failed submit', async () => {
+      const user = userEvent.setup()
+      const onSubmit = vi.fn()
+      render(<LoginForm onSubmit={onSubmit} buttonText="Create Account" enforceComplexity />)
+
+      await user.click(screen.getByRole('button', { name: /create account/i }))
+      expect(screen.getByLabelText(/username/i)).toHaveFocus()
+
+      await user.type(screen.getByLabelText(/username/i), 'admin')
+      await user.click(screen.getByRole('button', { name: /create account/i }))
+      expect(screen.getByLabelText('Password')).toHaveFocus()
+
+      await user.type(screen.getByLabelText('Password'), 'Str0ng!pass')
+      await user.click(screen.getByRole('button', { name: /create account/i }))
+      expect(screen.getByLabelText(/confirm password/i)).toHaveFocus()
+      expect(onSubmit).not.toHaveBeenCalled()
+    })
+
+    it('marks an invalid field and links it to its message', async () => {
+      const user = userEvent.setup()
+      render(<LoginForm onSubmit={vi.fn()} buttonText="Create Account" enforceComplexity />)
+
+      await user.type(screen.getByLabelText(/username/i), 'admin')
+      await user.type(screen.getByLabelText('Password'), 'lowercaseonly')
+      await user.click(screen.getByRole('button', { name: /create account/i }))
+
+      const password = screen.getByLabelText('Password')
+      expect(password).toHaveAttribute('aria-invalid', 'true')
+      expect(password).toHaveAccessibleDescription(/uppercase letter/i)
+      expect(screen.getByLabelText(/username/i)).not.toHaveAttribute('aria-invalid', 'true')
+    })
+
     it('does not over-enforce complexity on the login form', async () => {
       const user = userEvent.setup()
       const onSubmit = vi.fn().mockResolvedValue(undefined)

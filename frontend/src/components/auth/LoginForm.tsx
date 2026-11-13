@@ -1,4 +1,4 @@
-import { useState, type ChangeEvent, type FormEvent } from 'react'
+import { useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -14,6 +14,9 @@ interface FormValues extends LoginFormData {
 }
 
 type FieldErrors = Partial<Record<keyof FormValues, string>>
+
+// Rule order, which is also the order a failed submit looks for a field to focus.
+const FIELD_ORDER: (keyof FormValues)[] = ['username', 'password', 'confirmPassword']
 
 // bcrypt's input limit, in UTF-8 bytes. The server (ValidatePassword) refuses
 // anything longer, so Setup says so before the request (agent-os-orxo).
@@ -82,6 +85,9 @@ export function LoginForm({
   // Errors appear on the first submit and then follow every keystroke.
   const [submitted, setSubmitted] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
+  const usernameRef = useRef<HTMLInputElement>(null)
+  const passwordRef = useRef<HTMLInputElement>(null)
+  const confirmPasswordRef = useRef<HTMLInputElement>(null)
 
   const validate = enforceComplexity ? validateSetup : validateLogin
   const errors: FieldErrors = submitted ? validate(values) : {}
@@ -91,10 +97,22 @@ export function LoginForm({
   const setField = (field: keyof FormValues) => (e: ChangeEvent<HTMLInputElement>) =>
     setValues((v) => ({ ...v, [field]: e.target.value }))
 
+  // aria-invalid plus a link to the message, so the error is announced and not
+  // only shown in red.
+  const errorProps = (field: keyof FormValues) =>
+    errors[field] ? { 'aria-invalid': true, 'aria-describedby': `${field}-error` } : {}
+
   const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     setSubmitted(true)
-    if (Object.values(validate(values)).some(Boolean)) return
+    const found = validate(values)
+    const firstInvalid = FIELD_ORDER.find((field) => found[field])
+    if (firstInvalid) {
+      // Move focus to the first problem, as react-hook-form did.
+      const refs = { username: usernameRef, password: passwordRef, confirmPassword: confirmPasswordRef }
+      refs[firstInvalid].current?.focus()
+      return
+    }
     void onSubmit({ username: values.username, password: values.password })
   }
 
@@ -108,10 +126,16 @@ export function LoginForm({
           type="text"
           autoComplete="username"
           autoFocus
+          ref={usernameRef}
           value={values.username}
           onChange={setField('username')}
+          {...errorProps('username')}
         />
-        {errors.username && <p className="text-sm text-destructive">{errors.username}</p>}
+        {errors.username && (
+          <p id="username-error" className="text-sm text-destructive">
+            {errors.username}
+          </p>
+        )}
       </div>
 
       <div className="space-y-2">
@@ -123,8 +147,10 @@ export function LoginForm({
             type={showPassword ? 'text' : 'password'}
             autoComplete={passwordAutoComplete}
             className="flex-1"
+            ref={passwordRef}
             value={values.password}
             onChange={setField('password')}
+            {...errorProps('password')}
           />
           <Button
             type="button"
@@ -138,7 +164,11 @@ export function LoginForm({
           </Button>
         </div>
         <p className="text-sm text-muted-foreground">{passwordHint}</p>
-        {errors.password && <p className="text-sm text-destructive">{errors.password}</p>}
+        {errors.password && (
+          <p id="password-error" className="text-sm text-destructive">
+            {errors.password}
+          </p>
+        )}
       </div>
 
       {enforceComplexity && (
@@ -149,10 +179,16 @@ export function LoginForm({
             name="confirmPassword"
             type={showPassword ? 'text' : 'password'}
             autoComplete="new-password"
+            ref={confirmPasswordRef}
             value={values.confirmPassword}
             onChange={setField('confirmPassword')}
+            {...errorProps('confirmPassword')}
           />
-          {errors.confirmPassword && <p className="text-sm text-destructive">{errors.confirmPassword}</p>}
+          {errors.confirmPassword && (
+            <p id="confirmPassword-error" className="text-sm text-destructive">
+              {errors.confirmPassword}
+            </p>
+          )}
         </div>
       )}
 
