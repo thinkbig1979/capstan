@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/docker/docker/api/types/build"
@@ -371,6 +372,13 @@ func (h *ResourcesHandler) inspectContainer(c *gin.Context) {
 		return
 	}
 
+	// A session that has not unlocked env values must not read them here
+	// either: Config.Env holds every value the container started with,
+	// interpolated .env secrets included (agent-os-yvlh).
+	if !envUnlocked(c) && inspect.Config != nil {
+		inspect.Config.Env = maskContainerEnv(inspect.Config.Env)
+	}
+
 	formatted, err := json.MarshalIndent(inspect, "", "  ")
 	if err != nil {
 		slog.Error("Failed to format inspect output", "id", id, "error", err)
@@ -379,6 +387,26 @@ func (h *ResourcesHandler) inspectContainer(c *gin.Context) {
 	}
 
 	c.Data(http.StatusOK, "application/json", formatted)
+}
+
+// maskContainerEnv masks a container's KEY=value entries the way the locked
+// env views do: the value of every entry IsSensitiveEnvVar matches becomes
+// "***". An entry with no "=" cannot be classified and is masked whole: fail
+// closed.
+func maskContainerEnv(env []string) []string {
+	out := make([]string, len(env))
+	for i, e := range env {
+		k, v, ok := strings.Cut(e, "=")
+		switch {
+		case !ok:
+			out[i] = "***"
+		case services.IsSensitiveEnvVar(k, v):
+			out[i] = k + "=***"
+		default:
+			out[i] = e
+		}
+	}
+	return out
 }
 
 func (h *ResourcesHandler) listVolumes(c *gin.Context) {
