@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"maps"
+	"path"
 	"slices"
 	"sort"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/mount"
 	dockernet "github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -672,6 +674,90 @@ func withoutImageDefaults(cfg *container.Config, hostCfg *container.HostConfig, 
 	return &out
 }
 
+// withAnonymousVolumes returns a copy of a container's HostConfig that mounts
+// each of its anonymous volumes by name at the same path, so the container
+// recreated from it keeps their data (agent-os-3mox). An anonymous volume (a
+// `-v /path`, an image's VOLUME, a `--mount type=volume` without a source) is
+// one the HostConfig names no source for, and Docker gives every such mount
+// point a fresh, empty volume at create. The old one was left dangling, where
+// the next default volume prune deletes it.
+//
+// It reads the container's actual mounts, not its Config: withoutImageDefaults
+// drops the image's VOLUMEs from the Config, and a `--mount` volume never
+// appears there. "Anonymous" is any volume mount at a destination no bind and
+// no sourced mount names. It is not keyed on the com.docker.volume.anonymous
+// label: whether a `--mount` volume created with its own labels carries that
+// label varies by daemon (on Docker 26.1.5 it did not, OBSERVED in the
+// agent-os-3mox probe). A volume is carried even when the new image no longer
+// declares its path, as compose does.
+//
+// Destinations are compared path.Clean'ed: the HostConfig keeps a destination
+// as the user typed it ("/data/"), while the daemon reports the mount point
+// cleaned ("/data"), and a raw comparison would mount a named volume a second
+// time and fail every update with "Duplicate mount point". A one-part bind
+// ("/data", which the API accepts as an anonymous volume) is rewritten to
+// name its volume rather than gaining a second mount beside it.
+func withAnonymousVolumes(hostCfg *container.HostConfig, mounts []container.MountPoint) *container.HostConfig {
+	out := container.HostConfig{}
+	if hostCfg != nil {
+		out = *hostCfg
+	}
+	out.Binds = slices.Clone(out.Binds)
+	out.Mounts = slices.Clone(out.Mounts)
+
+	named := map[string]bool{}
+	anonBinds := map[string]int{} // destination -> index of a one-part bind
+	for i, b := range out.Binds {
+		// "destination" or "source:destination[:options]"; Capstan runs
+		// Linux daemons only.
+		parts := strings.Split(b, ":")
+		if len(parts) == 1 {
+			anonBinds[path.Clean(parts[0])] = i
+			continue
+		}
+		named[path.Clean(parts[1])] = true
+	}
+	for _, m := range out.Mounts {
+		if m.Type != mount.TypeVolume || m.Source != "" {
+			named[path.Clean(m.Target)] = true
+		}
+	}
+
+	carried := false
+	for _, mp := range mounts {
+		dest := path.Clean(mp.Destination)
+		if mp.Type != mount.TypeVolume || mp.Name == "" || named[dest] {
+			continue
+		}
+		named[dest] = true
+		carried = true
+		if i, ok := anonBinds[dest]; ok {
+			out.Binds[i] = mp.Name + ":" + out.Binds[i]
+			continue
+		}
+		if i := slices.IndexFunc(out.Mounts, func(m mount.Mount) bool {
+			return m.Type == mount.TypeVolume && m.Source == "" && path.Clean(m.Target) == dest
+		}); i >= 0 {
+			// The user's own --mount without a source: keep its options.
+			out.Mounts[i].Source = mp.Name
+			continue
+		}
+		m := mount.Mount{Type: mount.TypeVolume, Source: mp.Name, Target: dest, ReadOnly: !mp.RW}
+		if mp.Driver != "" && mp.Driver != "local" {
+			// An existing volume is found by name on any driver; this only
+			// matters if the volume is gone by the time of the create, when
+			// it is then made again on its own driver, not the default one.
+			// Not tested on a plugin driver.
+			m.VolumeOptions = &mount.VolumeOptions{DriverConfig: &mount.Driver{Name: mp.Driver}}
+		}
+		out.Mounts = append(out.Mounts, m)
+	}
+	if !carried {
+		return hostCfg
+	}
+	return &out
+}
+
 // dropKeys returns a copy of m without the keys drop reports, or nil for nil.
 func dropKeys[K ~string, V any](m map[K]V, drop func(string) bool) map[K]V {
 	if m == nil {
@@ -742,6 +828,7 @@ func (s *DockerService) recreateStandaloneContainer(
 		return "", fmt.Errorf("inspecting the current image: %w", err)
 	}
 	config := withoutImageDefaults(inspect.Config, inspect.HostConfig, oldImage)
+	hostConfig := withAnonymousVolumes(inspect.HostConfig, inspect.Mounts)
 
 	setStatus(StatusRecreating)
 	say(StreamStatus, "==> Recreating "+name)
@@ -774,7 +861,7 @@ func (s *DockerService) recreateStandaloneContainer(
 		}
 	}
 
-	newContainer, err := api.ContainerCreate(ctx, config, inspect.HostConfig, netConfig, nil, name)
+	newContainer, err := api.ContainerCreate(ctx, config, hostConfig, netConfig, nil, name)
 	if err != nil {
 		err = fmt.Errorf("creating container: %w", err)
 		return "", errors.Join(err, s.restoreOld(ctx, "", kept, name, wasRunning, say))
