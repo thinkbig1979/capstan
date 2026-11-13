@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Tabs, TabsContent } from '@/components/ui/tabs'
 import { ResponsiveTabsList } from '@/components/ui/responsive-tabs-list'
 import { StackCardSkeleton, MetricsSkeleton, DialogLoadingFallback } from '@/components/LoadingSkeleton'
-import { AlertCircle, RefreshCw, Plus } from 'lucide-react'
+import { AlertCircle, RefreshCw, Plus, Layers, ChartColumn, FolderTree, CircleArrowUp, Archive, type LucideIcon } from 'lucide-react'
 import { useStackStatusAnimation } from '@/hooks/useStackStatusAnimation'
 import { useUpdateScanStore } from '@/stores/updateScanStore'
 import { useDashboardMetricsContext } from '@/hooks/DashboardMetricsContext'
@@ -349,7 +349,7 @@ function DashboardContent() {
           value={activeTab}
           onValueChange={setActiveTab}
           variant="line"
-          tabs={DASHBOARD_TABS.map((value) => ({ value, label: tabLabels[value] }))}
+          tabs={DASHBOARD_TABS.map((value) => ({ value, label: tabLabels[value], icon: DASHBOARD_TAB_ICONS[value] }))}
         />
 
         <TabsContent value="overview" className="mt-4">
@@ -469,4 +469,12 @@ function DashboardContent() {
       <ConfirmComponent />
     </div>
   )
+}
+
+const DASHBOARD_TAB_ICONS: Record<DashboardTab, LucideIcon> = {
+  stacks: Layers,
+  overview: ChartColumn,
+  directories: FolderTree,
+  updates: CircleArrowUp,
+  backups: Archive,
 }

@@ -1,4 +1,5 @@
 import type React from 'react'
+import type { LucideIcon } from 'lucide-react'
 import { TabsList, TabsTrigger, type tabsListVariants } from '@/components/ui/tabs'
 import {
   Select,
@@ -13,6 +14,7 @@ import type { VariantProps } from 'class-variance-authority'
 interface Tab {
   value: string
   label: React.ReactNode
+  icon?: LucideIcon
 }
 
 interface ResponsiveTabsListProps {
@@ -49,6 +51,7 @@ export function ResponsiveTabsList({
       <TabsList variant={variant} className={cn('hidden md:inline-flex w-full', className)}>
         {tabs.map((tab) => (
           <TabsTrigger key={tab.value} value={tab.value}>
+            {tab.icon && <tab.icon aria-hidden="true" />}
             {tab.label}
           </TabsTrigger>
         ))}
