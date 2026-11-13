@@ -39,7 +39,7 @@ export function HostTiles() {
         </h2>
         <Link
           to="/host"
-          className="inline-flex min-h-[44px] items-center gap-1 text-sm font-medium text-primary hover:underline sm:min-h-0"
+          className="inline-flex min-h-[44px] items-center gap-1 text-sm font-medium text-primary underline underline-offset-4 sm:min-h-0"
         >
           Open host overview
           <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
