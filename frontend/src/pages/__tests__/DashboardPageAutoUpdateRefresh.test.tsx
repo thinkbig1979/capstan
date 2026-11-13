@@ -63,8 +63,8 @@ vi.mock('@/components/dashboard/DashboardHeader', () => ({
 vi.mock('@/components/dashboard/AttentionStrip', () => ({
   AttentionStrip: () => <div data-testid="attention-strip" />,
 }))
-vi.mock('@/components/dashboard/HostStrip', () => ({
-  HostStrip: () => <div data-testid="host-strip" />,
+vi.mock('@/components/dashboard/HostTiles', () => ({
+  HostTiles: () => <div data-testid="host-tiles" />,
 }))
 vi.mock('@/components/dashboard/BackupToggle', () => ({
   BackupToggle: () => <div data-testid="backup-toggle" />,

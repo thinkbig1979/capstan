@@ -105,3 +105,62 @@ export function hostCards(s: HostSummary): HostCardModel[] {
     },
   ]
 }
+
+export interface HostTileModel {
+  view: HostView
+  label: string
+  value: string
+  sub: string
+  /** True when the sub-line names something that can be freed. */
+  reclaimable: boolean
+}
+
+const ALL_IN_USE = 'all in use'
+
+/**
+ * The five dashboard tiles' text from one summary (agent-os-hzxs). The volume
+ * size reads "size unknown" when Docker could not measure every volume (AC15).
+ */
+export function hostTiles(s: HostSummary): HostTileModel[] {
+  const label = hostViewLabel
+  const unused = (bytes: number) => `${formatBytes(bytes)} unused`
+  return [
+    {
+      view: 'containers',
+      label: label('containers'),
+      value: String(s.containers.count),
+      sub: s.containers.reclaimableCount > 0 ? plural(s.containers.reclaimableCount, 'leftover', 'leftovers') : ALL_IN_USE,
+      reclaimable: s.containers.reclaimableCount > 0,
+    },
+    {
+      view: 'images',
+      label: label('images'),
+      value: formatBytes(s.images.bytes),
+      sub: s.images.reclaimableCount > 0 ? unused(s.images.reclaimableBytes) : ALL_IN_USE,
+      reclaimable: s.images.reclaimableCount > 0,
+    },
+    {
+      view: 'volumes',
+      label: label('volumes'),
+      value: s.volumes.sizeKnown ? formatBytes(s.volumes.bytes) : SIZE_UNKNOWN,
+      sub: `${plural(s.volumes.count, 'volume', 'volumes')} · ${
+        s.volumes.reclaimableCount > 0 ? `${s.volumes.reclaimableCount} unattached` : ALL_IN_USE
+      }`,
+      reclaimable: s.volumes.reclaimableCount > 0,
+    },
+    {
+      view: 'networks',
+      label: label('networks'),
+      value: String(s.networks.count),
+      sub: s.networks.reclaimableCount > 0 ? `${s.networks.reclaimableCount} unused` : ALL_IN_USE,
+      reclaimable: s.networks.reclaimableCount > 0,
+    },
+    {
+      view: 'build-cache',
+      label: label('build-cache'),
+      value: formatBytes(s.buildCache.bytes),
+      sub: s.buildCache.reclaimableBytes > 0 ? unused(s.buildCache.reclaimableBytes) : ALL_IN_USE,
+      reclaimable: s.buildCache.reclaimableBytes > 0,
+    },
+  ]
+}

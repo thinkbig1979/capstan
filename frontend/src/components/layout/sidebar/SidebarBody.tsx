@@ -1,6 +1,7 @@
 import type { BackupStatus, Stack, StackStatus } from '@/types'
 import type { BulkAction } from './constants'
 import { SidebarHeader } from './SidebarHeader'
+import { SidebarNav } from './SidebarNav'
 import { BulkActionBar } from './BulkActionBar'
 import { FilterSummaryBar } from './FilterSummaryBar'
 import { StackListBody } from './StackListBody'
@@ -61,6 +62,8 @@ export function SidebarBody({
 }: SidebarBodyProps) {
   return (
     <>
+      <SidebarNav />
+
       <SidebarHeader
         stackCount={stacksLoadFailed ? undefined : stacks.length}
         updateCount={updateCount}

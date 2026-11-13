@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, act, within } from '@testing-librar
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router'
 
+const { hostSummaryMock } = vi.hoisted(() => ({ hostSummaryMock: vi.fn() }))
 const startMock = vi.fn().mockResolvedValue({ outcome: 'success', reason: 'started' })
 const stopMock = vi.fn().mockResolvedValue({ outcome: 'success', reason: 'stopped' })
 
@@ -18,7 +19,10 @@ vi.mock('@/lib/api', () => ({
     pull: vi.fn().mockResolvedValue({ outcome: 'success' }),
   },
   settingsApi: { getConfig: vi.fn().mockResolvedValue({ stacksDir: '/stacks', stacksDirectories: [] }) },
-  resourcesApi: { checkUpdates: vi.fn().mockResolvedValue({ updates: [{ id: 'u1' }, { id: 'u2' }, { id: 'u3' }] }) },
+  resourcesApi: {
+    checkUpdates: vi.fn().mockResolvedValue({ updates: [{ id: 'u1' }, { id: 'u2' }, { id: 'u3' }] }),
+    hostSummary: () => hostSummaryMock(),
+  },
   backupApi: {
     getStatus: vi.fn().mockResolvedValue({
       schedulerRunning: true,
@@ -37,6 +41,7 @@ import { Sidebar } from '../Sidebar'
 import { useUIStore } from '@/stores/uiStore'
 import { resourcesApi, stacksApi, settingsApi } from '@/lib/api'
 import { queryKeys } from '@/lib/query-keys'
+import { GiB, makeHostSummary } from '@/test/hostSummary'
 
 const checkUpdatesMock = vi.mocked(resourcesApi.checkUpdates)
 const listMock = vi.mocked(stacksApi.list)
@@ -68,16 +73,18 @@ beforeEach(() => {
   stopMock.mockClear()
   checkUpdatesMock.mockReset()
   checkUpdatesMock.mockResolvedValue(updatesResult(3))
+  hostSummaryMock.mockReset()
+  hostSummaryMock.mockResolvedValue(makeHostSummary())
   useUIStore.setState({ sidebarOpen: true, pinnedStacks: [] })
   // sidebar-search/-filter/-sort/-collapsed persist to localStorage; without
   // clearing, state leaks between tests in this file (a pre-existing gap).
   localStorage.clear()
 })
 
-function renderSidebar() {
+function renderSidebar(path = '/') {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
   const rendered = render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[path]}>
       <QueryClientProvider client={queryClient}>
         <Sidebar />
       </QueryClientProvider>
@@ -334,6 +341,57 @@ describe('Sidebar', () => {
 
 // agent-os-eldv: pinning MOVES a stack to the top of the one list. It used to
 // render the stack in a "Pinned" block AND again in the main list.
+describe('Sidebar — main navigation', () => {
+  const hostLink = (container: HTMLElement) => within(desktopAside(container)).getByTestId('sidebar-nav-host')
+
+  it('links to the Docker host page above the stack list, with the reclaimable badge', async () => {
+    hostSummaryMock.mockResolvedValue(makeHostSummary({ disk: { reclaimable: 14.9 * GiB } }))
+    const { container } = renderSidebar()
+
+    const link = hostLink(container)
+    expect(link).toHaveAttribute('href', '/host')
+    expect(link).toHaveTextContent('Docker host')
+    expect(await within(link).findByTestId('sidebar-nav-host-badge')).toHaveTextContent('14.90 GB')
+    const nav = within(desktopAside(container)).getByRole('navigation', { name: 'Main' })
+    expect(within(nav).getByRole('link', { name: 'Dashboard' })).toHaveAttribute('href', '/')
+    expect(within(nav).getByRole('link', { name: 'Settings' })).toHaveAttribute('href', '/settings')
+    // The stack list stays, below the nav.
+    await waitFor(() => expect(stackLinks(desktopAside(container)).length).toBe(2))
+    expect(nav.compareDocumentPosition(stackLinks(desktopAside(container))[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('hides the badge when nothing is reclaimable', async () => {
+    const { container, queryClient } = renderSidebar()
+
+    await waitFor(() => expect(queryClient.getQueryState(queryKeys.resources.hostSummary())?.status).toBe('success'))
+    expect(within(hostLink(container)).queryByTestId('sidebar-nav-host-badge')).not.toBeInTheDocument()
+  })
+
+  it('hides the badge, never "0 B", when the summary could not be read', async () => {
+    hostSummaryMock.mockRejectedValue(new Error('503'))
+    const { container, queryClient } = renderSidebar()
+
+    await waitFor(() => expect(queryClient.getQueryState(queryKeys.resources.hostSummary())?.status).toBe('error'))
+    expect(within(hostLink(container)).queryByTestId('sidebar-nav-host-badge')).not.toBeInTheDocument()
+  })
+
+  it.each(['/host', '/host/images'])('marks Docker host as the current page on %s', (path) => {
+    const { container } = renderSidebar(path)
+
+    expect(hostLink(container)).toHaveAttribute('aria-current', 'page')
+    const nav = within(desktopAside(container)).getByRole('navigation', { name: 'Main' })
+    expect(within(nav).getByRole('link', { name: 'Dashboard' })).not.toHaveAttribute('aria-current')
+  })
+
+  it('marks Dashboard, not Docker host, as current on /', () => {
+    const { container } = renderSidebar('/')
+
+    expect(hostLink(container)).not.toHaveAttribute('aria-current')
+    const nav = within(desktopAside(container)).getByRole('navigation', { name: 'Main' })
+    expect(within(nav).getByRole('link', { name: 'Dashboard' })).toHaveAttribute('aria-current', 'page')
+  })
+})
+
 describe('Sidebar — pinned stacks move to the top', () => {
   const five = (statuses: Record<string, string> = {}) =>
     ['alpha', 'bravo', 'charlie', 'delta', 'echo'].map((n, i) => ({

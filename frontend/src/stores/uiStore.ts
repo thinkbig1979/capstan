@@ -33,6 +33,12 @@ interface UIState {
   logPrefs: LogPrefs
   /** Stack ids the user pinned to the top of the sidebar list. */
   pinnedStacks: string[]
+  /**
+   * Epoch ms until which the dashboard's "unused Docker data" alert stays
+   * hidden, or null. A per-browser convenience, not shared state.
+   */
+  hostSpaceAlertDismissedUntil: number | null
+  dismissHostSpaceAlert: () => void
   setTheme: (theme: Theme) => void
   toggleSidebar: () => void
   closeSidebar: () => void
@@ -45,6 +51,7 @@ interface UIState {
 
 const DEFAULT_SIDEBAR_OPEN = true
 const DEFAULT_SIDEBAR_WIDTH = 256
+const HOST_SPACE_ALERT_DISMISS_MS = 7 * 24 * 60 * 60 * 1000
 
 const LAYOUT_STORAGE_KEYS = [
   'sidebar-search',
@@ -80,6 +87,11 @@ export const useUIStore = create<UIState>()(
       sidebarWidth: 256,
       logPrefs: DEFAULT_LOG_PREFS,
       pinnedStacks: [],
+      hostSpaceAlertDismissedUntil: null,
+
+      dismissHostSpaceAlert: () => {
+        set({ hostSpaceAlertDismissedUntil: Date.now() + HOST_SPACE_ALERT_DISMISS_MS })
+      },
 
       setTheme: (theme) => {
         set({ theme })
@@ -113,7 +125,11 @@ export const useUIStore = create<UIState>()(
       isPinned: (id) => get().pinnedStacks.includes(id),
 
       resetLayout: () => {
-        set({ sidebarOpen: DEFAULT_SIDEBAR_OPEN, sidebarWidth: DEFAULT_SIDEBAR_WIDTH })
+        set({
+          sidebarOpen: DEFAULT_SIDEBAR_OPEN,
+          sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
+          hostSpaceAlertDismissedUntil: null,
+        })
         if (typeof window !== 'undefined') {
           for (const key of LAYOUT_STORAGE_KEYS) {
             localStorage.removeItem(key)

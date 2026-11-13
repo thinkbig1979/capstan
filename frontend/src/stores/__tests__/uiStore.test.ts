@@ -155,3 +155,24 @@ describe('uiStore pinnedStacks', () => {
     expect(useUIStore.getState().pinnedStacks).toEqual(['b'])
   })
 })
+
+describe('uiStore host space alert dismissal', () => {
+  it('starts not dismissed', () => {
+    useUIStore.setState({ hostSpaceAlertDismissedUntil: null })
+    expect(useUIStore.getState().hostSpaceAlertDismissedUntil).toBeNull()
+  })
+
+  it('dismisses for 7 days from now', () => {
+    const now = Date.now()
+    useUIStore.getState().dismissHostSpaceAlert()
+    const until = useUIStore.getState().hostSpaceAlertDismissedUntil!
+    expect(until - now).toBeGreaterThanOrEqual(7 * 24 * 60 * 60 * 1000)
+    expect(until - now).toBeLessThan(7 * 24 * 60 * 60 * 1000 + 5000)
+  })
+
+  it('resetLayout clears the dismissal', () => {
+    useUIStore.getState().dismissHostSpaceAlert()
+    useUIStore.getState().resetLayout()
+    expect(useUIStore.getState().hostSpaceAlertDismissedUntil).toBeNull()
+  })
+})

@@ -134,10 +134,8 @@ vi.mock('@/components/dashboard/BuildCacheTab', () => ({
 vi.mock('@/components/dashboard/AttentionStrip', () => ({
   AttentionStrip: () => <div data-testid="attention-strip" />,
 }))
-vi.mock('@/components/dashboard/HostStrip', () => ({
-  HostStrip: ({ activeView }: { activeView?: string }) => (
-    <div data-testid="host-strip" data-active-view={activeView} />
-  ),
+vi.mock('@/components/dashboard/HostTiles', () => ({
+  HostTiles: () => <div data-testid="host-tiles" />,
 }))
 
 import { DashboardPage } from '../DashboardPage'
@@ -226,6 +224,14 @@ describe('DashboardPage', () => {
   // agent-os-a1ye.5: the /ws/events stream can go silent (a lost Docker event
   // stream, a dropped frame). The stack list polls slowly as the fallback, so a
   // missed status change heals without a window refocus.
+  // AC12(c): the host links under the stacks table are tiles now, not the old strip.
+  it('renders the host tiles, not the host strip, on the Stacks tab', async () => {
+    renderPage('/')
+    expect(await screen.findByTestId('tab-stacks')).toBeInTheDocument()
+    expect(screen.getByTestId('host-tiles')).toBeInTheDocument()
+    expect(screen.queryByTestId('host-strip')).not.toBeInTheDocument()
+  })
+
   it('polls the stack list every 60s, not from a background tab', async () => {
     const { queryClient } = renderPage('/')
     await waitFor(() => expect(listStacks).toHaveBeenCalled())

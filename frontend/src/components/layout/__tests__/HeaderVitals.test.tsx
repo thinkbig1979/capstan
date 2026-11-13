@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { screen } from '@testing-library/react'
+import { screen, waitFor } from '@testing-library/react'
 import { renderWithProviders } from '@/test/utils'
 import { HeaderVitals } from '../HeaderVitals'
+import { GiB, makeHostSummary } from '@/test/hostSummary'
+import { QueryClient } from '@tanstack/react-query'
+import { queryKeys } from '@/lib/query-keys'
 
 /**
  * agent-os-p9e1. GET /dashboard/stats omits diskUsage when Docker's disk usage
@@ -9,11 +12,15 @@ import { HeaderVitals } from '../HeaderVitals'
  * host genuinely using no disk still reads 0 B.
  */
 
-const { statsMock } = vi.hoisted(() => ({ statsMock: vi.fn() }))
+const { statsMock, hostSummaryMock } = vi.hoisted(() => ({ statsMock: vi.fn(), hostSummaryMock: vi.fn() }))
 
 vi.mock('@/lib/api', async () => {
   const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api')
-  return { ...actual, dashboardApi: { ...actual.dashboardApi, stats: statsMock } }
+  return {
+    ...actual,
+    dashboardApi: { ...actual.dashboardApi, stats: statsMock },
+    resourcesApi: { ...actual.resourcesApi, hostSummary: hostSummaryMock },
+  }
 })
 
 // Disconnected metrics stream, so the only vital is the one under test.
@@ -21,10 +28,13 @@ vi.mock('@/hooks/DashboardMetricsContext', () => ({
   useDashboardMetricsContext: () => ({ aggregates: {}, isConnected: false }),
 }))
 
-const diskVital = async () => (await screen.findByTitle('Host disk')).textContent
+const diskVital = async () => (await screen.findByTestId('header-vital-disk')).textContent
+
+const knownDisk = { total: 30 * GiB, images: 0, containers: 0, volumes: 0, buildCache: 0, volumesSizeKnown: true, containersSizeKnown: true }
 
 beforeEach(() => {
   vi.clearAllMocks()
+  hostSummaryMock.mockResolvedValue(makeHostSummary())
 })
 
 describe('HeaderVitals — disk', () => {
@@ -62,5 +72,57 @@ describe('HeaderVitals — disk', () => {
 
     expect(await screen.findByTestId('header-vitals')).toBeInTheDocument()
     expect(await diskVital()).toBe('diskat least 2.00 KB')
+  })
+})
+
+describe('HeaderVitals — DISK links to the Docker host page', () => {
+  it('is a link to /host showing the total and an "unused" chip', async () => {
+    statsMock.mockResolvedValue({ totalStacks: 2, diskUsage: knownDisk })
+    hostSummaryMock.mockResolvedValue(makeHostSummary({ disk: { total: 30 * GiB, reclaimable: 14.9 * GiB } }))
+    renderWithProviders(<HeaderVitals />)
+
+    const link = await screen.findByTestId('header-disk-link')
+    expect(link.tagName).toBe('A')
+    expect(link).toHaveAttribute('href', '/host')
+    expect(await diskVital()).toBe('disk30.00 GB')
+    expect(await screen.findByTestId('header-disk-unused')).toHaveTextContent('14.90 GB unused')
+    expect(link).toContainElement(screen.getByTestId('header-disk-unused'))
+  })
+
+  it('shows no chip when nothing is reclaimable', async () => {
+    statsMock.mockResolvedValue({ totalStacks: 2, diskUsage: knownDisk })
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    renderWithProviders(<HeaderVitals />, { queryClient })
+
+    await screen.findByTestId('header-disk-link')
+    await waitFor(() => expect(queryClient.getQueryState(queryKeys.resources.hostSummary())?.status).toBe('success'))
+    expect(screen.queryByTestId('header-disk-unused')).not.toBeInTheDocument()
+  })
+
+  it('keeps "unavailable" and the link when the server omitted disk usage', async () => {
+    statsMock.mockResolvedValue({ totalStacks: 2 })
+    renderWithProviders(<HeaderVitals />)
+
+    expect(await screen.findByTestId('header-disk-link')).toHaveAttribute('href', '/host')
+    expect(await diskVital()).toBe('diskunavailable')
+  })
+
+  // AC15: the tooltip never presents an unmeasured volume size as known.
+  it('says "size unknown" in the tooltip when Docker could not size every volume', async () => {
+    statsMock.mockResolvedValue({ totalStacks: 2, diskUsage: knownDisk })
+    hostSummaryMock.mockResolvedValue(makeHostSummary({ disk: { volumesSizeKnown: false }, volumes: { sizeKnown: false } }))
+    renderWithProviders(<HeaderVitals />)
+
+    const link = await screen.findByTestId('header-disk-link')
+    await waitFor(() => expect(link.getAttribute('title')).toContain('Volumes: size unknown'))
+  })
+
+  it('has no "size unknown" in the tooltip when every volume was sized', async () => {
+    statsMock.mockResolvedValue({ totalStacks: 2, diskUsage: knownDisk })
+    hostSummaryMock.mockResolvedValue(makeHostSummary({ disk: { reclaimable: GiB } }))
+    renderWithProviders(<HeaderVitals />)
+
+    await screen.findByTestId('header-disk-unused')
+    expect(screen.getByTestId('header-disk-link').getAttribute('title')).not.toContain('size unknown')
   })
 })

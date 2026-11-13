@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
-import { screen, within } from '@testing-library/react'
+import { screen } from '@testing-library/react'
 import { renderWithProviders } from '@/test/utils'
-import { HostStrip } from '../HostStrip'
 import { DashboardMetricsTab } from '../DashboardMetricsTab'
 import { ContainersOverviewTab } from '../ContainersOverviewTab'
 import type { DashboardStats } from '@/types'
@@ -75,47 +74,6 @@ const aggregates: DashboardAggregateMetrics = {
   totalSwap: 0,
   totalPids: 0,
 }
-
-const hostDetail = (label: string) =>
-  within(screen.getByRole('button', { name: new RegExp(`^${label}`) })).queryByText(/./, {
-    selector: 'span',
-  })?.textContent
-
-describe('HostStrip — omitted stats', () => {
-  it('shows unavailable, not 0, when the container and disk reads failed', () => {
-    renderWithProviders(<HostStrip stats={bothReadsFailed} onNavigate={() => {}} />)
-
-    // Precondition: the strip rendered its links for a loaded stats object.
-    expect(screen.getByTestId('host-strip')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /^Networks/ })).toBeInTheDocument()
-
-    expect(hostDetail('Containers')).toBe('unavailable')
-    expect(hostDetail('Images')).toBe('unavailable')
-    expect(hostDetail('Volumes')).toBe('unavailable')
-    expect(hostDetail('Build cache')).toBe('unavailable')
-  })
-
-  it('still shows 0 for a genuinely empty host', () => {
-    renderWithProviders(<HostStrip stats={emptyHost} onNavigate={() => {}} />)
-
-    expect(hostDetail('Containers')).toBe('0')
-    expect(hostDetail('Images')).toBe('0 B')
-    expect(screen.queryByText('unavailable')).not.toBeInTheDocument()
-  })
-
-  // agent-os-rwik: an unmeasured volume (-1) is left out of the sum.
-  it('reads "at least" for volumes when Docker could not size every volume', () => {
-    const disk = { ...emptyHost.diskUsage!, volumes: 3 * 1024 ** 2 }
-    renderWithProviders(<HostStrip stats={{ ...emptyHost, diskUsage: { ...disk, volumesSizeKnown: false } }} onNavigate={() => {}} />)
-    expect(hostDetail('Volumes')).toBe('at least 3.00 MB')
-  })
-
-  it('reads the exact volumes figure when every volume was sized', () => {
-    const disk = { ...emptyHost.diskUsage!, volumes: 3 * 1024 ** 2 }
-    renderWithProviders(<HostStrip stats={{ ...emptyHost, diskUsage: disk }} onNavigate={() => {}} />)
-    expect(hostDetail('Volumes')).toBe('3.00 MB')
-  })
-})
 
 // DashboardPage passes runningContainers as `dashboardStats?.runningContainers
 // || 0`, so an omitted count arrives here as the prop 0. The component has the

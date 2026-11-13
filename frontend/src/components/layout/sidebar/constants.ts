@@ -40,3 +40,8 @@ export function untilTime(iso: string): string {
   const hrs = Math.floor(mins / 60)
   return `${hrs}h ${mins % 60}m`
 }
+
+/** /host and every /host/<view>, not a lookalike such as /hostile. */
+export function isHostPath(pathname: string): boolean {
+  return pathname === '/host' || pathname.startsWith('/host/')
+}
