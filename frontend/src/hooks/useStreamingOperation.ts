@@ -1,6 +1,8 @@
 import { useCallback, useRef, useState, useEffect } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { WSClient } from '@/lib/ws'
 import { reconcileOnClose } from '@/lib/ws-reconcile'
+import { queryKeys } from '@/lib/query-keys'
 import { messageOrNull } from '@/lib/narrow'
 import type { Outcome } from '@/types'
 
@@ -15,9 +17,15 @@ import type { Outcome } from '@/types'
  *               success — render as info/neutral)
  * - partial   : completed with partial success (render as warning)
  * - error     : failed (maps from backend outcome:'failed' or legacy
- *               success:false, or connection drop without a done frame)
+ *               success:false, or an error frame from the server)
+ * - disconnected : the socket closed with no done or error frame, so the
+ *               outcome is unknown. The operation may still be running on the
+ *               server; the stack's queries are refetched (agent-os-s3fo).
  */
-export type OperationStatus = 'idle' | 'running' | 'success' | 'no_change' | 'partial' | 'error'
+export type OperationStatus = 'idle' | 'running' | 'success' | 'no_change' | 'partial' | 'error' | 'disconnected'
+
+// Edwin's wording (agent-os-s3fo decision, 2026-11-13).
+const CONNECTION_LOST = 'Connection lost. The operation may still be running; check the stack status.'
 
 interface OperationLine {
   type: string
@@ -75,6 +83,7 @@ export function useStreamingOperation(): StreamingOperation {
   const [lines, setLines] = useState<string[]>([])
   const [action, setAction] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const queryClient = useQueryClient()
   const clientRef = useRef<WSClient | null>(null)
   const completedRef = useRef(false)
 
@@ -110,7 +119,13 @@ export function useStreamingOperation(): StreamingOperation {
     setError(null)
     setStatus('running')
     completedRef.current = false
+    // An error frame is the server saying the command failed; a close after
+    // it is not a lost connection.
+    let errorFrame = false
 
+    // The URL is the command: the server runs it on every upgrade, so this
+    // socket must never re-dial (agent-os-s3fo). clientRef keeps the client
+    // after a close so Dismiss and unmount can still close() it.
     const client = new WSClient()
     clientRef.current = client
 
@@ -165,6 +180,7 @@ export function useStreamingOperation(): StreamingOperation {
             client.close()
             clientRef.current = null
           } else if (msg.type === 'error') {
+            errorFrame = true
             setStatus('error')
             const errMsg = error ?? 'Unknown error'
             setError(errMsg)
@@ -175,43 +191,30 @@ export function useStreamingOperation(): StreamingOperation {
         }
       },
       {
+        reconnect: false,
+        // No onError: an error event is always followed by a close, and the
+        // close decides. A drop is not a failure (finding #18), and the
+        // browser cannot tell a refused upgrade from a lost one.
         onClose: () => {
-          // Finding #18 / ws-reconcile: if a terminal done frame was received,
-          // completedRef is already true and we must NOT overwrite the real
-          // outcome. If the socket closed without a done frame we cannot safely
-          // assert failure — reconcile by leaving the status alone; callers
-          // that need source-of-truth recovery should pass a refetch function.
+          // Finding #18 / ws-reconcile: after a done frame the real outcome
+          // stands. Without one, the server state is the truth: refetch it.
           reconcileOnClose({
             completed: completedRef.current,
             refetch: () => {
-              // Without a refetch callback available here we do nothing —
-              // the caller's query will invalidate on the next user interaction.
-              // We intentionally do NOT flip to 'error' on unexplained closes
-              // (finding #18: backup live status lies on disconnect).
+              queryClient.invalidateQueries({ queryKey: queryKeys.stack.detail(stackId) })
+              queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
             },
           })
-          if (!completedRef.current) {
-            setLines(prev => [...prev, 'Connection closed unexpectedly.'])
+          if (!completedRef.current && !errorFrame) {
+            // Leaves 'running', so the page's Start/Stop/Restart/Pull
+            // buttons are enabled again.
+            setStatus('disconnected')
+            setLines(prev => [...prev, CONNECTION_LOST])
           }
-          clientRef.current = null
-        },
-        onError: () => {
-          if (!completedRef.current) {
-            setStatus('error')
-            setError('Connection failed')
-          }
-          clientRef.current = null
-        },
-        onReconnectFailed: () => {
-          if (!completedRef.current) {
-            setStatus('error')
-            setError('Connection lost and reconnect failed')
-          }
-          clientRef.current = null
         },
       }
     )
-  }, [])
+  }, [queryClient])
 
   return { status, lines, action, error, execute, cancel, reset }
 }

@@ -24,6 +24,12 @@ function shouldReconnectAfter(code: number | undefined): boolean {
 
 export interface WSClientOptions {
   binary?: boolean
+  /** Default true. false for a socket whose connect IS a command: the
+   *  operations route runs Start/Stop/Restart/Pull on every upgrade, so a
+   *  re-dial after a drop would run it again (agent-os-s3fo). Turns off both
+   *  re-dial routes, the backoff ladder and the online/visibilitychange
+   *  recovery, so onReconnecting/onReconnectFailed never fire. */
+  reconnect?: boolean
   onOpen?: () => void
   /** Receives the close event so callers can distinguish a policy refusal
    *  (4401/4429/4404) from an ordinary disconnect. */
@@ -94,7 +100,9 @@ export class WSClient {
     this.currentPath = path
     this.currentOnMessage = onMessage
     this.currentOptions = options
-    this.attachRecoveryListeners()
+    if (options.reconnect !== false) {
+      this.attachRecoveryListeners()
+    }
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const url = `${protocol}//${window.location.host}/api/v1${path}`
@@ -130,11 +138,13 @@ export class WSClient {
       this.clearResetAttemptsTimer()
       this.ws = null
       options.onClose?.(event)
-      if (!shouldReconnectAfter(event?.code)) {
-        // Stop retrying and stop tracking the path, so a later recovery signal
-        // (focus/online) does not resurrect the loop either.
+      if (options.reconnect === false || !shouldReconnectAfter(event?.code)) {
+        // Stop retrying and stop tracking the path, and drop the recovery
+        // listeners, so a later focus/online cannot resurrect the loop and
+        // the window no longer pins this client (agent-os-s3fo).
         this.currentPath = null
         this.currentOnMessage = null
+        this.detachRecoveryListeners()
         return
       }
       if (this.currentPath && this.currentOnMessage) {

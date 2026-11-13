@@ -160,6 +160,29 @@ describe('OperationProgress — error', () => {
   })
 })
 
+// ─── disconnected (agent-os-s3fo) ────────────────────────────────────────────
+
+describe('OperationProgress — disconnected', () => {
+  const lost = 'Connection lost. The operation may still be running; check the stack status.'
+
+  it('labels the panel "Connection lost" and shows the hook\'s message line', () => {
+    render(
+      <OperationProgress status="disconnected" lines={['Container web Started', lost]} action="start" error={null} onDismiss={noop} />,
+    )
+    expect(screen.getByText('Connection lost')).toBeDefined()
+    expect(screen.getByText(lost)).toBeDefined()
+  })
+
+  it('renders as a warning, not a failure, and can be dismissed', () => {
+    const { container } = render(
+      <OperationProgress status="disconnected" lines={[]} action="start" error={null} onDismiss={noop} />,
+    )
+    expect(container.querySelector('[class*="bg-warning"]')).not.toBeNull()
+    expect(container.querySelector('[class*="bg-destructive"]')).toBeNull()
+    expect(screen.getByRole('button')).toBeDefined()
+  })
+})
+
 // ─── lines rendering ─────────────────────────────────────────────────────────
 
 describe('OperationProgress — lines rendering', () => {

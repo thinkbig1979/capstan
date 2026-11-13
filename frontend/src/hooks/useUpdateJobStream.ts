@@ -171,6 +171,13 @@ export function useUpdateJobStream(
   // refetch instead of asserting failure on a clean close without a done frame.
   const receivedDoneRef = useRef(false)
 
+  // A terminal frame (done, or the "job not found" error) is followed by the
+  // server closing the socket, and WSClient re-dials any such close: a
+  // finished job's open log re-dialled a ladder of metered sockets, and again
+  // on every tab focus (agent-os-enxv). So the hook ends the stream itself.
+  // A ref, because the socket's disconnect comes from the hook call below.
+  const endStreamRef = useRef<() => void>(() => {})
+
   const handleFrame = useCallback(
     (frame: JobStreamFrame) => {
       if (!jobId) return
@@ -191,10 +198,13 @@ export function useUpdateJobStream(
           if (frame.outcome !== undefined) {
             setOutcome(jobId, frame.outcome, frame.reason)
           }
+          endStreamRef.current()
           break
         case 'error':
-          // Server-side error (e.g. job not found / evicted); mark as error in store
+          // Server-side error (job not found / evicted); mark as error in
+          // store. The route's only error frames are terminal.
           setStatus(jobId, 'error', frame.error)
+          endStreamRef.current()
           break
       }
     },
@@ -236,11 +246,15 @@ export function useUpdateJobStream(
   // varying the path was the only way to force it to re-run once a job id
   // arrived. skip is a real dependency now (agent-os-9d5e), so the placeholder
   // path is never connected to and does not need to look like an endpoint.
-  const { status } = useWebSocketJSON(
+  const { status, disconnect } = useWebSocketJSON(
     jobId ? `/ws/updates/jobs/${jobId}` : '',
     handleFrame,
     { parse: parseJobStreamFrame, skip, onClose: handleClose },
   )
+
+  useEffect(() => {
+    endStreamRef.current = disconnect
+  }, [disconnect])
 
   return { connected: status === 'connected' }
 }

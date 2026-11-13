@@ -347,6 +347,27 @@ describe('StackPage', () => {
       expect(screen.getByRole('button', { name: /Pull Images/ })).toBeDisabled()
     })
 
+    // agent-os-s3fo: a dropped operation socket ends in 'disconnected', not
+    // 'running', so no action stays disabled waiting for a re-dial that never
+    // comes.
+    it('re-enables Stop, Restart and Pull after a dropped operation connection', async () => {
+      Object.assign(operationState, { status: 'disconnected', action: 'restart' })
+      getStack.mockResolvedValue(makeStack({ status: 'running' }))
+      renderPage('/stacks/s1')
+
+      await waitFor(() => expect(screen.getByRole('button', { name: /Stop/ })).toBeEnabled())
+      expect(screen.getByRole('button', { name: /Restart/ })).toBeEnabled()
+      expect(screen.getByRole('button', { name: /Pull Images/ })).toBeEnabled()
+    })
+
+    it('re-enables Start after a dropped operation connection', async () => {
+      Object.assign(operationState, { status: 'disconnected', action: 'start' })
+      getStack.mockResolvedValue(makeStack({ status: 'stopped' }))
+      renderPage('/stacks/s1')
+
+      await waitFor(() => expect(screen.getByRole('button', { name: /Start/ })).toBeEnabled())
+    })
+
     it.each([
       ['start', 'Starting...'],
       ['stop', 'Stopping...'],

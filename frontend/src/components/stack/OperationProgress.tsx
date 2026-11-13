@@ -29,6 +29,7 @@ const terminalLabel: Record<Exclude<OperationStatus, 'idle' | 'running'>, string
   no_change: 'No change — already in desired state',
   partial:   'Operation partially completed',
   error:     'Operation failed',
+  disconnected: 'Connection lost',
 }
 
 export function OperationProgress({ status, lines, action, error, onDismiss }: OperationProgressProps) {
@@ -52,6 +53,7 @@ export function OperationProgress({ status, lines, action, error, onDismiss }: O
       status === 'no_change' && 'border-info/30',
       status === 'partial'   && 'border-warning/30',
       status === 'error'     && 'border-destructive/30',
+      status === 'disconnected' && 'border-warning/30',
       isRunning              && 'border-info/30',
     )}>
       <div className={cn(
@@ -61,6 +63,7 @@ export function OperationProgress({ status, lines, action, error, onDismiss }: O
         status === 'no_change' && 'bg-info/10 text-info',
         status === 'partial'   && 'bg-warning/10 text-warning',
         status === 'error'     && 'bg-destructive/10 text-destructive',
+        status === 'disconnected' && 'bg-warning/10 text-warning',
       )}>
         <div className="flex items-center gap-2">
           {isRunning              && <Loader2 className="h-4 w-4 animate-spin" />}
@@ -68,6 +71,7 @@ export function OperationProgress({ status, lines, action, error, onDismiss }: O
           {status === 'no_change' && <Info className="h-4 w-4" />}
           {status === 'partial'   && <AlertTriangle className="h-4 w-4" />}
           {status === 'error'     && <XCircle className="h-4 w-4" />}
+          {status === 'disconnected' && <AlertTriangle className="h-4 w-4" />}
           <span>
             {isRunning ? (actionLabels[action] || action) : terminalLabel[status as Exclude<OperationStatus, 'idle' | 'running'>]}
           </span>

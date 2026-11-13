@@ -184,9 +184,12 @@ func (r *recordingStreamer) requested() []string {
 
 // newZ91e38OperationsFixture serves /ws/operations over a real DockerService
 // with the stack lookup installed, as main.go wires it. The Docker API is a
-// ping-only stub, and the seeded stack directories do not exist, so a run that
-// gets past the refusal fails at chdir before any docker process starts.
-func newZ91e38OperationsFixture(t *testing.T) (*httptest.Server, *recordingStreamer) {
+// ping-only stub. The shared-name stacks' directories do not exist; webDir is
+// the uniquely named stack's, so a caller that wants its run to reach compose
+// passes a real directory and installs a fake docker CLI
+// (installFakeDocker00y3), and one passing a missing directory gets a run that
+// fails at chdir before any docker process starts.
+func newZ91e38OperationsFixture(t *testing.T, webDir string) (*httptest.Server, *recordingStreamer) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	dockerAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -202,7 +205,7 @@ func newZ91e38OperationsFixture(t *testing.T) (*httptest.Server, *recordingStrea
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 	seedSharedProjectStacks(t, db)
-	seedStackInDir(t, db, "s-web", "web", "/srv/stacks/web")
+	seedStackInDir(t, db, "s-web", "web", webDir)
 	svc.SetStackLookup(db)
 	rec := &recordingStreamer{svc: svc}
 	r := gin.New()
@@ -249,7 +252,10 @@ func framesOfType(frames []map[string]interface{}, typ string) []map[string]inte
 // stream, where the client can read why: a failed done frame naming both
 // stacks. A restart stops after its refused down phase and never starts.
 func TestOperations_SharedProjectName_RestartStopsAtTheRefusedDownPhase(t *testing.T) {
-	srv, rec := newZ91e38OperationsFixture(t)
+	// A down that succeeds, for the uniquely named control below. The refused
+	// stacks never reach the CLI.
+	installFakeDocker00y3(t, `exit 0`)
+	srv, rec := newZ91e38OperationsFixture(t, t.TempDir())
 
 	frames := readOperationFrames(t, srv, "s-alpha", "restart")
 
@@ -262,9 +268,11 @@ func TestOperations_SharedProjectName_RestartStopsAtTheRefusedDownPhase(t *testi
 	assert.Empty(t, framesOfType(frames, "phase"), "a refused down phase must not go on to start: %v", frames)
 	assert.Equal(t, []string{"down"}, rec.requested())
 
-	// Other side, same route: a uniquely named stack's down phase fails for
-	// an unrelated reason (no directory) without a done frame, and the
-	// handler does go on to start, so the check above is what stopped it.
+	// Other side, same route: a uniquely named stack's down phase succeeds
+	// and the handler does go on to start, so the name check above is what
+	// stopped it. (Before agent-os-00y3 this used a down that failed at chdir:
+	// it sent no done frame, so the restart went on to start anyway. Any
+	// failing down now stops a restart, so the control needs one that works.)
 	rec.reset()
 	frames = readOperationFrames(t, srv, "s-web", "restart")
 	assert.NotEmpty(t, framesOfType(frames, "phase"), "frames: %v", frames)
@@ -273,7 +281,7 @@ func TestOperations_SharedProjectName_RestartStopsAtTheRefusedDownPhase(t *testi
 }
 
 func TestOperations_SharedProjectName_StartTellsTheClientWhy(t *testing.T) {
-	srv, rec := newZ91e38OperationsFixture(t)
+	srv, rec := newZ91e38OperationsFixture(t, "/srv/stacks/web")
 
 	frames := readOperationFrames(t, srv, "s-alpha", "start")
 

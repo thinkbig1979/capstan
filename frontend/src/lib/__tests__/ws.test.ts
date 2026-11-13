@@ -284,3 +284,62 @@ describe('WSClient socket identity', () => {
     }
   })
 })
+
+// agent-os-s3fo: an operation socket's URL IS the command (the server runs
+// Start/Stop/Restart/Pull on every upgrade of /ws/operations/:id/:action), so a
+// re-dial after a drop runs the command again. reconnect: false turns off
+// every re-dial route: the backoff ladder and the online/visibilitychange
+// recovery. Default clients keep both ("WSClient post-cap recovery" above).
+describe('WSClient reconnect: false', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('does not re-dial after an abnormal close (1006), and an online/visibilitychange event does not resume it', () => {
+    const onReconnecting = vi.fn()
+    const client = new WSClient()
+    client.connect('/ws/operations/s1/start', vi.fn(), { reconnect: false, onReconnecting })
+    MockWebSocket.instance!.onopen!()
+
+    MockWebSocket.instance!.onclose!({ code: 1006 })
+    vi.advanceTimersByTime(MAX_RECONNECT_DELAY_MS * 2)
+    window.dispatchEvent(new Event('online'))
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' })
+    document.dispatchEvent(new Event('visibilitychange'))
+    vi.advanceTimersByTime(MAX_RECONNECT_DELAY_MS * 2)
+
+    expect(MockWebSocket.instances.map(ws => ws.url)).toHaveLength(1)
+    expect(onReconnecting).not.toHaveBeenCalled()
+  })
+
+  it('attaches no recovery listeners', () => {
+    const winAdd = vi.spyOn(window, 'addEventListener')
+    const docAdd = vi.spyOn(document, 'addEventListener')
+    try {
+      const client = new WSClient()
+      client.connect('/ws/operations/s1/start', vi.fn(), { reconnect: false })
+
+      expect(winAdd.mock.calls.filter(([type]) => type === 'online')).toHaveLength(0)
+      expect(docAdd.mock.calls.filter(([type]) => type === 'visibilitychange')).toHaveLength(0)
+    } finally {
+      winAdd.mockRestore()
+      docAdd.mockRestore()
+    }
+  })
+
+  it('CONTROL: the same close on a default client does re-dial', () => {
+    const client = new WSClient()
+    client.connect('/ws/operations/s1/start', vi.fn())
+    MockWebSocket.instance!.onopen!()
+
+    MockWebSocket.instance!.onclose!({ code: 1006 })
+    vi.advanceTimersByTime(MAX_RECONNECT_DELAY_MS)
+
+    expect(MockWebSocket.instances.length).toBeGreaterThan(1)
+    client.close()
+  })
+})
