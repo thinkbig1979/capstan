@@ -42,7 +42,6 @@ export function ResponsiveTabsList({
           <SelectContent>
             {tabs.map((tab) => (
               <SelectItem key={tab.value} value={tab.value}>
-                {tab.icon && <tab.icon aria-hidden="true" />}
                 {tab.label}
               </SelectItem>
             ))}
