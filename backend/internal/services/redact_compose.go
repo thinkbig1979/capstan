@@ -182,8 +182,13 @@ func (s *DockerService) composeSecrets(stack models.Stack) []string {
 
 // ComposeSecretValues is composeSecrets for the handlers: the stack's secret
 // values, masked wherever a locked view shows them verbatim (agent-os-yvlh).
-func (s *DockerService) ComposeSecretValues(stack models.Stack) []string {
-	return s.composeSecrets(stack)
+// A nil service has no config to find global.env with, so it answers
+// ErrDockerUnavailable rather than a set that may be missing values.
+func (s *DockerService) ComposeSecretValues(stack models.Stack) ([]string, error) {
+	if s == nil {
+		return nil, ErrDockerUnavailable
+	}
+	return s.composeSecrets(stack), nil
 }
 
 // StackSecretValues is composeSecrets for callers without a DockerService:

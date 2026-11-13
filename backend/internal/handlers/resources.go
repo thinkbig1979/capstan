@@ -420,7 +420,13 @@ func (h *ResourcesHandler) inspectSecrets(c *gin.Context, inspect container.Insp
 			"Failed to look up the stack that owns this container", err))
 		return nil, false
 	}
-	return h.docker.ComposeSecretValues(*stack), true
+	secrets, err := h.docker.ComposeSecretValues(*stack)
+	if err != nil {
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR",
+			"Failed to read the secrets of the stack that owns this container", err))
+		return nil, false
+	}
+	return secrets, true
 }
 
 // maskContainerInspect masks, for a locked session, every inspect field that
