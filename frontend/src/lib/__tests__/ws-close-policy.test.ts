@@ -251,6 +251,26 @@ describe('WSClient close-code policy', () => {
     expect(FakeSocket.instances).toHaveLength(1)
   })
 
+  // agent-os-s3fo add-on: the policy branch stopped the ladder but left the
+  // online/visibilitychange listeners attached, pinning the client to window
+  // and document for the page's life.
+  it('a 4401/4429/4404 close detaches the online/visibilitychange listeners', () => {
+    for (const code of [WS_CLOSE_AUTH_FAILURE, WS_CLOSE_RATE_LIMIT, WS_CLOSE_NOT_FOUND]) {
+      const winRemove = vi.spyOn(window, 'removeEventListener')
+      const docRemove = vi.spyOn(document, 'removeEventListener')
+      try {
+        connect()
+        FakeSocket.instances.at(-1)!.fireClose(code)
+
+        expect(winRemove.mock.calls.filter(([type]) => type === 'online'), String(code)).toHaveLength(1)
+        expect(docRemove.mock.calls.filter(([type]) => type === 'visibilitychange'), String(code)).toHaveLength(1)
+      } finally {
+        winRemove.mockRestore()
+        docRemove.mockRestore()
+      }
+    }
+  })
+
   it('passes the close event through so callers can read the code', () => {
     const onClose = vi.fn()
     connect(onClose)
