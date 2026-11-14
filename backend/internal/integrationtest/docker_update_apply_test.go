@@ -118,10 +118,10 @@ func (c *collector) text() string {
 func updateStreaming(ctx context.Context, t *testing.T, svc *services.DockerService, id string, db services.DashboardDB) (truth.ActionResult, *collector) {
 	t.Helper()
 	var c *collector
-	ar := RetryUpdateAtPull(ctx, t, func() (truth.ActionResult, bool) {
+	ar := RetryUpdateAtPull(ctx, t, func() (truth.ActionResult, bool, string) {
 		c = &collector{}
 		_, ar := svc.UpdateContainerStreaming(ctx, id, db, c.emit, c.setStatus)
-		return ar, c.sawStatus(services.StatusRecreating)
+		return ar, c.sawStatus(services.StatusRecreating), c.text()
 	})
 	return ar, c
 }
@@ -161,10 +161,11 @@ func Test_UpdateContainer_Standalone_AppliesAndConverges(t *testing.T) {
 
 	// db is nil, so the compose branch cannot be taken whatever the labels say.
 	var result models.UpdateResult
-	ar := RetryUpdateAtPull(ctx, t, func() (truth.ActionResult, bool) {
+	ar := RetryUpdateAtPull(ctx, t, func() (truth.ActionResult, bool, string) {
 		var ar truth.ActionResult
 		result, ar = svc.UpdateContainer(ctx, id, nil)
-		return ar, false
+		// UpdateContainer streams nothing; its pull error carries the reason.
+		return ar, false, ""
 	})
 
 	assert.NotEmpty(t, result.OldDigest, "the pre-update image id must be captured")

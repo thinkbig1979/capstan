@@ -233,6 +233,11 @@ const registryAttempts = 5
 // registry pull for a reason registryTransient accepts, up to registryAttempts
 // times. It returns the last result (agent-os-vdgc).
 //
+// update also returns the attempt's streamed log, "" when it has none. The
+// compose path's error is only "compose pull failed: command failed: exit
+// status N"; why the pull failed is in compose's stderr, which reaches the log,
+// not the error.
+//
 // The update's pull goes to the registry from the daemon, unretried, so a slow
 // ECR on a CI runner fails the update with "update apply failed" while nothing
 // under test is wrong. A retry starts from the state the first attempt found:
@@ -241,13 +246,13 @@ const registryAttempts = 5
 // lets a streaming caller veto the retry once StatusRecreating was reported.
 // Any other failure, a permanent pull error or a ctx that ended, is returned
 // at once for the test to assert on.
-func RetryUpdateAtPull(ctx context.Context, t *testing.T, update func() (ar truth.ActionResult, pastPull bool)) truth.ActionResult {
+func RetryUpdateAtPull(ctx context.Context, t *testing.T, update func() (ar truth.ActionResult, pastPull bool, log string)) truth.ActionResult {
 	t.Helper()
 
 	for attempt := 1; ; attempt++ {
-		ar, pastPull := update()
+		ar, pastPull, log := update()
 		if ar.Outcome != truth.OutcomeFailed || pastPull || !failedAtPull(ar.Err) ||
-			!registryTransient(ar.Err) || ctx.Err() != nil || attempt == registryAttempts {
+			!registryTransient(ar.Err, log) || ctx.Err() != nil || attempt == registryAttempts {
 			return ar
 		}
 		t.Logf("update failed at its registry pull: attempt %d/%d: %s (%v)", attempt, registryAttempts, ar.Reason, ar.Err)
@@ -280,19 +285,24 @@ var (
 	registryTransientText = regexp.MustCompile(`(?i)deadline exceeded|timeout|toomanyrequests|connection reset|connection refused|no such host|\bEOF\b|\b(429|502|503|504)\b`)
 )
 
-// registryTransient reports whether err is a registry failure worth retrying.
-// The error chain is matched first (a deadline or a net timeout in this
-// process); a daemon's error arrives as text, so the text is the fallback. A
-// permanent verdict wins over everything.
-func registryTransient(err error) bool {
-	if err == nil || registryPermanent.MatchString(err.Error()) {
+// registryTransient reports whether err, with the attempt's log beside it, is
+// a registry failure worth retrying. The error chain is matched first (a
+// deadline or a net timeout in this process); a daemon's error and compose's
+// stderr arrive as text, so the text of both is the fallback. A permanent
+// verdict, in either, wins over everything.
+func registryTransient(err error, log string) bool {
+	if err == nil {
+		return false
+	}
+	text := err.Error() + "\n" + log
+	if registryPermanent.MatchString(text) {
 		return false
 	}
 	var netErr net.Error
 	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) {
 		return true
 	}
-	return registryTransientText.MatchString(err.Error())
+	return registryTransientText.MatchString(text)
 }
 
 // ImageRepoDigests returns the RepoDigests slice for a locally present image
