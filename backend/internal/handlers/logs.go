@@ -233,7 +233,7 @@ func (h *LogsHandler) StreamLogs(c *gin.Context) {
 					// (agent-os-0h4p). Say so in the stream rather than just
 					// ending it; cleanup then kills the child.
 					slog.Warn("Log stream stopped by a long line", "stackID", id, "error", scanErr)
-					_ = safeWriteJSON(wsConn, LogLine{Container: "capstan", Message: "A log line over 1 MiB stopped this stream; reopen the logs to continue from the latest lines"}) //nolint:errcheck // best effort: the stream is ending either way
+					_ = safeWriteJSON(wsConn, LogLine{Container: "capstan", Message: "A log line over 1 MiB could not be shown; the stream stopped here."}) //nolint:errcheck // best effort: the stream is ending either way
 				}
 				goto cleanup
 			}
