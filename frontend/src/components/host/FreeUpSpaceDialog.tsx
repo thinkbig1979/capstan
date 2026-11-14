@@ -316,7 +316,10 @@ export function FreeUpSpaceDialog({ open, onOpenChange }: FreeUpSpaceDialogProps
           openerRef.current = null
           if (opener?.isConnected) {
             e.preventDefault()
-            opener.focus()
+            // preventScroll: a link out of the dialog ("Change timing") may have
+            // just scrolled the page to its target; focusing the opener would
+            // scroll back to it (agent-os-8hfa).
+            opener.focus({ preventScroll: true })
           }
         }}
       >

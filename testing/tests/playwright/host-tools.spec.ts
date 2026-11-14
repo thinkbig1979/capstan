@@ -118,6 +118,26 @@ async function openFreeUpDialog(page: Page) {
   return dialog
 }
 
+/**
+ * Where #automatic-cleanup sits: 'in view' when its top is inside main's
+ * VISIBLE box, i.e. main's rect clipped to the window and kept below the sticky
+ * header. main's rect alone is not enough: when the document scrolls instead of
+ * main, main's rect runs past the window and any top would count as inside it.
+ */
+function cleanupPanelPlace(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const el = document.getElementById('automatic-cleanup')
+    const main = el?.closest('main')
+    if (!el || !main) return 'missing'
+    const top = el.getBoundingClientRect().top
+    const box = main.getBoundingClientRect()
+    const headerBottom = document.querySelector('header')?.getBoundingClientRect().bottom ?? 0
+    const visibleTop = Math.max(box.top, headerBottom, 0)
+    const visibleBottom = Math.min(box.bottom, window.innerHeight)
+    return top >= visibleTop - 1 && top < visibleBottom ? 'in view' : `top ${top} outside ${visibleTop}..${visibleBottom}`
+  })
+}
+
 function containerId(name: string): string {
   return execFileSync('docker', ['container', 'inspect', '--format', '{{.Id}}', name], { encoding: 'utf8' }).trim()
 }
@@ -179,26 +199,35 @@ test.describe('Host tab', () => {
     await page.getByRole('link', { name: 'Open automatic cleanup' }).click()
     await expect(page).toHaveURL(/\/\?tab=host#automatic-cleanup$/)
     await expect(page.getByRole('heading', { name: 'Automatic cleanup' })).toBeVisible()
-    // "In view" is the panel's top inside main's VISIBLE box: main's rect
-    // clipped to the window. main alone is not enough: with the document
-    // scrolling instead of main, main's rect runs past the window and any top
-    // would count as inside it.
-    await expect
-      .poll(() =>
-        page.evaluate(() => {
-          const el = document.getElementById('automatic-cleanup')
-          const main = el?.closest('main')
-          if (!el || !main) return 'missing'
-          const top = el.getBoundingClientRect().top
-          const box = main.getBoundingClientRect()
-          const visibleTop = Math.max(box.top, 0)
-          const visibleBottom = Math.min(box.bottom, window.innerHeight)
-          return top >= visibleTop - 1 && top < visibleBottom
-            ? 'in view'
-            : `top ${top} outside ${visibleTop}..${visibleBottom}`
-        }),
-      )
-      .toBe('in view')
+    await expect.poll(() => cleanupPanelPlace(page)).toBe('in view')
+  })
+
+  test('HOST-NAV-005: the Free up dialog\'s "Change timing" scrolls to the panel', async ({ page }) => {
+    createLeftoverContainer() // reclaimable > 0, so the Free up button is enabled
+    // "Change timing" shows only when the stored policy is on and already covers
+    // every ticked row. The policy read is answered here rather than switched on
+    // for real: an enabled policy would let this backend run cleanup on the host.
+    const policyResp = await page.request.get(`${API_URL}/api/v1/resources/cleanup/policy`)
+    expect(policyResp.status(), 'GET cleanup policy').toBe(200)
+    const policy = await policyResp.json()
+    await page.route('**/api/v1/resources/cleanup/policy', async (route) => {
+      if (route.request().method() !== 'GET') return route.fallback()
+      await route.fulfill({
+        status: 200,
+        json: {
+          ...policy,
+          enabled: true,
+          categories: { danglingImages: true, unusedImages: true, buildCache: true, containers: true, volumes: false, networks: false },
+        },
+      })
+    })
+
+    const dialog = await openFreeUpDialog(page)
+    await expect(cleanupPanelPlace(page)).resolves.not.toBe('in view')
+    await dialog.getByTestId('free-space-auto-covered').getByRole('link', { name: 'Change timing' }).click()
+    await expect(dialog).toHaveCount(0)
+    await expect(page).toHaveURL(/\/\?tab=host#automatic-cleanup$/)
+    await expect.poll(() => cleanupPanelPlace(page)).toBe('in view')
   })
 
   test('HOST-NAV-004: the header vitals link opens the Host tab', async ({ page }) => {

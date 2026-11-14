@@ -71,7 +71,25 @@ function makeSummary(): HostSummary {
 // The panel's distance from the top of <main>: 300 px while the skeleton is
 // above it, 900 px once the disk section and the five cards have rendered.
 let summaryLoaded = false
-const scrolls: { to: number; summaryLoaded: boolean }[] = []
+type ScrollTarget = 'main' | 'document'
+const scrolls: { target: ScrollTarget; to: number; summaryLoaded: boolean }[] = []
+
+/** Records every scrollTop write on el, as the given target. */
+function trackScrollTop(el: Element, target: ScrollTarget) {
+  let scrollTop = 0
+  Object.defineProperty(el, 'scrollTop', {
+    configurable: true,
+    get: () => scrollTop,
+    set: (v: number) => {
+      scrollTop = v
+      scrolls.push({ target, to: v, summaryLoaded })
+    },
+  })
+}
+
+function documentScroller(): Element {
+  return document.scrollingElement ?? document.documentElement
+}
 
 beforeEach(() => {
   summaryLoaded = false
@@ -84,14 +102,21 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks()
+  delete (documentScroller() as { scrollTop?: number }).scrollTop
 })
 
-function renderAt(url: string) {
+/**
+ * The app's layout (AppShell): main carries overflow-y: auto but sits in a
+ * min-h-dvh column, so it grows with its content and never overflows; the
+ * DOCUMENT scrolls (agent-os-8hfa). `mainOverflows` models a layout where main
+ * is the scroller instead.
+ */
+function renderAt(url: string, { mainOverflows = false }: { mainOverflows?: boolean } = {}) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } })
   const view = render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[url]}>
-        <main data-testid="scroller">
+        <main data-testid="main" style={{ overflowY: 'auto' }}>
           <Routes>
             <Route path="/" element={<HostTab />} />
           </Routes>
@@ -99,16 +124,11 @@ function renderAt(url: string) {
       </MemoryRouter>
     </QueryClientProvider>,
   )
-  const main = screen.getByTestId('scroller')
-  let scrollTop = 0
-  Object.defineProperty(main, 'scrollTop', {
-    configurable: true,
-    get: () => scrollTop,
-    set: (v: number) => {
-      scrollTop = v
-      scrolls.push({ to: v, summaryLoaded })
-    },
-  })
+  const main = screen.getByTestId('main')
+  Object.defineProperty(main, 'clientHeight', { configurable: true, get: () => 500 })
+  Object.defineProperty(main, 'scrollHeight', { configurable: true, get: () => (mainOverflows ? 2000 : 500) })
+  trackScrollTop(main, 'main')
+  trackScrollTop(documentScroller(), 'document')
   return view
 }
 
@@ -125,7 +145,15 @@ describe('HostTab #automatic-cleanup (AC8)', () => {
     summaryLoaded = true
     resolve(makeSummary())
     await screen.findByTestId('host-disk-bar')
-    await waitFor(() => expect(scrolls).toEqual([{ to: 900, summaryLoaded: true }]))
+    await waitFor(() => expect(scrolls).toEqual([{ target: 'document', to: 900, summaryLoaded: true }]))
+  })
+
+  it('scrolls main instead when main is the element that overflows', async () => {
+    hostSummary.mockResolvedValue(makeSummary())
+    summaryLoaded = true
+    renderAt('/?tab=host#automatic-cleanup', { mainOverflows: true })
+    await screen.findByTestId('host-disk-bar')
+    await waitFor(() => expect(scrolls).toEqual([{ target: 'main', to: 900, summaryLoaded: true }]))
   })
 
   it('does not scroll without the hash', async () => {
@@ -149,7 +177,7 @@ describe('HostTab #automatic-cleanup (AC8)', () => {
     await waitFor(() => expect(scrolls).toHaveLength(1))
 
     // The user scrolls back to the top, then opens Free up.
-    screen.getByTestId('scroller').scrollTop = 0
+    documentScroller().scrollTop = 0
     scrolls.length = 0
     await user.click(screen.getByTestId('host-free-space-button'))
     const dialog = await screen.findByRole('dialog', { name: 'Free up space' })
@@ -159,7 +187,7 @@ describe('HostTab #automatic-cleanup (AC8)', () => {
     await user.click(within(covered).getByRole('link', { name: 'Change timing' }))
 
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
-    await waitFor(() => expect(scrolls).toEqual([{ to: 900, summaryLoaded: true }]))
+    await waitFor(() => expect(scrolls).toEqual([{ target: 'document', to: 900, summaryLoaded: true }]))
 
     // Opening Free up again keeps that request, so it does not scroll again.
     scrolls.length = 0
