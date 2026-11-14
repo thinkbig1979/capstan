@@ -390,8 +390,8 @@ How many files rclone copies at once during a sync, from 1 to 32 (default 4).
 
 ## Docker cleanup
 
-Docker cleanup moved to the Docker host page, beside the numbers it acts on. This
-section links there. See [Docker host help](docker-host.md#automatic-cleanup).
+Docker cleanup moved to the dashboard's Host tab, beside the numbers it acts on.
+This section links there. See [Docker host help](docker-host.md#automatic-cleanup).
 
 ## Audit log
 
