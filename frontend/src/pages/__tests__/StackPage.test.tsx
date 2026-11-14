@@ -412,6 +412,36 @@ describe('StackPage', () => {
       expect(invalidate).toHaveBeenCalledWith({ queryKey: ['stack', 's1'] })
       expect(invalidate).toHaveBeenCalledWith({ queryKey: ['stacks'] })
     })
+
+    // agent-os-ljm0: every terminal outcome refreshes the stack and says what
+    // happened, not only success. 'disconnected' is not here: the hook already
+    // refetches on a close with no done frame.
+    it.each([
+      ['error', 'error', 'Restart failed'],
+      ['partial', 'warning', 'Restart partly completed'],
+      ['no_change', 'info', 'Restart: no change'],
+    ] as const)('ljm0: refreshes the stack and notifies after %s', async (status, level, title) => {
+      Object.assign(operationState, { status, action: 'restart', error: status === 'error' ? 'compose up failed' : null })
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
+      })
+      const invalidate = vi.spyOn(queryClient, 'invalidateQueries')
+
+      renderPage('/stacks/s1', queryClient)
+
+      const { toast } = await import('sonner')
+      await waitFor(() => {
+        expect(toast[level]).toHaveBeenCalledTimes(1)
+      })
+      const [shownTitle, opts] = vi.mocked(toast[level]).mock.calls[0]
+      expect(shownTitle).toBe(title)
+      if (status === 'error') {
+        expect(opts).toEqual({ description: 'compose up failed' })
+      }
+      expect(toast.success).not.toHaveBeenCalled()
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ['stack', 's1'] })
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ['stacks'] })
+    })
   })
 
   describe('loading state', () => {

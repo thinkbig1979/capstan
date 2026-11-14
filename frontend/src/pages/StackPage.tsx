@@ -12,7 +12,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { stacksApi } from '@/lib/api'
-import { classifyError, presentError, toastInvalid } from '@/lib/error-handler'
+import { classifyError, presentError, presentFault, toastInvalid } from '@/lib/error-handler'
 import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 import { StatusStaleNotice } from '@/components/StatusStaleNotice'
 import { isFirstLoad } from '@/lib/query-state'
@@ -136,13 +136,20 @@ export function StackPage() {
   const isPulling = operation.status === 'running' && operation.action === 'pull'
   const anyRunning = isStarting || isStopping || isRestarting || isPulling
 
+  // Every terminal outcome refreshes the stack and says what happened; a
+  // failed Start/Stop also changes what the page should show (agent-os-ljm0).
+  // 'disconnected' is not here: the hook already refetches on that close.
   useEffect(() => {
-    if (operation.status === 'success' && id) {
-      queryClient.invalidateQueries({ queryKey: queryKeys.stack.detail(id) })
-      queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
-      toast.success(`${operation.action.charAt(0).toUpperCase() + operation.action.slice(1)} completed`)
-    }
-  }, [operation.status, operation.action, id, queryClient])
+    const status = operation.status
+    if (!id || !['success', 'no_change', 'partial', 'error'].includes(status)) return
+    queryClient.invalidateQueries({ queryKey: queryKeys.stack.detail(id) })
+    queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
+    const label = operation.action.charAt(0).toUpperCase() + operation.action.slice(1)
+    if (status === 'success') toast.success(`${label} completed`)
+    else if (status === 'no_change') toast.info(`${label}: no change`)
+    else if (status === 'partial') toast.warning(`${label} partly completed`)
+    else presentFault(`${label} failed`, operation.error)
+  }, [operation.status, operation.action, operation.error, id, queryClient])
 
   // Available updates for this stack
   const { data: updateData } = useCheckUpdates()
