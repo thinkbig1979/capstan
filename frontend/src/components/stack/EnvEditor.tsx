@@ -82,7 +82,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   // Re-masks revealed entries when the unlock session ends (manual lock or
   // auto-expiry) — see useEnvUnlockRemask for which ones and the render-time
   // detail.
-  useEnvUnlockRemask(unlockedUntil, setEntries, entries, { snapshots, rebase: rebaseHistory })
+  const { rememberMasked } = useEnvUnlockRemask(unlockedUntil, setEntries, entries, { snapshots, rebase: rebaseHistory })
 
   const {
     unlockDialogOpen,
@@ -145,6 +145,8 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
         _rowId: nextRowId(),
       }))
       setEntries(rows)
+      // The server's flag, not the carried reveal, decides what a lock re-masks.
+      rememberMasked(rows.filter((_, i) => next.entries[i].sensitive).map((r) => r._rowId))
       setLoadedEnv({
         rows,
         raw: next.raw ?? '',
