@@ -8,9 +8,11 @@ import { useTextFilter } from '@/hooks/useTextFilter'
 import { TableSearch } from '@/components/ui/table-search'
 import type { EnvEntryRow, IndexedEnvEntry } from './types'
 
+// A masked value is not searched: a match would tell a locked user what the
+// hidden value contains, one substring at a time (agent-os-kxag).
 const ENV_SEARCH_FIELDS = [
   (e: IndexedEnvEntry) => e.key,
-  (e: IndexedEnvEntry) => e.value,
+  (e: IndexedEnvEntry) => (e.sensitive ? '' : e.value),
 ]
 
 /**
