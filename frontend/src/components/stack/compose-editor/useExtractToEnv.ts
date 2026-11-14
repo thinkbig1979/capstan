@@ -21,7 +21,7 @@ const NEEDS_QUOTES = /[\s#"'\\]/
  * with " and \ escaped (compose-go v2 dotenv/parser.go, extractVarValue).
  * Each case is checked with compose-go in settings_globalenv_jx88_test.go.
  */
-export function envLineFor(varName: string, value: string): string {
+function envLineFor(varName: string, value: string): string {
   if (!NEEDS_QUOTES.test(value)) return `${varName}=${value}`
   return `${varName}="${value.replace(/[\\"]/g, (c) => `\\${c}`)}"`
 }

@@ -474,7 +474,10 @@ func globalValueReadsAsOne(key, value string) bool {
 		return false
 	}
 	vars, err := dotenv.UnmarshalWithLookup(line+"\n", func(string) (string, bool) { return "x", true })
-	if err != nil || len(vars) != 1 {
+	if err != nil {
+		return false // compose cannot read the line: refuse the save
+	}
+	if len(vars) != 1 {
 		return false
 	}
 	// The parser keys "export A=1" as "export A"; compose reads it as A (review F1).
