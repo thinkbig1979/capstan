@@ -89,3 +89,11 @@ func TestMaskSecrets_n30e_LongTailLineMasksInLinearTime(t *testing.T) {
 	assert.NotContains(t, out, "\"b\"")
 	assert.Less(t, elapsed, 2*time.Second, "%d bytes took %s to mask", len(line), elapsed)
 }
+
+// A tail value whose quote does not close on its line is masked to the
+// line's end (review mutant m7: base showed it).
+func TestMaskSecrets_n30e_OpenTailQuoteMasked(t *testing.T) {
+	out, _ := MaskSecrets("NOTES=\"a\" DB_PASSWORD=\"SEKRIT\nB=1\n", "stack/.env", nil)
+	assert.NotContains(t, out, "SEKRIT", "%q", out)
+	assert.Contains(t, out, "\nB=1\n")
+}
