@@ -70,3 +70,41 @@ func TestGlobalEnvJb5g_ReadOnlyRowsKeepAndDelete(t *testing.T) {
 	require.Equal(t, http.StatusNoContent, w.Code, w.Body.String())
 	assert.Equal(t, "A=2\n", readGlobalEnvTestFile(t, p))
 }
+
+// Review F1: rows of one key paired by position, so deleting A=1 above a bare
+// A paired the kept A with A=1, wrote it as "A=" and dropped the bare A:
+// compose then read A as empty instead of inherited. A read-only line only
+// pairs with a request row equal to it; editable rows still pair in order.
+func TestGlobalEnvJb5g_DuplicateKeyKeepsReadOnlyLine(t *testing.T) {
+	for _, tc := range []struct {
+		name, file string
+		req        []map[string]string
+		want       string
+	}{
+		{"delete A=1, keep bare A", "A=1\nA\n", []map[string]string{{"key": "A", "value": ""}}, "A\n"},
+		{"delete A=1, keep export A", "A=1\nexport A\n", []map[string]string{{"key": "A", "value": ""}}, "export A\n"},
+		{"delete A=1, keep A: v", "A=1\nA: v\n", []map[string]string{{"key": "A", "value": "v"}}, "A: v\n"},
+		{"delete multi-line copy, keep A=2", "A=\"x\ny\"\nA=2\n", []map[string]string{{"key": "A", "value": "2"}}, "A=2\n"},
+		{"bare A first", "A\nA=1\n", []map[string]string{{"key": "A", "value": ""}}, "A\n"},
+		{"edit A=1 beside bare A", "A=1\nA\n", []map[string]string{{"key": "A", "value": "2"}, {"key": "A", "value": ""}}, "A=2\nA\n"},
+		{"editable duplicates stay in order", "A=1\nA=2\n", []map[string]string{{"key": "A", "value": "2"}, {"key": "A", "value": "3"}}, "A=2\nA=3\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dataDir, router := globalEnvTestRouter(t)
+			p := writeGlobalEnvFile(t, dataDir, tc.file)
+			w := putGlobalVars(t, router, tc.req)
+			require.Equal(t, http.StatusNoContent, w.Code, w.Body.String())
+			assert.Equal(t, tc.want, readGlobalEnvTestFile(t, p))
+		})
+	}
+}
+
+// The edit of a lone read-only line is still refused.
+func TestGlobalEnvJb5g_DuplicateKeyReadOnlyEditRefused(t *testing.T) {
+	dataDir, router := globalEnvTestRouter(t)
+	p := writeGlobalEnvFile(t, dataDir, "A=1\nA\n")
+	w := putGlobalVars(t, router, []map[string]string{{"key": "A", "value": "1"}, {"key": "A", "value": "x"}})
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "read-only")
+	assert.Equal(t, "A=1\nA\n", readGlobalEnvTestFile(t, p), "nothing written")
+}

@@ -106,7 +106,8 @@ Variables applied to every stack. Docker Compose loads them before a stack's own
 - **Some lines are read-only here.** A bare `KEY` (taken from the environment),
   a `KEY: value` line, a line holding a second variable, and a multi-line value
   are shown but cannot be edited on this page. Edit `global.env` directly, or
-  remove the row.
+  remove the row. Removing a row removes its whole line: removing `NOTES` from
+  `NOTES="a" OTHER=b` removes `OTHER` too.
 
 ## Git
 

@@ -86,7 +86,9 @@ export interface EnvResponse {
  * changing what compose reads (agent-os-jb5g): a bare KEY, KEY: value, a value
  * followed by a second statement, or a multi-line value. The stack table shows
  * the same lines read-only (EnvEntry.Comment with a key). A save refuses a
- * changed value for one; it may still be deleted.
+ * changed value for one; it may still be deleted, which removes the whole
+ * line: deleting NOTES of `NOTES="a" OTHER=b` removes OTHER too. Among rows
+ * of one key, a read-only line pairs only with a request row equal to it.
  */
 export interface GlobalEnvVar {
   key: string;
