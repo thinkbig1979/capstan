@@ -1,6 +1,7 @@
 package services
 
 import (
+	"errors"
 	"log/slog"
 
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
@@ -37,10 +38,24 @@ func LifecycleStatus(ar truth.ActionResult) string {
 // through it, so the stored status never lags what the stack did
 // (agent-os-vush; kept that way by TestLifecycleCallsStoreStatus_Vush). A
 // failed write is logged, not returned: the operation itself already happened.
+//
+// A result that started nothing (a refused compose, no Docker service) writes
+// nothing, as operations.go stores nothing for a refused run; the mapped
+// status is still returned for the caller's response.
 func StoreLifecycleStatus(store StackStatusStore, stackID string, ar truth.ActionResult) string {
 	status := LifecycleStatus(ar)
+	if startedNothing(ar) {
+		return status
+	}
 	if err := store.UpdateStackStatus(stackID, status); err != nil {
 		slog.Warn("Failed to persist verified stack status", "stackID", stackID, "status", status, "error", err)
 	}
 	return status
+}
+
+// startedNothing reports a lifecycle result refused before Docker was asked
+// to do anything.
+func startedNothing(ar truth.ActionResult) bool {
+	var refused composeRefusedError
+	return errors.As(ar.Err, &refused) || errors.Is(ar.Err, ErrDockerUnavailable)
 }

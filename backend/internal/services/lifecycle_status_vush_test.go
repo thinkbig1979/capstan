@@ -3,12 +3,16 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
+	"github.com/thinkbig1979/capstan/backend/internal/models"
+	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
 
 // agent-os-vush: a backup or restore that stops and restarts a stack stores
@@ -106,7 +110,40 @@ func TestPullVerified_RedeployStoresVerifiedStatus_Vush(t *testing.T) {
 	})
 	require.True(t, got.dockerSaw("A"), "fixture: stack A was redeployed; docker saw %q", got.docker)
 	require.False(t, got.dockerSaw("B"), "fixture: stack B was not redeployed")
-	before := storedStatus(t, got.db, "B")
 	assert.Equal(t, "error", storedStatus(t, got.db, "A"))
-	assert.NotEqual(t, "error", before, "the sibling that was not redeployed keeps its status")
+	assert.NotEqual(t, "error", storedStatus(t, got.db, "B"), "the sibling that was not redeployed keeps its status")
+}
+
+type recordingStatusStore struct{ stored []string }
+
+func (r *recordingStatusStore) UpdateStackStatus(_ string, status string) error {
+	r.stored = append(r.stored, status)
+	return nil
+}
+
+// A refused compose (shared project name, a failed lookup) and a missing
+// Docker service started nothing, so the stack's stored status stays as it
+// was, as operations.go's persistStatus already does for a refused run
+// (agent-os-vush review R1). Backup and git pull have no pre-check that
+// stops them reaching the store with such a result.
+func TestStoreLifecycleStatus_SkipsResultsThatStartedNothing_Vush(t *testing.T) {
+	var nilDocker *DockerService
+	nilAR, _ := nilDocker.StartVerified(models.Stack{ID: "s1"})
+	cases := map[string]truth.ActionResult{
+		"refused compose":   refusedCompose(errors.New("project name shared with another stack")),
+		"refused ambiguous": refusedCompose(fmt.Errorf("lookup: %w", errdefs.ErrAmbiguous)),
+		"no docker service": nilAR,
+	}
+	for name, ar := range cases {
+		t.Run(name, func(t *testing.T) {
+			store := &recordingStatusStore{}
+			StoreLifecycleStatus(store, "s1", ar)
+			assert.Empty(t, store.stored, "a result that started nothing must not overwrite the stored status")
+		})
+	}
+
+	// Control on the same instrument: a failed run that did reach Docker is stored.
+	store := &recordingStatusStore{}
+	StoreLifecycleStatus(store, "s1", truth.Failed("could not verify stack state after stop", errors.New("ps failed")))
+	assert.Equal(t, []string{"error"}, store.stored)
 }

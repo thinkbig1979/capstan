@@ -21,8 +21,9 @@ var lifecycleVerbs = map[string]bool{
 // verified lifecycle calls are matched by at least as many
 // StoreLifecycleStatus calls. It keys on the method name, not the receiver,
 // so h.dockerSvc(), s.dockerSvc() and a plain docker value all count.
-// services/docker_lifecycle.go is exempt: it defines the verbs, and
-// RestartVerified composes Stop and Start with no store to write to.
+// The one exemption is RestartVerified in services/docker_lifecycle.go: it
+// composes Stop and Start with no store to write to, and its callers store
+// its result. Any other function in that file is checked.
 //
 // Scope: every non-test file in internal/<pkg>/, read from internalSources
 // (update_history_guard_test.go), so a `go test -overlay` mutant reaches it.
@@ -41,9 +42,6 @@ func TestLifecycleCallsStoreStatus_Vush(t *testing.T) {
 		if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
-		if path == "services/docker_lifecycle.go" {
-			return nil
-		}
 		src, err := internalSources.ReadFile(path)
 		if err != nil {
 			return err
@@ -55,6 +53,11 @@ func TestLifecycleCallsStoreStatus_Vush(t *testing.T) {
 		for _, decl := range file.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
 			if !ok || fn.Body == nil {
+				continue
+			}
+			if path == "services/docker_lifecycle.go" && fn.Name.Name == "RestartVerified" {
+				// It composes Stop and Start and has no store to write to;
+				// its callers store its result.
 				continue
 			}
 			verbs, stores := countLifecycleCalls(fn.Body)
