@@ -202,7 +202,7 @@ test.describe('help: in-app help panel', () => {
   // move the view to another URL and re-key its topic, and neither is what
   // this proves. The user-visible promise is "help from this page says Volumes".
   const PAGE_TOPICS: Array<{ id: string; url: () => string; heading: string }> = [
-    { id: 'HELP-PW-002', url: () => '/?tab=volumes', heading: 'Volumes' },
+    { id: 'HELP-PW-002', url: () => '/?tab=host&view=volumes', heading: 'Volumes' },
     { id: 'HELP-PW-003', url: () => `/stacks/${encodeURIComponent(stackId)}/logs`, heading: 'Logs' },
     { id: 'HELP-PW-004', url: () => '/settings/backup', heading: 'Backup' },
   ]

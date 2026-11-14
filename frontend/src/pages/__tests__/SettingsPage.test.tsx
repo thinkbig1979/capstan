@@ -53,7 +53,7 @@ vi.mock('@/components/settings/GlobalEnvSettingsContent', () => ({
   GlobalEnvSettingsContent: () => <div data-testid="section-global-env" />,
 }))
 // DockerCleanupCard is NOT stubbed: since agent-os-6qfz it is only the
-// "moved to the Docker host page" notice, with no data hooks, and the notice
+// "moved to the Host tab" notice, with no data hooks, and the notice
 // itself is this page's contract for /settings/docker-cleanup (AC13).
 
 import { SettingsPage } from '../SettingsPage'
@@ -103,10 +103,10 @@ describe('SettingsPage', () => {
       renderPage('/settings/docker-cleanup')
 
       const moved = screen.getByTestId('settings-docker-cleanup-moved')
-      expect(moved).toHaveTextContent('Docker cleanup moved to the Docker host page')
+      expect(moved).toHaveTextContent('Docker cleanup moved to the Host tab on the dashboard.')
       expect(within(moved).getByRole('link', { name: 'Open automatic cleanup' })).toHaveAttribute(
         'href',
-        '/host#automatic-cleanup',
+        '/?tab=host#automatic-cleanup',
       )
       expect(screen.queryByLabelText('Age floor (hours)')).toBeNull()
       expect(screen.queryByRole('button', { name: 'Save cleanup schedule' })).toBeNull()

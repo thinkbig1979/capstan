@@ -1,10 +1,10 @@
 # Dashboard help
 
 The dashboard is the front page of Capstan. It lists your stacks and shows what
-needs attention. Open a view from the tab row (Stacks, Metrics, Directories,
-Updates, Backups). The **Host** strip under the stack list links to the Docker
-host page, which covers containers, images, volumes, networks and build cache:
-see [Docker host help](docker-host.md).
+needs attention. Open a view from the tab row (Stacks, Host, Directories,
+Updates, Backups). The **Host** tab covers the server itself: live load, disk use,
+and containers, images, volumes, networks and build cache. See
+[Docker host help](docker-host.md).
 
 ## Stacks
 
@@ -36,26 +36,11 @@ look: pending image updates, stacks in error, or stopped stacks.
   until auto-update is enabled in Settings, Updates. See
   [Settings help](settings.md#scan-interval-and-auto-update).
 
-## Metrics
+## Host
 
-Live counters for the whole host: how many stacks and containers exist and are
-running, a Performance card (memory, network I/O and process count), disk use by
-type, and a small trend chart for each container.
-
-**Common tasks**
-
-- **Spot a heavy container:** scan the Container Metrics charts.
-- **Check disk pressure:** read the Disk Usage card, then open the
-  [Docker host page](docker-host.md) to see what is using it.
-
-**Gotchas**
-
-- **The numbers are live, not stored.** Trends start when you open the page and
-  reset when you leave. Capstan does not keep metric history.
-- **The numbers need the live connection.** If it drops, the cards stop updating
-  until it returns.
-- **Disk usage can read "unavailable".** That means Docker could not answer, not
-  that the disks are empty.
+The Host tab shows how busy the server is and what fills its disk. It has its
+own help: see [Docker host help](docker-host.md). A size beside the tab name is
+how much unused Docker data one click on **Free up** would remove.
 
 ## Directories
 

@@ -1,37 +1,48 @@
 # Docker host help
 
-The Docker host page shows what Docker keeps on disk on the server Capstan runs
-on: how much is in use, how much could be removed, and a list for each kind of
-resource. Open it from the **Host** strip under the stack list on the dashboard.
-The numbers refresh every minute and when Docker reports a change.
+The **Host** tab on the dashboard shows the server Capstan runs on: how busy it
+is, what Docker keeps on disk, how much of that could be removed, and a list for
+each kind of resource. Open it from the tab row, or click the cpu, mem or disk
+figures at the top of any page. The disk numbers refresh every minute and when
+Docker reports a change.
 
 ## Overview
 
-The top of the page is a disk bar with Docker's total disk use, split into space in
-use and space that could be reclaimed. Below it, one card per kind of resource shows
-a count or a size and a line of detail. A card also shows what could be removed, with
-**Clean up**, or "Nothing to clean up". **View all** opens that resource's list.
-**Free up** at the top of the page shows how much one click would free.
+The overview starts with a **Live** row: CPU with a short trend line, memory with
+swap, network traffic and the process count. Below it is a disk bar with Docker's
+total disk use, split into space in use and space that could be reclaimed. Then one
+card per kind of resource shows a count or a size and a line of detail. A card also
+shows what could be removed, with **Clean up**, or "Nothing to clean up". **View all**
+opens that resource's list. **Busiest containers** lists the five using the most
+CPU, and the **Automatic cleanup** panel closes the overview. **Free up**, beside the
+view links, shows how much one click would free.
 
 **Common tasks**
 
 - **Find what is using space:** compare the cards, then open the biggest with **View all**.
-- **Switch between lists:** use the Containers, Images, Volumes, Networks and
-  Build cache links at the top of any list.
+- **Spot a heavy container:** read **Busiest containers**, or open the Containers
+  list for all of them.
+- **Switch between lists:** use the Overview, Containers, Images, Volumes, Networks
+  and Build cache links at the top of the tab. **Free up** sits on the same row in
+  every list.
 
 **Gotchas**
+
+- **Live numbers are not stored.** Trends start when Capstan opens in this browser tab
+  and reset when you reload or close it. They need the live connection: until it
+  connects, and while it is down, the tiles show a dash and the busiest list is hidden.
 
 - **Volume sizes can read "size unknown".** Docker could not measure every volume, so
   the totals count only the volumes it could. Unknown is not zero.
 - **A card removes nothing by itself.** **Clean up** and **Free up** open the
   Free up space dialog, where you pick what to remove. Each list also has **Prune**
   and the row icons.
-- **If a refresh fails,** the page keeps the last numbers and says the refresh failed.
+- **If a refresh fails,** the tab keeps the last numbers and says the refresh failed.
   If the first load fails, it shows no numbers and offers **Retry**.
 
 ## Free up space
 
-The **Free up space** dialog opens from **Free up** at the top of the page or from
+The **Free up space** dialog opens from **Free up** beside the view links or from
 any card's **Clean up**. It lists what Docker keeps that nothing uses, in five rows:
 unused images, build cache, stopped containers outside any stack, unattached volumes
 and unused networks. Tick the rows you want gone, then press **Remove selected**.
@@ -66,7 +77,7 @@ and unused networks. Tick the rows you want gone, then press **Remove selected**
 
 ## Automatic cleanup
 
-The **Automatic cleanup** panel on this page removes unused Docker data on a
+The **Automatic cleanup** panel at the bottom of the overview removes unused Docker data on a
 schedule. It is off until you turn it on. By default it runs every 24 h and removes
 dangling images and build cache older than 168 h. The panel reads its sentence from
 the saved schedule, so it always names what will actually be removed and what never is.
@@ -136,7 +147,7 @@ auto-update state.
 ## Images
 
 The Docker images stored on the host, with size, age and how many containers use
-each one. The page also shows how much a scheduled cleanup would reclaim.
+each one. The list also shows how much a scheduled cleanup would reclaim.
 
 **Common tasks**
 

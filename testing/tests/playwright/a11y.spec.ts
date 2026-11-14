@@ -58,18 +58,9 @@ const TEST_STACK_NAME = process.env.CAPSTAN_TEST_STACK ?? 'test-app'
 
 // ─── Matrix ──────────────────────────────────────────────────────────────────
 
-const DASHBOARD_TABS = [
-  'stacks',
-  'overview',
-  'containers',
-  'directories',
-  'updates',
-  'backups',
-  'images',
-  'volumes',
-  'networks',
-  'build-cache',
-]
+const DASHBOARD_TABS = ['stacks', 'host', 'directories', 'updates', 'backups']
+// The Host tab's list views, at /?tab=host&view=<view> (agent-os-mi4r).
+const HOST_VIEWS = ['containers', 'images', 'volumes', 'networks', 'build-cache']
 const STACK_TABS = ['overview', 'editor', 'logs', 'terminal', 'metrics', 'activity']
 const SETTINGS_SECTIONS = [
   'account-security',
@@ -98,6 +89,8 @@ const TARGETS: Target[] = [
     name: `dash:${t}`,
     url: () => (t === 'stacks' ? '/' : `/?tab=${t}`),
   })),
+  // Not /?tab=<view>: that is an unknown tab and lands on Stacks.
+  ...HOST_VIEWS.map((v) => ({ name: `host:${v}`, url: () => `/?tab=host&view=${v}` })),
   ...STACK_TABS.map((t) => ({
     name: `stack:${t}`,
     url: (id: string) => `/stacks/${encodeURIComponent(id)}/${t}`,
@@ -107,7 +100,7 @@ const TARGETS: Target[] = [
 
 const NARROW_TARGETS = [
   'dash:stacks',
-  'dash:containers',
+  'host:containers',
   'dash:updates',
   'dash:backups',
   'stack:overview',

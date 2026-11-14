@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import appSource from '@/App.tsx?raw'
 import dashboardSource from '@/pages/DashboardPage.tsx?raw'
-import hostPageSource from '@/pages/HostPage.tsx?raw'
+import hostTabSource from '@/components/host/HostTab.tsx?raw'
 import stackDetailSource from '@/components/stack/StackDetail.tsx?raw'
 import { DASHBOARD_TABS, HOST_VIEWS, SETTINGS_SECTION_IDS, STACK_TABS } from '@/lib/app-views'
 import { loadHelpLibrary, type HelpDoc } from '../content'
@@ -9,7 +9,8 @@ import { FIELD_HELP, PAGE_HELP, type HelpRef, type PageContextKey } from '../reg
 
 // Every view the app renders, keyed as the registry keys it.
 const VIEW_KEYS: PageContextKey[] = [
-  ...DASHBOARD_TABS.map((v) => `dashboard:${v}` as const),
+  // The Host tab's topics are the host: keys below, not a dashboard: key.
+  ...DASHBOARD_TABS.filter((v) => v !== 'host').map((v) => `dashboard:${v}` as const),
   'host:overview',
   ...HOST_VIEWS.map((v) => `host:${v}` as const),
   ...STACK_TABS.map((v) => `stack:${v}` as const),
@@ -30,7 +31,7 @@ describe('help coverage (a): every view and field resolves to a real heading', (
   it('every exported view has a PAGE_HELP entry', () => {
     const missing = VIEW_KEYS.filter((key) => !(key in PAGE_HELP))
     expect(missing).toEqual([])
-    expect(VIEW_KEYS).toHaveLength(27)
+    expect(VIEW_KEYS).toHaveLength(26)
   })
 
   it('every PAGE_HELP ref names a bundled doc and heading', async () => {
@@ -76,18 +77,17 @@ describe('help coverage (b): every rendered tab panel is in the exported arrays'
   })
 })
 
-// HostPage renders no tabs: the consumer arm reads the lists it switches on and
-// the routes App registers, so a sixth list or a renamed route fails here.
-describe('help coverage (b2): the Docker host page renders exactly the exported views', () => {
-  it('HostPage.tsx switches on every HOST_VIEWS value and nothing else', () => {
-    const cases = [...hostPageSource.matchAll(/case '([^']+)':/g)].map((m) => m[1])
-    expect(cases.length).toBe(hostPageSource.match(/\bcase\b/g)?.length ?? 0)
+// The Host tab's lists are not TabsContent panels: the consumer arm reads the
+// views HostTab switches on, so a sixth list fails here (agent-os-mi4r).
+describe('help coverage (b2): the Host tab renders exactly the exported views', () => {
+  it('HostTab.tsx switches on every HOST_VIEWS value and nothing else', () => {
+    const cases = [...hostTabSource.matchAll(/case '([^']+)':/g)].map((m) => m[1])
+    expect(cases.length).toBe(hostTabSource.match(/\bcase\b/g)?.length ?? 0)
     expect([...cases].sort()).toEqual([...HOST_VIEWS].sort())
   })
 
-  it('App.tsx registers /host and /host/:view in both route trees', () => {
-    expect(appSource.match(/path="\/host"/g)?.length).toBe(2)
-    expect(appSource.match(/path="\/host\/:view"/g)?.length).toBe(2)
+  it('App.tsx registers no /host route: the Host tab lives at /?tab=host', () => {
+    expect(appSource).not.toMatch(/path="\/host/)
   })
 })
 

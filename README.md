@@ -71,7 +71,7 @@ cd frontend && ./run-dev.sh      # Vite dev server on :5173 (proxies /api to :50
 - **Environment Files**: manage `.env` files with comment preservation
 - **Git Integration**: status, pull, log, and diff for git-managed stacks
 - **Image Updates**: detect and apply image updates per service, with an at-a-glance count in the sidebar
-- **Dashboard Metrics**: sortable CPU and memory view with per-container sparklines
+- **Host tab**: live CPU, memory and network, Docker disk use with one-click cleanup, and the busiest containers
 - **Backups**: built-in restic snapshots with optional rclone cloud sync, with last-run and next-run shown in the sidebar
 - **Web Terminal**: an in-browser shell into running containers
 - **Real-time Updates**: file watching for automatic stack detection
@@ -107,7 +107,7 @@ by resource, plus health-check and version examples.
 
 ### In-app help
 
-Short, per-page guides to the dashboard, the Docker host page, the stack page and Settings.
+Short, per-page guides to the dashboard, its Host tab, the stack page and Settings.
 
 - [Dashboard help](docs/help/dashboard.md)
 - [Docker host help](docs/help/docker-host.md)

@@ -23,9 +23,11 @@ vi.mock('@/lib/api', async () => {
   }
 })
 
-// Disconnected metrics stream, so the only vital is the one under test.
+// Disconnected metrics stream by default, so the only vital is the one under
+// test; the AC7 test connects it.
+const metrics = vi.hoisted(() => ({ value: { aggregates: {} as Record<string, number>, isConnected: false } }))
 vi.mock('@/hooks/DashboardMetricsContext', () => ({
-  useDashboardMetricsContext: () => ({ aggregates: {}, isConnected: false }),
+  useDashboardMetricsContext: () => metrics.value,
 }))
 
 const diskVital = async () => (await screen.findByTestId('header-vital-disk')).textContent
@@ -34,6 +36,7 @@ const knownDisk = { total: 30 * GiB, images: 0, containers: 0, volumes: 0, build
 
 beforeEach(() => {
   vi.clearAllMocks()
+  metrics.value = { aggregates: {}, isConnected: false }
   hostSummaryMock.mockResolvedValue(makeHostSummary())
 })
 
@@ -75,15 +78,31 @@ describe('HeaderVitals — disk', () => {
   })
 })
 
-describe('HeaderVitals — DISK links to the Docker host page', () => {
-  it('is a link to /host showing the total and an "unused" chip', async () => {
+describe('HeaderVitals — every vital links to the Host tab (agent-os-mi4r)', () => {
+  it('puts cpu, mem and disk inside one link to /?tab=host', async () => {
+    metrics.value = {
+      isConnected: true,
+      aggregates: { totalCpuPercent: 23, totalMemPercent: 40, totalMemUsage: 6 * GiB },
+    }
+    statsMock.mockResolvedValue({ totalStacks: 2, diskUsage: knownDisk })
+    renderWithProviders(<HeaderVitals />)
+
+    const link = await screen.findByTestId('header-vitals-link')
+    expect(link.tagName).toBe('A')
+    expect(link).toHaveAttribute('href', '/?tab=host')
+    for (const vital of ['cpu', 'mem', 'disk']) {
+      expect(link).toContainElement(await screen.findByTestId(`header-vital-${vital}`))
+    }
+  })
+
+  it('is a link to /?tab=host showing the total and an "unused" chip', async () => {
     statsMock.mockResolvedValue({ totalStacks: 2, diskUsage: knownDisk })
     hostSummaryMock.mockResolvedValue(makeHostSummary({ disk: { total: 30 * GiB, reclaimable: 14.9 * GiB } }))
     renderWithProviders(<HeaderVitals />)
 
-    const link = await screen.findByTestId('header-disk-link')
+    const link = await screen.findByTestId('header-vitals-link')
     expect(link.tagName).toBe('A')
-    expect(link).toHaveAttribute('href', '/host')
+    expect(link).toHaveAttribute('href', '/?tab=host')
     expect(await diskVital()).toBe('disk30.00 GB')
     expect(await screen.findByTestId('header-disk-unused')).toHaveTextContent('14.90 GB unused')
     expect(link).toContainElement(screen.getByTestId('header-disk-unused'))
@@ -94,7 +113,7 @@ describe('HeaderVitals — DISK links to the Docker host page', () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     renderWithProviders(<HeaderVitals />, { queryClient })
 
-    await screen.findByTestId('header-disk-link')
+    await screen.findByTestId('header-vitals-link')
     await waitFor(() => expect(queryClient.getQueryState(queryKeys.resources.hostSummary())?.status).toBe('success'))
     expect(screen.queryByTestId('header-disk-unused')).not.toBeInTheDocument()
   })
@@ -103,7 +122,7 @@ describe('HeaderVitals — DISK links to the Docker host page', () => {
     statsMock.mockResolvedValue({ totalStacks: 2 })
     renderWithProviders(<HeaderVitals />)
 
-    expect(await screen.findByTestId('header-disk-link')).toHaveAttribute('href', '/host')
+    expect(await screen.findByTestId('header-vitals-link')).toHaveAttribute('href', '/?tab=host')
     expect(await diskVital()).toBe('diskunavailable')
   })
 
@@ -113,7 +132,7 @@ describe('HeaderVitals — DISK links to the Docker host page', () => {
     hostSummaryMock.mockResolvedValue(makeHostSummary({ disk: { volumesSizeKnown: false }, volumes: { sizeKnown: false } }))
     renderWithProviders(<HeaderVitals />)
 
-    const link = await screen.findByTestId('header-disk-link')
+    const link = await screen.findByTestId('header-vitals-link')
     await waitFor(() => expect(link.getAttribute('title')).toContain('Volumes: size unknown'))
   })
 
@@ -123,6 +142,6 @@ describe('HeaderVitals — DISK links to the Docker host page', () => {
     renderWithProviders(<HeaderVitals />)
 
     await screen.findByTestId('header-disk-unused')
-    expect(screen.getByTestId('header-disk-link').getAttribute('title')).not.toContain('size unknown')
+    expect(screen.getByTestId('header-vitals-link').getAttribute('title')).not.toContain('size unknown')
   })
 })

@@ -92,7 +92,7 @@ const ALL_SECTIONS: SettingsSection[] = [
     // asserts a SINGULAR link for each of those searches.
     id: 'docker-cleanup',
     title: 'Docker cleanup',
-    description: 'Remove unused Docker data on a schedule; now on the Docker host page',
+    description: 'Remove unused Docker data on a schedule; now on the dashboard Host tab',
     Icon: Trash2,
   },
   {

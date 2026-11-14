@@ -18,25 +18,24 @@ function isOneOf<T extends string>(values: readonly T[], value: string): value i
 
 /**
  * The help topic key for a location, resolved the way the pages resolve it:
- * the dashboard defaults to stacks, settings to account-security, /host to its
- * overview. An unknown dashboard tab maps to stacks, an unknown /host/<view> to
- * the overview (HostPage redirects it there), and the legacy /?tab=<hostview>
- * to that host view (DashboardPage redirects it to /host/<view>); an unknown stack tab renders no tab content,
- * so it has no topic (null, the panel shows the guide index).
+ * the dashboard defaults to stacks, settings to account-security, the Host tab
+ * (?tab=host) to its overview. An unknown dashboard tab maps to stacks
+ * (DashboardPage redirects it to /), an unknown ?view= on the Host tab to the
+ * overview (HostTab shows it); an unknown stack tab renders no tab content, so
+ * it has no topic (null, the panel shows the guide index).
  */
 /** @knipignore exported for help/__tests__/page-context.test.ts, which tests the mapping without a router; used in-file by usePageHelpContext */
 export function pageContextFor(pathname: string, search: string): PageContextKey | null {
   const segments = pathname.split('/').filter(Boolean)
 
   if (segments.length === 0) {
-    const tab = new URLSearchParams(search).get('tab') || 'stacks'
-    if (isOneOf(HOST_VIEWS, tab)) return `host:${tab}`
-    return `dashboard:${isOneOf(DASHBOARD_TABS, tab) ? tab : 'stacks'}`
-  }
-
-  if (segments[0] === 'host') {
-    const view = segments[1] ?? ''
-    return `host:${isOneOf(HOST_VIEWS, view) ? view : 'overview'}`
+    const params = new URLSearchParams(search)
+    const tab = params.get('tab') || 'stacks'
+    if (tab === 'host') {
+      const view = params.get('view') ?? ''
+      return `host:${isOneOf(HOST_VIEWS, view) ? view : 'overview'}`
+    }
+    return isOneOf(DASHBOARD_TABS, tab) && tab !== 'host' ? `dashboard:${tab}` : 'dashboard:stacks'
   }
 
   if (segments[0] === 'stacks' && segments.length >= 2) {

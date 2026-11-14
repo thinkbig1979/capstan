@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
 import { screen } from '@testing-library/react'
 import { renderWithProviders } from '@/test/utils'
-import { DashboardMetricsTab } from '../DashboardMetricsTab'
+import { HostLiveRow } from '@/components/host/HostLiveRow'
 import { ContainersOverviewTab } from '../ContainersOverviewTab'
 import type { DashboardStats } from '@/types'
 import type { DashboardAggregateMetrics } from '@/hooks/useDashboardMetrics'
@@ -75,81 +75,49 @@ const aggregates: DashboardAggregateMetrics = {
   totalPids: 0,
 }
 
-// DashboardPage passes runningContainers as `dashboardStats?.runningContainers
-// || 0`, so an omitted count arrives here as the prop 0. The component has the
-// stats object and must read the absence from it.
-const renderMetricsTab = (stats: DashboardStats) =>
-  renderWithProviders(
-    <DashboardMetricsTab
-      stats={stats}
-      aggregates={aggregates}
-      isConnected={true}
-      totalStacks={2}
-      runningStacks={0}
-      stoppedStacks={2}
-      totalContainers={0}
-      runningContainers={stats.runningContainers ?? 0}
-      directoryCount={1}
-      containers={[]}
-    />,
-  )
+// agent-os-mi4r: the Metrics tab's Performance card is the Host tab's Live
+// row. The disk card went with it; the Host tab's disk figures come from the
+// host summary and keep their own "could not measure" tests (HostTab.test.tsx).
+const renderLiveRow = (stats: DashboardStats) =>
+  renderWithProviders(<HostLiveRow stats={stats} aggregates={aggregates} isConnected={true} containers={[]} />)
 
-describe('DashboardMetricsTab — omitted stats', () => {
-  it('shows the host container count and disk usage as unavailable when their reads failed', () => {
-    renderMetricsTab(bothReadsFailed)
+describe('HostLiveRow — omitted stats', () => {
+  it('shows processes without a container count when the host count read failed', () => {
+    renderLiveRow(bothReadsFailed)
 
-    // Precondition: the loaded layout rendered, not the skeleton.
-    expect(screen.getByText('Disk Usage')).toBeInTheDocument()
-    expect(screen.getByText('Performance')).toBeInTheDocument()
-
-    expect(screen.queryByText('0 on host')).not.toBeInTheDocument()
-    expect(screen.getByText('Host count unavailable')).toBeInTheDocument()
-    expect(screen.queryByText(/across 0 containers/)).not.toBeInTheDocument()
-    // The per-category rows would each read 0 B. (Swap stays: it comes from
-    // the metrics stream, not from this read.)
-    expect(screen.queryByText('Build Cache')).not.toBeInTheDocument()
-    expect(screen.getByText('Disk usage is unavailable.')).toBeInTheDocument()
+    // Precondition: the connected layout rendered, not the dashes.
+    const processes = screen.getByTestId('host-live-processes')
+    expect(processes).not.toHaveTextContent('—')
+    expect(processes).toHaveTextContent('running container count unavailable')
+    expect(processes).not.toHaveTextContent(/across/)
   })
 
   it('still shows zeros for a genuinely empty host', () => {
-    renderMetricsTab(emptyHost)
+    renderLiveRow(emptyHost)
 
-    expect(screen.getByText('0 on host')).toBeInTheDocument()
-    expect(screen.getByText('Build Cache')).toBeInTheDocument()
-    expect(screen.getByText(/across 0 containers/)).toBeInTheDocument()
-    expect(screen.queryByText('Disk usage is unavailable.')).not.toBeInTheDocument()
-    expect(screen.queryByText('Host count unavailable')).not.toBeInTheDocument()
-  })
-})
-
-// agent-os-rwik: Docker reports a size it did not measure as -1, and the server
-// skips it, so the sum is a floor. A floor must read "at least", never exact.
-describe('DashboardMetricsTab — disk figures Docker could not fully measure', () => {
-  const MiB = 1024 ** 2
-  const withDisk = (known: boolean): DashboardStats => ({
-    ...emptyHost,
-    diskUsage: {
-      total: 5 * MiB, images: 0, containers: 2 * MiB, volumes: 3 * MiB, buildCache: 0,
-      volumesSizeKnown: known, containersSizeKnown: known,
-    },
-  })
-  const row = (label: string) => screen.getByText(label).closest('div')!.parentElement!
-
-  it('reads "at least" for the containers and volumes figures when some size was unmeasured', () => {
-    renderMetricsTab(withDisk(false))
-
-    expect(row('Containers')).toHaveTextContent('at least 2.00 MB')
-    expect(row('Volumes')).toHaveTextContent('at least 3.00 MB')
-    expect(screen.getByText('at least 5.00 MB')).toBeInTheDocument()
+    const processes = screen.getByTestId('host-live-processes')
+    expect(processes).toHaveTextContent('across 0 running containers')
+    expect(processes).not.toHaveTextContent('unavailable')
   })
 
-  it('reads the exact figure when every size was measured', () => {
-    renderMetricsTab(withDisk(true))
-
-    expect(row('Containers')).toHaveTextContent('2.00 MB')
-    expect(row('Volumes')).toHaveTextContent('3.00 MB')
-    expect(screen.getByText('5.00 MB')).toBeInTheDocument()
-    expect(screen.queryByText(/at least/)).not.toBeInTheDocument()
+  // Review round 1, item 5: the row keeps its height across a (dis)connect
+  // because every tile keeps the same lines. jsdom cannot measure height, so
+  // this pins the structure: same element count per tile in both states.
+  it('renders the same lines in every tile whether or not the socket is connected', () => {
+    const shape = () =>
+      ['cpu', 'memory', 'network', 'processes'].map((t) => {
+        const tile = screen.getByTestId(`host-live-${t}`)
+        const sub = tile.querySelector('[data-testid="host-live-sub"]')
+        // An empty span has no line height, so the line must hold text (a
+        // non-breaking space when there is nothing to say).
+        return [t, tile.children.length, (sub?.textContent ?? '').length > 0]
+      })
+    const connected = renderLiveRow(emptyHost)
+    const whenConnected = shape()
+    connected.unmount()
+    renderWithProviders(<HostLiveRow stats={undefined} aggregates={aggregates} isConnected={false} containers={[]} />)
+    expect(shape()).toEqual(whenConnected)
+    expect(screen.getByTestId('host-live-cpu-slot')).toHaveClass('h-7')
   })
 })
 

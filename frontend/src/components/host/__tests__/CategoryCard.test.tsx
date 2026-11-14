@@ -24,7 +24,7 @@ function renderVolumesCard(volumes: HostSummary['volumes']) {
   const model = hostCards(summary(volumes)).find((c) => c.category === 'volumes')!
   render(
     <MemoryRouter>
-      <CategoryCard {...model} viewHref="/host/volumes" />
+      <CategoryCard {...model} viewHref="/?tab=host&view=volumes" />
     </MemoryRouter>,
   )
   return screen.getByTestId('host-card-volumes')
@@ -41,7 +41,7 @@ describe('CategoryCard', () => {
           value="21.00 GB"
           detail="48 images · 31 used by a container."
           reclaim="17 unused images · about 14.00 GB"
-          viewHref="/host/images"
+          viewHref="/?tab=host&view=images"
           onCleanUp={onCleanUp}
         />
       </MemoryRouter>,
@@ -51,7 +51,7 @@ describe('CategoryCard', () => {
     expect(screen.getByTestId('host-card-images-reclaim')).toHaveTextContent('17 unused images · about 14.00 GB')
     await userEvent.click(within(card).getByRole('button', { name: 'Clean up images' }))
     expect(onCleanUp).toHaveBeenCalledTimes(1)
-    expect(within(card).getByRole('link', { name: /^View all/ })).toHaveAttribute('href', '/host/images')
+    expect(within(card).getByRole('link', { name: /^View all/ })).toHaveAttribute('href', '/?tab=host&view=images')
     expect(within(card).queryByText('Nothing to clean up')).toBeNull()
   })
 
@@ -63,7 +63,7 @@ describe('CategoryCard', () => {
           title="Networks"
           value="3"
           detail="0 used by stacks · 3 built in."
-          viewHref="/host/networks"
+          viewHref="/?tab=host&view=networks"
           onCleanUp={() => {}}
         />
       </MemoryRouter>,

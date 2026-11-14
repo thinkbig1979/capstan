@@ -72,9 +72,12 @@ function PreviewBody() {
   )
 }
 
-/** The automatic cleanup schedule on the Docker host page: what it removes,
- *  when it last and next runs, and the controls to preview, run and edit it. */
-export function AutoCleanupPanel() {
+/** The automatic cleanup schedule on the Host tab: what it removes,
+ *  when it last and next runs, and the controls to preview, run and edit it.
+ *  `ready` is false while content above the panel is still loading; the
+ *  #automatic-cleanup scroll waits for it, or that content would push the
+ *  panel back down after the scroll (agent-os-mi4r). */
+export function AutoCleanupPanel({ ready = true }: { ready?: boolean } = {}) {
   const policy = useDockerCleanupPolicy()
   const history = useDockerCleanupHistory()
   const runCleanup = useRunDockerCleanup()
@@ -82,18 +85,33 @@ export function AutoCleanupPanel() {
   const [editOpen, setEditOpen] = useState<false | 'edit' | 'turn-on'>(false)
   const [previewOpen, setPreviewOpen] = useState(false)
   const sectionRef = useRef<HTMLElement>(null)
-  const { hash } = useLocation()
+  const { hash, state } = useLocation()
   const hasPolicy = !!policy.data
+  // One scroll per request: arriving with the hash is one, and each click on a
+  // link carrying autoCleanupLinkState() is another, although the hash is the
+  // same (agent-os-mi4r). A navigation that only toggles ?free keeps the state,
+  // so it is not a new request.
+  const scrollRequest =
+    hash === `#${AUTO_CLEANUP_ANCHOR}`
+      ? `request-${(state as { autoCleanupScroll?: number } | null)?.autoCleanupScroll ?? 0}`
+      : null
+  const handledRequest = useRef<string | null>(null)
 
-  // /host#automatic-cleanup (the Free up space dialog's "Change timing", the
-  // Settings notice) lands on this panel. The page scrolls inside <main>, and
+  // /?tab=host#automatic-cleanup (the Free up space dialog's "Change timing",
+  // the Settings notice) lands on this panel. The page scrolls inside <main>, and
   // scrollIntoView would drag the document too (eslint no-restricted-properties).
   useEffect(() => {
     const el = sectionRef.current
-    if (hash !== `#${AUTO_CLEANUP_ANCHOR}` || !el || !hasPolicy) return
+    // Leaving the hash ends the request, so coming back to it is a new one.
+    if (!scrollRequest) {
+      handledRequest.current = null
+      return
+    }
+    if (!el || !hasPolicy || !ready || handledRequest.current === scrollRequest) return
+    handledRequest.current = scrollRequest
     const scroller = el.closest('main')
     if (scroller) scroller.scrollTop += el.getBoundingClientRect().top - scroller.getBoundingClientRect().top
-  }, [hash, hasPolicy])
+  }, [scrollRequest, hasPolicy, ready])
 
   const handleRun = async () => {
     const data = policy.data

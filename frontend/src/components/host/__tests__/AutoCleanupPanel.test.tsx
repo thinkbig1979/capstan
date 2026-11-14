@@ -141,7 +141,7 @@ function renderPanel() {
   const invalidate = vi.spyOn(queryClient, 'invalidateQueries')
   const view = render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={['/host']}>
+      <MemoryRouter initialEntries={['/?tab=host']}>
         <AutoCleanupPanel />
       </MemoryRouter>
     </QueryClientProvider>,

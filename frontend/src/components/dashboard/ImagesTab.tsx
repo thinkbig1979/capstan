@@ -28,6 +28,7 @@ import { useTextFilter } from '@/hooks/useTextFilter'
 import type { DockerCleanupPreview, DockerImage } from '@/types'
 import { formatBytes, formatDate } from '@/lib/format'
 import { queryKeys } from '@/lib/query-keys'
+import { AUTO_CLEANUP_HREF } from '@/components/host/host-views'
 
 const PAGE_SIZE = 50
 
@@ -219,7 +220,7 @@ export function ImagesTab() {
                 ? 'Scheduled cleanup is on.'
                 : 'Scheduled cleanup is off.'}{' '}
               <Link
-                to="/host#automatic-cleanup"
+                to={AUTO_CLEANUP_HREF}
                 className="text-primary underline underline-offset-2"
               >
                 Automatic cleanup

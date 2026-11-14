@@ -8,10 +8,11 @@ export interface HelpRef {
 
 /**
  * One key per app view. A new key family is a new union member here plus its
- * entries below.
+ * entries below. The Host tab is not a dashboard: key: its overview and lists
+ * have their own host: keys (agent-os-mi4r).
  */
 export type PageContextKey =
-  | `dashboard:${DashboardTab}`
+  | `dashboard:${Exclude<DashboardTab, 'host'>}`
   | `host:${'overview' | HostView}`
   | `stack:${StackTab}`
   | `settings:${SettingsSectionId}`
@@ -44,7 +45,6 @@ const SETTINGS = 'help/settings'
 // helpCoverage.test.ts proves every anchor is a real heading in the bundled doc.
 export const PAGE_HELP: Record<PageContextKey, HelpRef> = {
   'dashboard:stacks': { doc: DASHBOARD, anchor: 'stacks' },
-  'dashboard:overview': { doc: DASHBOARD, anchor: 'metrics' },
   'dashboard:directories': { doc: DASHBOARD, anchor: 'directories' },
   'dashboard:updates': { doc: DASHBOARD, anchor: 'updates' },
   'dashboard:backups': { doc: DASHBOARD, anchor: 'backups' },
