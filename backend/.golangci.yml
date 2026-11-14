@@ -103,6 +103,13 @@ linters:
         # are not visible to a name match.
         - pattern: '^(os\.WriteFile|os\.Create|os\.OpenFile|ioutil\.WriteFile)$'
           msg: 'write files through writeFileAtomic (handlers/atomic_write.go), safe-defaults rule 7 (agent-os-qags.3)'
+        # agent-os-0h4p: bufio.NewScanner's default 64 KiB token limit stopped
+        # a loop at a longer line, and with no Err() read the output just
+        # ended (the live log stream, restic output, an update's compose
+        # output). lineio.NewScanner raises the limit to 1 MiB; each caller
+        # still reads Err() and keeps draining its pipe.
+        - pattern: '^bufio\.NewScanner$'
+          msg: 'build line scanners with lineio.NewScanner (internal/lineio), then read Err() and keep draining the pipe (agent-os-0h4p)'
         # agent-os-m84q: Docker reports a volume Size or RefCount it did not
         # compute as -1 (or leaves UsageData nil). Read raw, -1 renders as a
         # size and a RefCount of -1 reads as "not in use", which made an
@@ -176,10 +183,11 @@ linters:
       # Tests substitute execCommand/execCommandContext to point a call site at
       # a stand-in binary and spawn fixtures (git init, sleep) directly; none of
       # that is a production child process, so it needs no deadline helper.
-      # Tests also write fixtures into t.TempDir() with os.WriteFile.
+      # Tests also write fixtures into t.TempDir() with os.WriteFile, and read
+      # short fixture output with a plain bufio.Scanner.
       - path: '_test\.go'
         linters: [forbidigo]
-        text: 'commandWithDeadline|writeFileAtomic'
+        text: 'commandWithDeadline|writeFileAtomic|lineio\.NewScanner'
       # Build-tagged (//go:build integration) test harness that shells out to
       # docker. golangci does not compile it without build-tags (none are set),
       # so this is inert today and records the decision for the day someone

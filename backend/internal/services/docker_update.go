@@ -1,7 +1,6 @@
 package services
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -24,6 +23,7 @@ import (
 	"github.com/docker/docker/client"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
+	"github.com/thinkbig1979/capstan/backend/internal/lineio"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
 
@@ -1135,10 +1135,15 @@ func streamComposeCmd(ctx context.Context, timeout time.Duration, args []string,
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			scanner := bufio.NewScanner(r)
+			scanner := lineio.NewScanner(r)
 			for scanner.Scan() {
 				text := scanner.Text()
 				emit(LogLine{Ts: time.Now().UTC(), Text: redactComposeOutput(text, secrets), Stream: s})
+			}
+			if scanner.Err() != nil {
+				// A marker, not a failure: the update's outcome is the child's
+				// exit and the verified end state (agent-os-0h4p).
+				emit(LogLine{Ts: time.Now().UTC(), Text: "[Capstan] an output line over 1 MiB could not be shown; the rest of this output was skipped", Stream: s})
 			}
 			// Keep draining after a scan error (a line over the scanner's limit):
 			// exec's copy goroutine blocks on a writer nobody reads.

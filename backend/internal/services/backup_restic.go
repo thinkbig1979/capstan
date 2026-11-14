@@ -1,7 +1,6 @@
 package services
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -20,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/thinkbig1979/capstan/backend/internal/lineio"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
@@ -91,9 +91,9 @@ func (r *execRunner) Run(ctx context.Context, name string, args []string, env []
 		return fmt.Errorf("start %s: %w", name, err)
 	}
 
-	scanDone := make(chan struct{}, 2)
+	scanDone := make(chan error, 2)
 	scan := func(r io.Reader) {
-		sc := bufio.NewScanner(r)
+		sc := lineio.NewScanner(r)
 		for sc.Scan() {
 			line := sc.Text()
 			if line != "" {
@@ -103,7 +103,7 @@ func (r *execRunner) Run(ctx context.Context, name string, args []string, env []
 		// Keep draining after a scan error (a line over the scanner's limit):
 		// exec's copy goroutine blocks on a writer nobody reads.
 		_, _ = io.Copy(io.Discard, r) //nolint:errcheck // Drain only: the pipe reader's only error is the writer closing, which is the end of the stream.
-		scanDone <- struct{}{}
+		scanDone <- sc.Err()
 	}
 	go scan(stdoutR)
 	go scan(stderrR)
@@ -113,11 +113,16 @@ func (r *execRunner) Run(ctx context.Context, name string, args []string, env []
 	// the writers is what ends the scanners.
 	_ = stdoutW.Close()
 	_ = stderrW.Close()
-	<-scanDone
-	<-scanDone
+	scanErr := errors.Join(<-scanDone, <-scanDone)
 
 	if waitErr != nil {
 		return fmt.Errorf("%s exited: %w", name, waitErr)
+	}
+	// Fail closed (agent-os-0h4p): the callers count and parse these lines
+	// (verify's entry count, the backup summary), so a dropped one would be
+	// a wrong answer, not a cosmetic gap.
+	if scanErr != nil {
+		return fmt.Errorf("%s printed an output line over 1 MiB, so Capstan could not read its output in full: %w", name, scanErr)
 	}
 	return nil
 }

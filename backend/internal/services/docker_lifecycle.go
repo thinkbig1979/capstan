@@ -1,7 +1,6 @@
 package services
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
+	"github.com/thinkbig1979/capstan/backend/internal/lineio"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
@@ -741,7 +741,7 @@ func (s *DockerService) RunStreaming(ctx context.Context, stack models.Stack, su
 		scanDone := make(chan struct{}, 2)
 		scanPipe := func(r io.Reader) {
 			go func() {
-				scanner := bufio.NewScanner(r)
+				scanner := lineio.NewScanner(r)
 				for scanner.Scan() {
 					line := scanner.Text()
 					if strings.TrimSpace(line) != "" {
