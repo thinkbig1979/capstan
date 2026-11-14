@@ -2,9 +2,6 @@ package services
 
 import (
 	"go/ast"
-	"go/parser"
-	"go/token"
-	"sort"
 	"strings"
 	"testing"
 
@@ -77,42 +74,8 @@ func TestPush0j5h_ShortTokenDoesNotFlipTheURLClass(t *testing.T) {
 	}
 }
 
-// TestGitCommandUnredactedCallers0j5h keeps the unredacted read on its two
-// URL classifications. Its output can hold the token, so every caller is a
-// place a credential could reach a message or a log; a new caller fails here
-// and has to be added deliberately. Read through go:embed (packageSources),
-// so a `go test -overlay` mutant reaches it. A method value
-// (`f := s.gitCommandUnredacted`) counts as a caller; a call through a
-// function value obtained some other way is not seen.
-func TestGitCommandUnredactedCallers0j5h(t *testing.T) {
-	entries, err := packageSources.ReadDir(".")
-	require.NoError(t, err)
-	fset := token.NewFileSet()
-	var callers []string
-	for _, e := range entries {
-		name := e.Name()
-		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		src, err := packageSources.ReadFile(name)
-		require.NoError(t, err)
-		file, err := parser.ParseFile(fset, name, src, 0)
-		require.NoError(t, err)
-		// Every declaration, not only function bodies: a package-level
-		// `var x = func(...) { ... }` caller is named "<var x>".
-		for _, d := range file.Decls {
-			ast.Inspect(d, func(n ast.Node) bool {
-				if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "gitCommandUnredacted" {
-					callers = append(callers, declName(d))
-				}
-				return true
-			})
-		}
-	}
-	sort.Strings(callers)
-	assert.Equal(t, []string{"gitCommandWithCreds", "pushPreconditions", "sshPullPrecheck"}, callers,
-		"gitCommandUnredacted returns the token unmasked: use gitCommandWithCreds unless the value only classifies a URL and never reaches a message or a log")
-}
+// The census of the unredacted readers, which began here with the two URL
+// classifications, is TestRawGitCallers9wwa (git_raw_output_9wwa_test.go).
 
 // declName names a top-level declaration for the caller list: the function,
 // or "<var a,b>" for the names a var/const declaration binds.

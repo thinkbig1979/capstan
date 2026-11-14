@@ -95,7 +95,10 @@ func (s *GitService) historyDiff(dirPath string, cred gitCreds, oid string, pare
 	if err != nil {
 		return nil, err
 	}
-	out, _, err := s.gitRun(dirPath, cred, noLazyFetchEnv, append(append([]string{}, historyNameArgs...), oid)...)
+	// agent-os-9wwa: the names are read raw, because the env rule and the
+	// exclude pathspecs decide on them; the lists the response shows are
+	// masked where res is built.
+	out, _, err := s.gitRunUnredacted(dirPath, cred, noLazyFetchEnv, append(append([]string{}, historyNameArgs...), oid)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list changed files: %w", err)
 	}
@@ -122,6 +125,10 @@ func (s *GitService) historyDiff(dirPath string, cred gitCreds, oid string, pare
 		}
 	}
 	res := &historyDiff{files: sortedKeys(all), hidden: sortedKeys(hidden)}
+	shown := func(r *historyDiff) *historyDiff {
+		r.files, r.hidden = redactAll(r.files, cred.token), redactAll(r.hidden, cred.token)
+		return r
+	}
 
 	pathspecs := []string{":(top)"}
 	size := 0
@@ -131,39 +138,42 @@ func (s *GitService) historyDiff(dirPath string, cred gitCreds, oid string, pare
 	}
 	switch {
 	case len(res.hidden) > 0 && len(res.hidden) == len(res.files):
-		return res, nil
+		return shown(res), nil
 	case size > maxHiddenPathspecBytes:
 		slog.Warn("Hiding the whole history diff: too many env files to exclude", "path", dirPath, "commit", oid, "hidden", len(res.hidden))
 		res.hidden = res.files
-		return res, nil
+		return shown(res), nil
 	}
 	args := append([]string{}, historyShowArgs...)
 	if mask != nil {
 		args = append(args, "--diff-merges=first-parent", fullContextArg)
 	}
 	args = append(append(args, oid, "--"), pathspecs...)
-	diff, _, err := s.gitRun(dirPath, cred, showEnv, args...)
+	// Raw, so the secret masker sees each value whole; the token is masked
+	// after it (agent-os-9wwa).
+	diff, _, err := s.gitRunUnredacted(dirPath, cred, showEnv, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get diff: %w", err)
 	}
 	if mask != nil {
 		diff = MaskFullContextDiff(diff, mask.secrets)
 	}
+	diff = redactToken(diff, cred.token)
 	res.diff = strings.TrimSpace(diff)
-	return res, nil
+	return shown(res), nil
 }
 
 // historyTop is the repository's top level, symlinks resolved. A bare
 // repository has no work tree, so its top is the folder itself and bare is
 // true: nothing on disk describes its commits.
 func (s *GitService) historyTop(dirPath string, cred gitCreds) (top string, bare bool, err error) {
-	isBare, err := s.gitCommandWithCreds(dirPath, cred, "rev-parse", "--is-bare-repository")
+	isBare, err := s.gitCommandUnredacted(dirPath, cred, "rev-parse", "--is-bare-repository")
 	if err != nil {
 		return "", false, fmt.Errorf("failed to tell whether the repository is bare: %w", err)
 	}
 	top = dirPath
 	if isBare != "true" {
-		if top, err = s.gitCommandWithCreds(dirPath, cred, "rev-parse", "--show-toplevel"); err != nil {
+		if top, err = s.gitCommandUnredacted(dirPath, cred, "rev-parse", "--show-toplevel"); err != nil {
 			return "", false, fmt.Errorf("failed to find the repository top level: %w", err)
 		}
 	}
@@ -258,9 +268,10 @@ type historyRuleReader struct {
 }
 
 // catBlob is the only cat-file the history view runs: `blob`, so no textconv
-// or filter, and never a lazy fetch.
+// or filter, and never a lazy fetch. Raw (agent-os-9wwa): the env rule reads
+// compose files and link targets from it, and nothing shows it.
 func (s *GitService) catBlob(dirPath string, cred gitCreds, oid string) (string, error) {
-	out, _, err := s.gitRun(dirPath, cred, noLazyFetchEnv, "-c", "core.fsmonitor=false", "cat-file", "blob", oid)
+	out, _, err := s.gitRunUnredacted(dirPath, cred, noLazyFetchEnv, "-c", "core.fsmonitor=false", "cat-file", "blob", oid)
 	return out, err
 }
 
@@ -270,7 +281,7 @@ func (h *historyRuleReader) blobSize(oid string) (int64, error) {
 	if b, ok := h.blobs[oid]; ok {
 		return int64(len(b)), nil
 	}
-	out, _, err := h.s.gitRun(h.dirPath, h.cred, noLazyFetchEnv, "-c", "core.fsmonitor=false", "cat-file", "-s", oid)
+	out, _, err := h.s.gitRunUnredacted(h.dirPath, h.cred, noLazyFetchEnv, "-c", "core.fsmonitor=false", "cat-file", "-s", oid)
 	if err != nil {
 		return 0, err
 	}
@@ -417,6 +428,15 @@ func (s *GitService) historyEnvRule(dirPath, top string, bare bool, cred gitCred
 	}
 	h := &historyRuleReader{s: s, dirPath: dirPath, cred: cred, top: top, blobs: map[string]string{}}
 	unknown := func(msg string, args ...any) {
+		// The paths and errors here come from raw tree listings and blobs.
+		for i, a := range args {
+			switch a := a.(type) {
+			case string:
+				args[i] = redactToken(a, cred.token)
+			case error:
+				args[i] = redactErr(a, cred.token)
+			}
+		}
 		slog.Warn("Hiding every file but the compose files in the "+view+": "+msg, args...)
 		r.composeUnreadable = true
 	}
@@ -612,7 +632,7 @@ func (s *GitService) historyEnvRule(dirPath, top string, bare bool, cred gitCred
 // conflicted path has an entry per stage, so there is one listing per stage
 // present: the stage-0 entries plus that stage's. The first is stage 0.
 func (s *GitService) lsIndex(top string, cred gitCreds) ([]historyTree, error) {
-	out, _, err := s.gitRun(top, cred, noLazyFetchEnv, "-c", "core.fsmonitor=false", "ls-files", "-s", "-z")
+	out, _, err := s.gitRunUnredacted(top, cred, noLazyFetchEnv, "-c", "core.fsmonitor=false", "ls-files", "-s", "-z")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list the index: %w", err)
 	}
@@ -693,7 +713,7 @@ const maxLinkHops = 40
 // recursively, with blob sizes. --full-tree: run from a stack folder below
 // the top, ls-tree would list only that folder, relative to it (agent-os-odjs).
 func (s *GitService) lsTree(dirPath string, cred gitCreds, t string) (map[string]treeEntry, error) {
-	out, _, err := s.gitRun(dirPath, cred, noLazyFetchEnv, "-c", "core.fsmonitor=false", "ls-tree", "--full-tree", "-r", "-l", "-z", t)
+	out, _, err := s.gitRunUnredacted(dirPath, cred, noLazyFetchEnv, "-c", "core.fsmonitor=false", "ls-tree", "--full-tree", "-r", "-l", "-z", t)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list the files of %s: %w", t, err)
 	}
