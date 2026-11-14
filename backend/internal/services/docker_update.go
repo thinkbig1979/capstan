@@ -562,12 +562,7 @@ func (s *DockerService) updateComposeContainer(ctx context.Context, stack models
 
 	if !wasRunning {
 		time.Sleep(3 * time.Second)
-		filterArgs := filters.NewArgs()
-		filterArgs.Add("label", "com.docker.compose.project="+stack.ProjectName)
-		filterArgs.Add("label", "com.docker.compose.service="+serviceName)
-		filterArgs.Add("status", "running")
-
-		containers, err := s.updateAPI().ContainerList(ctx, container.ListOptions{Filters: filterArgs})
+		containers, err := s.updateAPI().ContainerList(ctx, container.ListOptions{Filters: runningServiceContainers(stack.ProjectName, serviceName)})
 		if err != nil {
 			return fmt.Errorf("finding new container to stop: %w", err)
 		}
@@ -579,6 +574,21 @@ func (s *DockerService) updateComposeContainer(ctx context.Context, stack models
 	}
 
 	return nil
+}
+
+// runningServiceContainers filters for the running containers of a compose
+// service that a not-running service's update stops again after `compose up`.
+// It excludes one-off containers (`docker compose run`), which carry the same
+// project and service labels: stopping a `run --rm` one-off makes Docker remove
+// it with its anonymous volumes (agent-os-e04r). Compose labels its service
+// containers oneoff=False.
+func runningServiceContainers(projectName, serviceName string) filters.Args {
+	return filters.NewArgs(
+		filters.Arg("label", "com.docker.compose.project="+projectName),
+		filters.Arg("label", "com.docker.compose.service="+serviceName),
+		filters.Arg("label", "com.docker.compose.oneoff=False"),
+		filters.Arg("status", "running"),
+	)
 }
 
 // standaloneRollbackTimeout bounds each cleanup step after the new container's
@@ -1296,12 +1306,7 @@ func (s *DockerService) updateComposeContainerStreaming(
 
 	if !wasRunning {
 		time.Sleep(3 * time.Second)
-		filterArgs := filters.NewArgs()
-		filterArgs.Add("label", "com.docker.compose.project="+stack.ProjectName)
-		filterArgs.Add("label", "com.docker.compose.service="+serviceName)
-		filterArgs.Add("status", "running")
-
-		containers, err := s.updateAPI().ContainerList(ctx, container.ListOptions{Filters: filterArgs})
+		containers, err := s.updateAPI().ContainerList(ctx, container.ListOptions{Filters: runningServiceContainers(stack.ProjectName, serviceName)})
 		if err != nil {
 			return fmt.Errorf("finding new container to stop: %w", err)
 		}
