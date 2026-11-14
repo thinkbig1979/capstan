@@ -117,7 +117,7 @@ export function AttentionStrip({
         </>
       ),
       action: 'Free up space',
-      onAction: () => navigate('/host?free=1'),
+      onAction: () => navigate('/?tab=host&free=1'),
       dismissLabel: 'Dismiss for 7 days',
       onDismiss: hostSpace.dismiss,
     })

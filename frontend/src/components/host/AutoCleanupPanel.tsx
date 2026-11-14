@@ -72,9 +72,12 @@ function PreviewBody() {
   )
 }
 
-/** The automatic cleanup schedule on the Docker host page: what it removes,
- *  when it last and next runs, and the controls to preview, run and edit it. */
-export function AutoCleanupPanel() {
+/** The automatic cleanup schedule on the Host tab: what it removes,
+ *  when it last and next runs, and the controls to preview, run and edit it.
+ *  `ready` is false while content above the panel is still loading; the
+ *  #automatic-cleanup scroll waits for it, or that content would push the
+ *  panel back down after the scroll (agent-os-mi4r). */
+export function AutoCleanupPanel({ ready = true }: { ready?: boolean } = {}) {
   const policy = useDockerCleanupPolicy()
   const history = useDockerCleanupHistory()
   const runCleanup = useRunDockerCleanup()
@@ -85,15 +88,15 @@ export function AutoCleanupPanel() {
   const { hash } = useLocation()
   const hasPolicy = !!policy.data
 
-  // /host#automatic-cleanup (the Free up space dialog's "Change timing", the
-  // Settings notice) lands on this panel. The page scrolls inside <main>, and
+  // /?tab=host#automatic-cleanup (the Free up space dialog's "Change timing",
+  // the Settings notice) lands on this panel. The page scrolls inside <main>, and
   // scrollIntoView would drag the document too (eslint no-restricted-properties).
   useEffect(() => {
     const el = sectionRef.current
-    if (hash !== `#${AUTO_CLEANUP_ANCHOR}` || !el || !hasPolicy) return
+    if (hash !== `#${AUTO_CLEANUP_ANCHOR}` || !el || !hasPolicy || !ready) return
     const scroller = el.closest('main')
     if (scroller) scroller.scrollTop += el.getBoundingClientRect().top - scroller.getBoundingClientRect().top
-  }, [hash, hasPolicy])
+  }, [hash, hasPolicy, ready])
 
   const handleRun = async () => {
     const data = policy.data

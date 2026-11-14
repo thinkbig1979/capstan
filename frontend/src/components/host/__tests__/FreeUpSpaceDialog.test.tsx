@@ -314,7 +314,7 @@ describe('FreeUpSpaceDialog "Do this automatically"', () => {
     await openDialog()
     const covered = await screen.findByTestId('free-space-auto-covered')
     expect(covered).toHaveTextContent('Automatic cleanup already covers these')
-    expect(within(covered).getByRole('link', { name: 'Change timing' })).toHaveAttribute('href', '/host#automatic-cleanup')
+    expect(within(covered).getByRole('link', { name: 'Change timing' })).toHaveAttribute('href', '/?tab=host#automatic-cleanup')
     expect(screen.queryByRole('checkbox', { name: 'Do this automatically' })).toBeNull()
   })
 

@@ -158,7 +158,7 @@ describe('ImagesTab — the scheduled-cleanup readout', () => {
     await waitFor(() => expect(readout).toHaveTextContent('Scheduled cleanup is on.'))
     expect(screen.getByRole('link', { name: 'Automatic cleanup' })).toHaveAttribute(
       'href',
-      '/host#automatic-cleanup',
+      '/?tab=host#automatic-cleanup',
     )
   })
 

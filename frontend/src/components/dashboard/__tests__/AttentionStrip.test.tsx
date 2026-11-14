@@ -179,13 +179,13 @@ describe('AttentionStrip — host space alert', () => {
     expect(await screen.findByTestId('attention-host-space')).toHaveTextContent('52.00 GB of unused')
   })
 
-  it('"Free up space" navigates to /host?free=1', async () => {
+  it('"Free up space" navigates to /?tab=host&free=1', async () => {
     const user = userEvent.setup()
     hostSummaryMock.mockResolvedValue(reclaimable(50 * GiB))
     policyMock.mockResolvedValue(policy(5 * GiB))
     renderStrip()
 
     await user.click(await screen.findByRole('button', { name: /free up space/i }))
-    expect(screen.getByTestId('where')).toHaveTextContent('/host?free=1')
+    expect(screen.getByTestId('where')).toHaveTextContent('/?tab=host&free=1')
   })
 })

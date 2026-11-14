@@ -1,10 +1,7 @@
 import { Link, useLocation } from 'react-router'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Boxes, LayoutDashboard, PanelLeftOpen, Server, Settings } from 'lucide-react'
-import { useHostReclaimable } from '@/hooks/useHostSpace'
-import { formatBytes } from '@/lib/format'
-import { isHostPath } from './constants'
+import { Boxes, LayoutDashboard, PanelLeftOpen, Settings } from 'lucide-react'
 
 interface CollapsedRailProps {
   stackCount: number
@@ -16,8 +13,6 @@ export function CollapsedRail({ stackCount, updateCount, onToggleSidebar }: Coll
   const location = useLocation()
   const isDashboard = location.pathname === '/'
   const isSettings = location.pathname.startsWith('/settings')
-  const isHost = isHostPath(location.pathname)
-  const reclaimable = useHostReclaimable()
 
   return (
     <aside
@@ -79,30 +74,6 @@ export function CollapsedRail({ stackCount, updateCount, onToggleSidebar }: Coll
             aria-hidden="true"
           />
         )}
-      </Button>
-      <Button
-        asChild
-        variant="ghost"
-        size="icon"
-        className={`h-10 w-10 relative ${
-          isHost
-            ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-            : ''
-        }`}
-        aria-label="Docker host"
-        aria-current={isHost ? 'page' : undefined}
-        title={reclaimable ? `Docker host, ${formatBytes(reclaimable)} unused` : 'Docker host'}
-      >
-        <Link to="/host">
-          <Server className="h-5 w-5" />
-          {!!reclaimable && (
-            <span
-              data-testid="rail-host-dot"
-              className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-warning pointer-events-none"
-              aria-hidden="true"
-            />
-          )}
-        </Link>
       </Button>
       <div className="flex-1" aria-hidden="true" />
       <Button

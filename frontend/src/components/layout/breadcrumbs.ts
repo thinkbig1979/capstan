@@ -1,5 +1,3 @@
-import { hostViewLabel, isHostView } from '@/components/host/host-views'
-
 export interface Breadcrumb {
   label: string
   path: string
@@ -26,15 +24,6 @@ export function getBreadcrumbs(path: string): Breadcrumb[] {
       { label: stackName, path: stackPath },
       { label: tabLabel, path: `${stackPath}/${tab}` },
     ]
-  }
-  if (path === '/host' || path.startsWith('/host/')) {
-    const crumbs = [
-      { label: 'Dashboard', path: '/' },
-      { label: 'Docker host', path: '/host' },
-    ]
-    const view = path.split('/')[2]
-    if (isHostView(view)) crumbs.push({ label: hostViewLabel(view), path: `/host/${view}` })
-    return crumbs
   }
   if (path === '/settings') {
     return [

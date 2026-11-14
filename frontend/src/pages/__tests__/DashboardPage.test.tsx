@@ -14,6 +14,7 @@ const scanDirectories = vi.fn()
 const dashboardStats = vi.fn()
 const getConfig = vi.fn()
 const getAutoUpdatePolicies = vi.fn()
+const hostSummary = vi.fn()
 
 vi.mock('@/lib/api', () => ({
   directoriesApi: {
@@ -39,6 +40,10 @@ vi.mock('@/lib/api', () => ({
   // export is defined on the mock" the moment the query runs.
   autoUpdateApi: {
     getPolicies: (...args: unknown[]) => getAutoUpdatePolicies(...args),
+  },
+  // The Host tab's badge reads the reclaimable size (agent-os-mi4r).
+  resourcesApi: {
+    hostSummary: (...args: unknown[]) => hostSummary(...args),
   },
 }))
 
@@ -75,8 +80,8 @@ vi.mock('@/components/dashboard/DashboardHeader', () => ({
     </div>
   ),
 }))
-vi.mock('@/components/dashboard/DashboardMetricsTab', () => ({
-  DashboardMetricsTab: () => <div data-testid="tab-overview" />,
+vi.mock('@/components/host/HostTab', () => ({
+  HostTab: () => <div data-testid="tab-host" />,
 }))
 // Surfaces the sort/filter the page hands down, so the localStorage-restore
 // contract is observable without exercising StacksTab's internals.
@@ -134,13 +139,11 @@ vi.mock('@/components/dashboard/BuildCacheTab', () => ({
 vi.mock('@/components/dashboard/AttentionStrip', () => ({
   AttentionStrip: () => <div data-testid="attention-strip" />,
 }))
-vi.mock('@/components/dashboard/HostTiles', () => ({
-  HostTiles: () => <div data-testid="host-tiles" />,
-}))
 
 import { DashboardPage } from '../DashboardPage'
 import { onlineManager } from '@tanstack/react-query'
 import { queryKeys } from '@/lib/query-keys'
+import { GiB, makeHostSummary } from '@/test/hostSummary'
 
 function makeStack(overrides: Partial<Stack>): Stack {
   return {
@@ -169,8 +172,8 @@ function makeDir(overrides: Partial<ConfiguredDir>): ConfiguredDir {
   } as ConfiguredDir
 }
 
-// For the legacy-URL redirect: real routes, so the redirect lands on a page
-// that is not the dashboard, as in App().
+// Real routes, as in App(): the removed /host routes must not exist, so a
+// /host URL falls through to the catch-all like any unknown path.
 function renderRoutedPage(route: string) {
   window.history.pushState({}, 'Test page', route)
   const queryClient = new QueryClient({
@@ -181,7 +184,6 @@ function renderRoutedPage(route: string) {
       <QueryClientProvider client={queryClient}>
         <Routes>
           <Route path="/" element={<DashboardPage />} />
-          <Route path="/host/:view" element={<div data-testid="host-route" />} />
         </Routes>
       </QueryClientProvider>
     </BrowserRouter>,
@@ -219,13 +221,59 @@ describe('DashboardPage', () => {
     dashboardStats.mockResolvedValue({ runningContainers: 0 })
     getConfig.mockResolvedValue({ stacksDirectories: [] })
     getAutoUpdatePolicies.mockResolvedValue({ globalEnabled: false, policies: [] })
+    hostSummary.mockResolvedValue(makeHostSummary({ disk: { reclaimable: 0 } }))
   })
 
-  // AC12(c): the host links under the stacks table are tiles now.
-  it('renders the host tiles on the Stacks tab', async () => {
+  // agent-os-mi4r AC6: the five Docker host tiles under the stacks table are
+  // gone; the Host tab is one click away.
+  it('renders no Docker host tiles or links on the Stacks tab', async () => {
     renderPage('/')
-    expect(await screen.findByTestId('tab-stacks')).toBeInTheDocument()
-    expect(screen.getByTestId('host-tiles')).toBeInTheDocument()
+    const panel = (await screen.findByTestId('tab-stacks')).closest('[role="tabpanel"]')!
+    expect(panel).not.toBeNull()
+    expect(panel.querySelector('a[href^="/host"], a[href*="tab=host"]')).toBeNull()
+    expect(panel).not.toHaveTextContent('Docker host')
+    expect(screen.queryByTestId('host-tiles')).toBeNull()
+  })
+
+  // agent-os-mi4r AC1.
+  describe('the tab bar', () => {
+    it('reads Stacks, Host, Directories, Updates, Backups', async () => {
+      renderPage('/')
+      await screen.findByTestId('tab-stacks')
+      expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual([
+        'Stacks',
+        'Host',
+        'Directories',
+        'Updates',
+        'Backups',
+      ])
+    })
+
+    it('badges Host with the reclaimable size when there is space to free', async () => {
+      hostSummary.mockResolvedValue(makeHostSummary({ disk: { reclaimable: 7.2 * GiB } }))
+      renderPage('/')
+      const badge = await screen.findByTestId('host-tab-badge')
+      expect(badge).toHaveTextContent('7.20 GB')
+      expect(badge).toHaveAttribute('aria-hidden', 'true')
+      // The size reads as "unused", never as bare disk use.
+      expect(screen.getByRole('tab', { name: /^Host/ })).toHaveAccessibleName('Host, 7.20 GB unused')
+    })
+
+    it('shows no badge when nothing is reclaimable', async () => {
+      const { queryClient } = renderPage('/')
+      await screen.findByTestId('tab-stacks')
+      await waitFor(() => expect(queryClient.getQueryState(queryKeys.resources.hostSummary())?.status).toBe('success'))
+      expect(screen.queryByTestId('host-tab-badge')).toBeNull()
+      expect(screen.getByRole('tab', { name: 'Host' })).toBeInTheDocument()
+    })
+
+    it('shows no badge, never "0 B", when the summary could not be read', async () => {
+      hostSummary.mockRejectedValue(new Error('503'))
+      const { queryClient } = renderPage('/')
+      await screen.findByTestId('tab-stacks')
+      await waitFor(() => expect(queryClient.getQueryState(queryKeys.resources.hostSummary())?.status).toBe('error'))
+      expect(screen.queryByTestId('host-tab-badge')).toBeNull()
+    })
   })
 
   // agent-os-a1ye.5: the /ws/events stream can go silent (a lost Docker event
@@ -247,19 +295,28 @@ describe('DashboardPage', () => {
     it('renders the Stacks (fleet) tab by default when no ?tab is present', async () => {
       renderPage('/')
       await waitFor(() => expect(screen.getByTestId('tab-stacks')).toBeInTheDocument())
-      expect(screen.queryByTestId('tab-overview')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('tab-host')).not.toBeInTheDocument()
     })
 
-    it('keeps the historical ?tab=overview URL working for Metrics', async () => {
-      renderPage('/?tab=overview')
-      await waitFor(() => expect(screen.getByTestId('tab-overview')).toBeInTheDocument())
+    it('renders the Host tab at ?tab=host', async () => {
+      renderPage('/?tab=host')
+      expect(await screen.findByTestId('tab-host')).toBeInTheDocument()
       expect(screen.queryByTestId('tab-stacks')).not.toBeInTheDocument()
+    })
+
+    // agent-os-mi4r AC2: the Metrics tab is gone, with no redirect.
+    it('sends the removed ?tab=overview to / with Stacks', async () => {
+      renderPage('/?tab=overview')
+      await waitFor(() => expect(screen.getByTestId('tab-stacks')).toBeInTheDocument())
+      expect(window.location.pathname).toBe('/')
+      expect(window.location.search).toBe('')
+      expect(screen.queryByTestId('tab-host')).not.toBeInTheDocument()
     })
 
     it('renders the tab named in the ?tab query param', async () => {
       renderPage('/?tab=updates')
       await waitFor(() => expect(screen.getByTestId('tab-updates')).toBeInTheDocument())
-      expect(screen.queryByTestId('tab-overview')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('tab-host')).not.toBeInTheDocument()
     })
 
     // agent-os-pnug: an unknown ?tab= value (old bookmark, typo) used to keep
@@ -279,33 +336,25 @@ describe('DashboardPage', () => {
 
       // Radix Tabs switches on focus (default activationMode="automatic"), which
       // fireEvent.click does not simulate — userEvent.click does.
-      await user.click(screen.getByRole('tab', { name: 'Metrics' }))
+      await user.click(screen.getByRole('tab', { name: 'Host' }))
 
-      await waitFor(() => expect(screen.getByTestId('tab-overview')).toBeInTheDocument())
+      await waitFor(() => expect(screen.getByTestId('tab-host')).toBeInTheDocument())
       expect(screen.queryByTestId('tab-stacks')).not.toBeInTheDocument()
-      expect(window.location.search).toBe('?tab=overview')
+      expect(window.location.search).toBe('?tab=host')
     })
   })
 
-  // agent-os-8y80: the five host views moved to /host/<view>. Old bookmarks
-  // land there with replace, so Back does not bounce through the redirect.
-  describe('legacy host-view URLs', () => {
+  // agent-os-mi4r: the old /?tab=<hostview> redirect to /host/<view> is gone
+  // (no users, no legacy). A list view is not a dashboard tab, so it lands on
+  // / like any unknown tab, before the dashboard mounts its queries.
+  describe('former host-view URLs', () => {
     it.each(['containers', 'images', 'volumes', 'networks', 'build-cache'])(
-      'redirects /?tab=%s to /host/<view> with replace',
+      'sends /?tab=%s to / with Stacks, not to a /host page',
       async (view) => {
-        const lengthBefore = window.history.length
         renderRoutedPage(`/?tab=${view}`)
-        // pushState in renderPage adds one entry; a push-redirect would add a second.
-        const expectedLength = window.history.length
-
-        await waitFor(() => expect(window.location.pathname).toBe(`/host/${view}`))
-        expect(window.location.search).toBe('')
-        expect(screen.getByTestId('host-route')).toBeInTheDocument()
-        expect(window.history.length).toBe(expectedLength)
-        expect(expectedLength).toBe(lengthBefore + 1)
-        // The redirect happens before the dashboard mounts its queries.
-        expect(listStacks).not.toHaveBeenCalled()
-        expect(listDirectories).not.toHaveBeenCalled()
+        await waitFor(() => expect(window.location.search).toBe(''))
+        expect(window.location.pathname).toBe('/')
+        expect(await screen.findByTestId('tab-stacks')).toBeInTheDocument()
       },
     )
 

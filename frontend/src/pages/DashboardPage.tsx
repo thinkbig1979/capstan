@@ -1,24 +1,22 @@
 import { useState, useEffect, useCallback, useMemo, Suspense, lazy, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Navigate, useSearchParams } from 'react-router'
-import { directoriesApi, stacksApi, dashboardApi, settingsApi } from '@/lib/api'
+import { directoriesApi, stacksApi, settingsApi } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent } from '@/components/ui/tabs'
 import { ResponsiveTabsList } from '@/components/ui/responsive-tabs-list'
 import { StackCardSkeleton, MetricsSkeleton, DialogLoadingFallback } from '@/components/LoadingSkeleton'
-import { AlertCircle, RefreshCw, Plus, Layers, ChartColumn, FolderTree, CircleArrowUp, Archive, type LucideIcon } from 'lucide-react'
+import { AlertCircle, RefreshCw, Plus, Layers, Server, FolderTree, CircleArrowUp, Archive, type LucideIcon } from 'lucide-react'
 import { useStackStatusAnimation } from '@/hooks/useStackStatusAnimation'
 import { useUpdateScanStore } from '@/stores/updateScanStore'
-import { useDashboardMetricsContext } from '@/hooks/DashboardMetricsContext'
-import { DashboardMetricsTab } from '@/components/dashboard/DashboardMetricsTab'
 import { UpdatesTab } from '@/components/dashboard/UpdatesTab'
 import { BackupHistoryTab } from '@/components/dashboard/BackupHistoryTab'
 import { DashboardHeader } from '@/components/dashboard/DashboardHeader'
 import { AttentionStrip } from '@/components/dashboard/AttentionStrip'
-import { HostTiles } from '@/components/dashboard/HostTiles'
 import { DASHBOARD_TABS, type DashboardTab } from '@/lib/app-views'
-import { isHostView } from '@/components/host/host-views'
+import { useHostReclaimable } from '@/hooks/useHostSpace'
+import { formatBytes } from '@/lib/format'
 import { StacksTab } from '@/components/dashboard/StacksTab'
 import { DirectoriesTab } from '@/components/dashboard/DirectoriesTab'
 import { classifyError, presentError } from '@/lib/error-handler'
@@ -40,6 +38,9 @@ import { toGlobalAutoUpdateState } from '@/components/dashboard/auto-update-stat
 const CreateStackDialog = lazy(() =>
   import('@/components/stack/CreateStackDialog').then((m) => ({ default: m.CreateStackDialog })),
 )
+// Lazy: the Host tab carries the five Docker host lists, which the Stacks
+// landing tab never needs.
+const HostTab = lazy(() => import('@/components/host/HostTab').then((m) => ({ default: m.HostTab })))
 
 type SortOption = 'name' | 'status'
 type StatusFilter = 'all' | 'running' | 'stopped' | 'paused' | 'error'
@@ -51,17 +52,13 @@ function sortDirectories(items: ConfiguredDir[] | undefined) {
 }
 
 /**
- * agent-os-8y80: the five Docker host views moved to /host/<view>. An old
- * /?tab=<view> bookmark is redirected here, before the dashboard body mounts,
- * so the redirect starts none of the dashboard's queries. An unknown ?tab=
- * value goes to / the same way.
+ * An unknown ?tab= value (including the removed 'overview' and the old
+ * /?tab=<hostview> addresses, agent-os-mi4r) goes to / before the dashboard
+ * body mounts, so it starts none of the dashboard's queries.
  */
 export function DashboardPage() {
   const [searchParams] = useSearchParams()
   const tab = searchParams.get('tab')
-  if (isHostView(tab)) {
-    return <Navigate to={`/host/${tab}`} replace />
-  }
   // agent-os-pnug: an unknown tab would match no TabsContent and leave the
   // body empty, so it lands on Stacks with a clean URL instead.
   if (tab && !(DASHBOARD_TABS as readonly string[]).includes(tab)) {
@@ -72,8 +69,7 @@ export function DashboardPage() {
 
 function DashboardContent() {
   const [searchParams, setSearchParams] = useSearchParams()
-  // The fleet (stacks) view is the landing tab; Metrics keeps its historical
-  // 'overview' URL value so old ?tab=overview links still work.
+  // The fleet (stacks) view is the landing tab.
   const activeTab = searchParams.get('tab') || 'stacks'
   const setActiveTab = useCallback((tab: string) => {
     setSearchParams(tab === 'stacks' ? {} : { tab }, { replace: true })
@@ -104,8 +100,6 @@ function DashboardContent() {
   )
   const [isRefreshing, setIsRefreshing] = useState(false)
 
-  const { containers: metricsContainers, aggregates, isConnected: metricsConnected } = useDashboardMetricsContext()
-
   useEffect(() => {
     localStorage.setItem('dashboard-sort', sortBy)
     localStorage.setItem('dashboard-filter', statusFilter)
@@ -130,13 +124,6 @@ function DashboardContent() {
     queryKey: queryKeys.stacks(),
     queryFn: () => stacksApi.list(),
     ...STACKS_LIST_POLLING,
-  })
-
-  const {
-    data: dashboardStats,
-  } = useQuery({
-    queryKey: queryKeys.dashboardStats(),
-    queryFn: dashboardApi.stats,
   })
 
   const { data: config } = useQuery({
@@ -168,7 +155,6 @@ function DashboardContent() {
   })
 
   const runningCount = stacks?.filter((s) => s.status === 'running').length || 0
-  const stoppedCount = stacks?.filter((s) => s.status === 'stopped').length || 0
   const containerCount = stacks?.reduce((sum, s) => sum + (s.containers?.length || 0), 0) || 0
 
   // isPending, not isLoading: offline the first fetch is paused and isLoading is
@@ -311,7 +297,7 @@ function DashboardContent() {
 
   const tabLabels: Record<DashboardTab, ReactNode> = {
     stacks: 'Stacks',
-    overview: 'Metrics',
+    host: <HostTabLabel />,
     directories: 'Directories',
     updates: isScanningUpdates ? (
       <span className="flex items-center gap-1.5">
@@ -351,20 +337,11 @@ function DashboardContent() {
           tabs={DASHBOARD_TABS.map((value) => ({ value, label: tabLabels[value], icon: DASHBOARD_TAB_ICONS[value] }))}
         />
 
-        <TabsContent value="overview" className="mt-4">
+        <TabsContent value="host" className="mt-4">
           <ErrorBoundary>
-            <DashboardMetricsTab
-              stats={dashboardStats}
-              aggregates={aggregates}
-              isConnected={metricsConnected}
-              totalStacks={stacks?.length || 0}
-              runningStacks={runningCount}
-              stoppedStacks={stoppedCount}
-              totalContainers={containerCount}
-              runningContainers={dashboardStats?.runningContainers || 0}
-              directoryCount={directories?.length || 0}
-              containers={metricsContainers}
-            />
+            <Suspense fallback={<MetricsSkeleton />}>
+              <HostTab />
+            </Suspense>
           </ErrorBoundary>
         </TabsContent>
 
@@ -408,7 +385,6 @@ function DashboardContent() {
               autoUpdatePolicies={autoUpdatePoliciesData?.policies ?? []}
               globalAutoUpdateState={toGlobalAutoUpdateState(autoUpdatePoliciesQuery)}
             />
-            <HostTiles />
           </ErrorBoundary>
         </TabsContent>
 
@@ -467,9 +443,34 @@ function DashboardContent() {
   )
 }
 
+/**
+ * "Host" plus what can be freed, when anything can (agent-os-mi4r; the badge
+ * style is the old sidebar link's). The size is hidden from the accessible
+ * name and read as "<size> unused" instead, so it never reads as disk use.
+ */
+function HostTabLabel() {
+  const reclaimable = useHostReclaimable()
+  if (!reclaimable) return <>Host</>
+  const size = formatBytes(reclaimable)
+  return (
+    <span className="flex items-center gap-1.5">
+      Host
+      <span
+        data-testid="host-tab-badge"
+        aria-hidden="true"
+        title={`${size} of unused Docker data can be freed`}
+        className="rounded-full bg-warning/15 px-1.5 py-px font-mono text-[10.5px] tabular-nums text-foreground"
+      >
+        {size}
+      </span>
+      <span className="sr-only">, {size} unused</span>
+    </span>
+  )
+}
+
 const DASHBOARD_TAB_ICONS: Record<DashboardTab, LucideIcon> = {
   stacks: Layers,
-  overview: ChartColumn,
+  host: Server,
   directories: FolderTree,
   updates: CircleArrowUp,
   backups: Archive,

@@ -341,79 +341,31 @@ describe('Sidebar', () => {
 
 // agent-os-eldv: pinning MOVES a stack to the top of the one list. It used to
 // render the stack in a "Pinned" block AND again in the main list.
+// agent-os-mi4r: the Docker host is the dashboard's Host tab, so the main nav
+// is Dashboard and Settings only; the size badge moved onto the Host tab.
 describe('Sidebar — main navigation', () => {
-  const hostLink = (container: HTMLElement) => within(desktopAside(container)).getByTestId('sidebar-nav-host')
-
-  it('links to the Docker host page above the stack list, with the reclaimable badge', async () => {
+  it('links Dashboard and Settings above the stack list, and nothing to a Docker host page', async () => {
     hostSummaryMock.mockResolvedValue(makeHostSummary({ disk: { reclaimable: 14.9 * GiB } }))
-    const { container } = renderSidebar()
+    const { container, queryClient } = renderSidebar()
 
-    const link = hostLink(container)
-    expect(link).toHaveAttribute('href', '/host')
-    expect(link).toHaveTextContent('Docker host')
-    expect(await within(link).findByTestId('sidebar-nav-host-badge')).toHaveTextContent('14.90 GB')
     const nav = within(desktopAside(container)).getByRole('navigation', { name: 'Main' })
-    expect(within(nav).getByRole('link', { name: 'Dashboard' })).toHaveAttribute('href', '/')
-    expect(within(nav).getByRole('link', { name: 'Settings' })).toHaveAttribute('href', '/settings')
+    expect(within(nav).getAllByRole('link').map((l) => [l.textContent, l.getAttribute('href')])).toEqual([
+      ['Dashboard', '/'],
+      ['Settings', '/settings'],
+    ])
+    // Even with space to free, no host link and no size appear in the sidebar.
+    await waitFor(() => expect(queryClient.getQueryState(queryKeys.resources.hostSummary())?.status ?? 'success').toBe('success'))
+    expect(within(desktopAside(container)).queryByRole('link', { name: /Docker host/ })).not.toBeInTheDocument()
+    expect(desktopAside(container)).not.toHaveTextContent('14.90 GB')
+    expect(container.querySelector('a[href^="/host"]')).toBeNull()
     // The stack list stays, below the nav.
     await waitFor(() => expect(stackLinks(desktopAside(container)).length).toBe(2))
     expect(nav.compareDocumentPosition(stackLinks(desktopAside(container))[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
-  it('reads the badge as "<n> unused" in the link\'s accessible name', async () => {
-    hostSummaryMock.mockResolvedValue(makeHostSummary({ disk: { reclaimable: 14.9 * GiB } }))
-    const { container } = renderSidebar()
-
-    await within(hostLink(container)).findByTestId('sidebar-nav-host-badge')
-    expect(
-      within(desktopAside(container)).getByRole('link', { name: 'Docker host, 14.90 GB unused' }),
-    ).toBe(hostLink(container))
-  })
-
-  // The guard that matters: a refetch that fails over a loaded summary hides
-  // the badge, rather than leaving a stale figure up.
-  it('drops the badge when a refetch fails after a successful load', async () => {
-    hostSummaryMock.mockResolvedValue(makeHostSummary({ disk: { reclaimable: 14.9 * GiB } }))
-    const { container, queryClient } = renderSidebar()
-    await within(hostLink(container)).findByTestId('sidebar-nav-host-badge')
-
-    hostSummaryMock.mockRejectedValue(new Error('503'))
-    await act(async () => {
-      await queryClient.refetchQueries({ queryKey: queryKeys.resources.hostSummary() })
-    })
-    await waitFor(() => expect(queryClient.getQueryState(queryKeys.resources.hostSummary())?.status).toBe('error'))
-    // Precondition: the stale summary is still in the cache.
-    expect(queryClient.getQueryData(queryKeys.resources.hostSummary())).toBeDefined()
-    expect(within(hostLink(container)).queryByTestId('sidebar-nav-host-badge')).not.toBeInTheDocument()
-  })
-
-  it('hides the badge when nothing is reclaimable', async () => {
-    const { container, queryClient } = renderSidebar()
-
-    await waitFor(() => expect(queryClient.getQueryState(queryKeys.resources.hostSummary())?.status).toBe('success'))
-    expect(within(hostLink(container)).queryByTestId('sidebar-nav-host-badge')).not.toBeInTheDocument()
-  })
-
-  it('hides the badge, never "0 B", when the summary could not be read', async () => {
-    hostSummaryMock.mockRejectedValue(new Error('503'))
-    const { container, queryClient } = renderSidebar()
-
-    await waitFor(() => expect(queryClient.getQueryState(queryKeys.resources.hostSummary())?.status).toBe('error'))
-    expect(within(hostLink(container)).queryByTestId('sidebar-nav-host-badge')).not.toBeInTheDocument()
-  })
-
-  it.each(['/host', '/host/images'])('marks Docker host as the current page on %s', (path) => {
-    const { container } = renderSidebar(path)
-
-    expect(hostLink(container)).toHaveAttribute('aria-current', 'page')
-    const nav = within(desktopAside(container)).getByRole('navigation', { name: 'Main' })
-    expect(within(nav).getByRole('link', { name: 'Dashboard' })).not.toHaveAttribute('aria-current')
-  })
-
-  it('marks Dashboard, not Docker host, as current on /', () => {
+  it('marks Dashboard as current on /', () => {
     const { container } = renderSidebar('/')
 
-    expect(hostLink(container)).not.toHaveAttribute('aria-current')
     const nav = within(desktopAside(container)).getByRole('navigation', { name: 'Main' })
     expect(within(nav).getByRole('link', { name: 'Dashboard' })).toHaveAttribute('aria-current', 'page')
   })

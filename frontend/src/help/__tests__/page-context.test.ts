@@ -15,16 +15,15 @@ function contextAt(url: string): PageContextKey | null {
 // from the exported arrays so a renamed tab fails here, not silently passes.
 const ALL_VIEWS: [string, PageContextKey][] = [
   ['/', 'dashboard:stacks'],
-  ['/?tab=overview', 'dashboard:overview'],
   ['/?tab=directories', 'dashboard:directories'],
   ['/?tab=updates', 'dashboard:updates'],
   ['/?tab=backups', 'dashboard:backups'],
-  ['/host/containers', 'host:containers'],
-  ['/host/images', 'host:images'],
-  ['/host/volumes', 'host:volumes'],
-  ['/host/networks', 'host:networks'],
-  ['/host/build-cache', 'host:build-cache'],
-  ['/host', 'host:overview'],
+  ['/?tab=host&view=containers', 'host:containers'],
+  ['/?tab=host&view=images', 'host:images'],
+  ['/?tab=host&view=volumes', 'host:volumes'],
+  ['/?tab=host&view=networks', 'host:networks'],
+  ['/?tab=host&view=build-cache', 'host:build-cache'],
+  ['/?tab=host', 'host:overview'],
   ['/stacks/web', 'stack:overview'],
   ['/stacks/web/editor', 'stack:editor'],
   ['/stacks/web/logs', 'stack:logs'],
@@ -45,7 +44,7 @@ const ALL_VIEWS: [string, PageContextKey][] = [
 
 describe('usePageHelpContext', () => {
   it('covers every PAGE_HELP key exactly once', () => {
-    expect(ALL_VIEWS).toHaveLength(27)
+    expect(ALL_VIEWS).toHaveLength(26)
     expect(ALL_VIEWS.map(([, key]) => key).sort()).toEqual(Object.keys(PAGE_HELP).sort())
   })
 
@@ -57,8 +56,16 @@ describe('usePageHelpContext', () => {
     ['/?tab=stacks', 'dashboard:stacks'],
     ['/?tab=nope', 'dashboard:stacks'],
     ['/?tab=', 'dashboard:stacks'],
-    ['/host/nope', 'host:overview'],
-    ['/host/', 'host:overview'],
+    ['/?tab=host&view=nope', 'host:overview'],
+    ['/?tab=host&view=', 'host:overview'],
+    ['/?tab=host&free=1', 'host:overview'],
+    ['/?tab=host&view=images&free=1', 'host:images'],
+    ['/?tab=host#automatic-cleanup', 'host:overview'],
+    // Removed with the Metrics tab (agent-os-mi4r): DashboardPage sends it to /.
+    ['/?tab=overview', 'dashboard:stacks'],
+    // A list view is not a dashboard tab, and view= means nothing off the Host tab.
+    ['/?tab=volumes', 'dashboard:stacks'],
+    ['/?tab=updates&view=images', 'dashboard:updates'],
     ['/settings/nope', 'settings:account-security'],
     ['/stacks/web/activity?view=backups', 'stack:activity'],
     ['/stacks/web/logs?container=web-1', 'stack:logs'],
@@ -79,24 +86,14 @@ describe('usePageHelpContext', () => {
     expect(contextAt(url)).toBe(key)
   })
 
-  // DashboardPage redirects /?tab=<hostview> to /host/<view>; help follows it.
-  it.each([
-    ['/?tab=containers', 'host:containers'],
-    ['/?tab=images', 'host:images'],
-    ['/?tab=volumes', 'host:volumes'],
-    ['/?tab=networks', 'host:networks'],
-    ['/?tab=build-cache', 'host:build-cache'],
-  ])('legacy %s -> %s', (url, key) => {
-    expect(contextAt(url)).toBe(key)
-  })
-
-  it.each(['/stacks/web/nope', '/login', '/setup', '/stacks'])('%s has no page topic', (url) => {
+  // agent-os-mi4r: the /host routes are gone, so they have no topic.
+  it.each(['/stacks/web/nope', '/login', '/setup', '/stacks', '/host', '/host/images'])('%s has no page topic', (url) => {
     expect(contextAt(url)).toBeNull()
   })
 
   it('pageContextFor reads the tab from the query string, not the path', () => {
     expect(pageContextFor('/', '?tab=updates')).toBe('dashboard:updates')
-    expect(pageContextFor('/', '?tab=volumes')).toBe('host:volumes')
+    expect(pageContextFor('/', '?tab=host&view=volumes')).toBe('host:volumes')
     expect(pageContextFor('/', '')).toBe('dashboard:stacks')
   })
 })

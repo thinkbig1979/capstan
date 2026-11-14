@@ -7,11 +7,11 @@
  * topic, so a new tab or section added here must ship with its help section.
  */
 
-/** The dashboard's top tab row, in display order. 'overview' is Metrics. */
-export const DASHBOARD_TABS = ['stacks', 'overview', 'directories', 'updates', 'backups'] as const
+/** The dashboard's top tab row, in display order. 'host' is the Docker host (agent-os-mi4r). */
+export const DASHBOARD_TABS = ['stacks', 'host', 'directories', 'updates', 'backups'] as const
 export type DashboardTab = (typeof DASHBOARD_TABS)[number]
 
-/** The Docker host page's lists, at /host/<view>. Not dashboard tabs: /?tab=<view> redirects there. */
+/** The Host tab's lists, at /?tab=host&view=<view>. Not dashboard tabs. */
 export const HOST_VIEWS = ['containers', 'images', 'volumes', 'networks', 'build-cache'] as const
 export type HostView = (typeof HOST_VIEWS)[number]
 
