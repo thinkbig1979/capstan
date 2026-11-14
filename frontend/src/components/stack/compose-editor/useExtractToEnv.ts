@@ -8,6 +8,29 @@ import type { useCodeMirrorEditor } from '@/hooks/useCodeMirrorEditor'
 import { inferVarName } from './inferVarName'
 import { queryKeys } from '@/lib/query-keys'
 
+/** Characters that change what compose reads from an unquoted .env value. */
+const NEEDS_QUOTES = /[\s$#"\\]/
+
+/**
+ * The .env line for an extracted value (agent-os-jx88). Unquoted, compose
+ * reads " #" as a comment, interpolates "$", trims whitespace and reads a
+ * leading quote as quoting, so such a value is single-quoted, which compose
+ * reads literally (compose-go v2 dotenv/parser.go, extractVarValue). Inside
+ * single quotes a backslash escapes only a quote, so a value holding a ' or
+ * ending in a backslash cannot be written this way: it is refused, and the
+ * user adds it in the Raw .env view.
+ */
+export function envLineFor(varName: string, value: string): { line: string; error?: undefined } | { line?: undefined; error: string } {
+  if (!NEEDS_QUOTES.test(value) && !value.startsWith("'")) return { line: `${varName}=${value}` }
+  if (value.includes("'")) {
+    return { error: 'The selection contains a single quote and characters that need quoting; add it in the Raw .env view' }
+  }
+  if (value.endsWith('\\')) {
+    return { error: 'The selection ends in a backslash and has characters that need quoting; add it in the Raw .env view' }
+  }
+  return { line: `${varName}='${value}'` }
+}
+
 interface UseExtractToEnvArgs {
   stackId: string
   viewRef: ReturnType<typeof useCodeMirrorEditor>['viewRef']
@@ -87,8 +110,13 @@ export function useExtractToEnv({
       const envData = await stacksApi.getEnv(stackId)
       const currentEnv = envData.hasEnvFile && envData.raw ? envData.raw : ''
 
-      const newEnvLine = `${varName}=${selectedText}`
-      const updatedEnv = currentEnv ? `${currentEnv.trimEnd()}\n${newEnvLine}` : newEnvLine
+      const newEnvLine = envLineFor(varName, selectedText)
+      if (newEnvLine.line === undefined) {
+        // Refused before any write (agent-os-jx88).
+        toastInvalid(newEnvLine.error)
+        return
+      }
+      const updatedEnv = currentEnv ? `${currentEnv.trimEnd()}\n${newEnvLine.line}` : newEnvLine.line
 
       // Atomic write — body: { composeContent, envRaw } per ComposeEnvRequest
       try {
