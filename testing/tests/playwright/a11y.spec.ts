@@ -17,13 +17,14 @@
  * Run:
  *   AUTH_DISABLED=true npx playwright test a11y --retries=0
  *
- * MATRIX (74 scans). Every target below in light at 1280x720 and in dark at
- * 1280x720, plus ten representative targets (NARROW_TARGETS) in light and in
+ * MATRIX (76 scans). Every target below in light at 1280x720 and in dark at
+ * 1280x720, plus eleven representative targets (NARROW_TARGETS) in light and in
  * dark at 375x812. Contrast failures are theme specific (the primary label failed in
  * both themes with different ratios), so dark is scanned in full at desktop and
  * at the narrow width; layout-driven failures are what the narrow viewport adds,
- * and nine URLs cover the layouts. The tenth, host:free-space-dialog
- * (agent-os-bugc), is a dialog rather than a URL: its setup opens it. Measured 2026-10-14 (agent-os-25k4): all 26
+ * and nine URLs cover the layouts. agent-os-bugc added two: dash:host (the
+ * Host tab's overview) and host:free-space-dialog, a dialog rather than a URL,
+ * which its setup opens. Measured 2026-10-14 (agent-os-25k4): all 26
  * URLs at 375 in both schemes had no finding beyond the editor entry on the
  * ALLOWLIST, so the nine are coverage, not a filter hiding failures.
  *
@@ -122,6 +123,7 @@ const TARGETS: Target[] = [
 
 const NARROW_TARGETS = [
   'dash:stacks',
+  'dash:host',
   'host:containers',
   'host:free-space-dialog',
   'dash:updates',
