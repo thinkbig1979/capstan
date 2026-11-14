@@ -55,6 +55,19 @@ vi.mock('../env-editor/EnvRawView', async (importOriginal) => {
 
 import { EnvEditor } from '../EnvEditor'
 
+// The server answers locked exactly when the session holds no unlock token, so
+// the unlock store moves with every payload the mock serves, before it lands
+// (agent-os-wm7t): once a refetch has landed, an unlocked payload under a
+// locked store cannot happen. Between a lock and its refetch it can, and the
+// wm7t tests drive that window directly.
+function storeFollows<T extends object>(payload: T): T {
+  const locked = 'locked' in payload && payload.locked === true
+  const store = useEnvUnlockStore.getState()
+  if (locked && store.unlockedUntil !== null) store.lock()
+  else if (!locked && store.unlockedUntil === null) store.unlock('tok')
+  return payload
+}
+
 // Go output at e9e7c55 (redactEnvResponse over parseEnvFile).
 const aaaUnlocked = {"hasEnvFile":true,"filename":".env","entries":[{"key":"PORT","value":"8080","line":1,"sensitive":false},{"key":"SSH_KEY","value":"\"-----BEGIN","line":2,"sensitive":true},{"key":"AAA","value":"bbb","line":3,"sensitive":false},{"key":"","value":"-----END\"","line":4,"sensitive":false,"comment":true},{"key":"TZ","value":"UTC","line":5,"sensitive":false}],"raw":"PORT=8080\nSSH_KEY=\"-----BEGIN\nAAA=bbb\n-----END\"\nTZ=UTC\n"}
 const aaaLocked = {"hasEnvFile":true,"filename":".env","entries":[{"key":"PORT","value":"8080","line":1,"sensitive":false},{"key":"SSH_KEY","value":"","line":2,"sensitive":true},{"key":"","value":"","line":3,"sensitive":true},{"key":"","value":"","line":4,"sensitive":true,"comment":true},{"key":"TZ","value":"UTC","line":5,"sensitive":false}],"locked":true}
@@ -94,7 +107,7 @@ beforeEach(() => {
   delete handlers.onSaveRaw
   act(() => useEnvUnlockStore.getState().lock())
   useAuthStore.setState({ authDisabled: false })
-  mockGetEnv.mockImplementation(() => Promise.resolve(server))
+  mockGetEnv.mockImplementation(() => Promise.resolve(storeFollows(server)))
   mockUpdateEnv.mockResolvedValue({ outcome: 'success', reason: 'Saved' })
 })
 

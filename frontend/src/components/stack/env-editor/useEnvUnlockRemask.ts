@@ -71,4 +71,15 @@ export function useEnvUnlockRemask(
       })
     }
   }
+
+  /**
+   * Records rows as masked whatever they show now. A refetch gives every row a
+   * new id and carries a reveal by key, so a revealed secret arrives under an id
+   * that was never masked on screen (agent-os-oeqf).
+   */
+  const rememberMasked = (ids: readonly number[]) => {
+    if (ids.length > 0) setEverMasked((prev) => new Set([...prev, ...ids]))
+  }
+
+  return { rememberMasked }
 }
