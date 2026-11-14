@@ -1074,18 +1074,23 @@ const rekeyTimeout = time.Minute
 // Idempotent: a moved row no longer looks like an ID. A Docker error other than
 // not-found stops the run before anything is written, so the live/orphan order
 // is never decided on a partial picture; the next run tries again.
-func (s *SchedulerService) rekeyLegacyContainerPolicies(ctx context.Context) {
+//
+// It reports whether the run completed: false when a read or a write failed or
+// a row was left for a later run, so a caller with no later run retries
+// (agent-os-6w3x). Rows that resolve to no name never will, and do not count.
+func (s *SchedulerService) rekeyLegacyContainerPolicies(ctx context.Context) (completed bool) {
 	s.rekeyMu.Lock()
 	defer s.rekeyMu.Unlock()
 
 	legacy, err := s.db.LegacyContainerPolicies()
 	if err != nil {
 		s.logger.Error("Failed to read container-ID auto-update policies; they are re-keyed on a later run", "error", err)
-		return
+		return false
 	}
 	if len(legacy) == 0 {
-		return
+		return true
 	}
+	completed = true
 
 	ctx, cancel := context.WithTimeout(ctx, rekeyTimeout)
 	defer cancel()
@@ -1113,6 +1118,7 @@ func (s *SchedulerService) rekeyLegacyContainerPolicies(ctx context.Context) {
 					// the row would no longer look like an ID to retry.
 					s.logger.Info("Container is set aside by an update; its auto-update policy is re-keyed on a later run",
 						"policy_id", p.ID, "container_id", p.TargetID, "container_name", name)
+					completed = false
 					continue
 				}
 				if name != "" && info.ID == p.TargetID {
@@ -1122,14 +1128,14 @@ func (s *SchedulerService) rekeyLegacyContainerPolicies(ctx context.Context) {
 			case !cerrdefs.IsNotFound(err):
 				s.logger.Warn("Could not inspect a container to re-key its auto-update policy; retried later",
 					"container_id", p.TargetID, "error", err)
-				return
+				return false
 			}
 		}
 		name, err := s.db.LastKnownContainerName(p.TargetID)
 		if err != nil {
 			s.logger.Error("Failed to read update history to re-key an auto-update policy; retried later",
 				"container_id", p.TargetID, "error", err)
-			return
+			return false
 		}
 		if name == "" {
 			// It can never resolve, and it matched nothing before either; warn
@@ -1159,6 +1165,7 @@ func (s *SchedulerService) rekeyLegacyContainerPolicies(ctx context.Context) {
 		if err != nil {
 			s.logger.Error("Failed to re-key an auto-update policy", "policy_id", m.policy.ID,
 				"old_container_id", m.policy.TargetID, "container_name", m.name, "error", err)
+			completed = false
 			continue
 		}
 		s.logger.Info("Auto-update policy re-keyed from container ID to container name",
@@ -1166,6 +1173,47 @@ func (s *SchedulerService) rekeyLegacyContainerPolicies(ctx context.Context) {
 			"container_name", m.name, "name_from", m.from, "enabled", m.policy.Enabled,
 			"paused", m.policy.Paused, "consecutive_failures", m.policy.ConsecutiveFailures)
 	}
+	return completed
+}
+
+// rekeyRetryFirst and rekeyRetryMax bound the waits between the boot re-key's
+// tries: doubling from the first to the cap.
+const (
+	rekeyRetryFirst = 30 * time.Second
+	rekeyRetryMax   = 10 * time.Minute
+)
+
+// RekeyLegacyContainerPoliciesInBackground re-keys the container-ID policies
+// for a boot that does not start the scheduler (agent-os-6w3x): with the update
+// scan off nothing else runs rekeyLegacyContainerPolicies, so a run that does
+// not complete (Docker down at boot) is retried with backoff until one does.
+// It never blocks the caller. Stop, Close and a later Start end it, through
+// the context they cancel; a Start runs its own re-key.
+func (s *SchedulerService) RekeyLegacyContainerPoliciesInBackground() {
+	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
+		return
+	}
+	ctx := s.parentCtx
+	// Added under s.mu like the scan cycles, so Stop's wg.Wait covers it.
+	s.wg.Add(1)
+	s.mu.Unlock()
+
+	go func() {
+		defer s.wg.Done()
+		wait := rekeyRetryFirst
+		for !s.rekeyLegacyContainerPolicies(ctx) {
+			timer := time.NewTimer(wait)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			wait = min(wait*2, rekeyRetryMax)
+		}
+	}()
 }
 
 // notStartedCause names why a pass's ended ctx left items unstarted: its own

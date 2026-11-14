@@ -114,11 +114,16 @@ func (f *fakeSettings) GetSetting(key string) (string, error) {
 	return f.values[key], nil
 }
 
-type recordingScheduler struct{ intervals []time.Duration }
+type recordingScheduler struct {
+	intervals []time.Duration
+	rekeys    int
+}
 
 func (r *recordingScheduler) Start(interval time.Duration) {
 	r.intervals = append(r.intervals, interval)
 }
+
+func (r *recordingScheduler) RekeyLegacyContainerPoliciesInBackground() { r.rekeys++ }
 
 // errSettingsFault is constructed nowhere else, so a record carrying it can
 // only have come from the injected read.
