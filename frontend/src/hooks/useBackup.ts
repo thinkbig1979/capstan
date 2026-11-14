@@ -382,6 +382,9 @@ export function useBackupStreaming(): BackupStreamState {
   const [error, setError] = useState<string | null>(null)
   const clientRef = useRef<WSClient | null>(null)
   const completedRef = useRef(false)
+  // True once the socket's own close refetched (reconcileOnClose), until a
+  // redial re-attaches. It is what keeps a caller's close from refetching twice.
+  const reconciledRef = useRef(false)
 
   // Refetch helper: invalidate backup history + status so the UI reflects the
   // persisted server run record rather than the transient WS state.
@@ -393,14 +396,15 @@ export function useBackupStreaming(): BackupStreamState {
   // WSClient ignores the late close event of a socket the caller closed, so
   // onClose never reports a run we cancelled, replaced or abandoned. The backend
   // run outlives the socket, so the code that closes an incomplete run refetches
-  // for it (agent-os-z91e.28). clientRef is null once a run finished or the
-  // socket closed on its own, which is what keeps this from refetching twice.
+  // for it (agent-os-z91e.28). clientRef is null only once a run finished. A
+  // dropped socket keeps its client here: WSClient redials it, so this is the
+  // one place that can stop it (agent-os-8x9p).
   const closeIncompleteRun = useCallback(() => {
     const client = clientRef.current
     clientRef.current = null
     if (!client) return
     client.close()
-    if (!completedRef.current) refetchHistory()
+    if (!completedRef.current && !reconciledRef.current) refetchHistory()
   }, [refetchHistory])
 
   // Unmount only: read through a ref so a new queryClient identity cannot re-run
@@ -429,6 +433,7 @@ export function useBackupStreaming(): BackupStreamState {
     setError(null)
     setStatus('running')
     completedRef.current = false
+    reconciledRef.current = false
 
     const client = new WSClient()
     clientRef.current = client
@@ -530,6 +535,10 @@ export function useBackupStreaming(): BackupStreamState {
         }
       },
       {
+        onOpen: () => {
+          // A redial re-attached: the run is live again.
+          reconciledRef.current = false
+        },
         onClose: () => {
           // Finding #17: if a terminal done frame was received, completedRef is
           // true and we must NOT overwrite the real outcome. If the socket closed
@@ -543,8 +552,8 @@ export function useBackupStreaming(): BackupStreamState {
           if (!completedRef.current) {
             // Append a note so the log isn't empty, but do NOT set status='error'.
             setLines((prev) => [...prev, 'Connection closed — refreshing run history…'])
+            reconciledRef.current = true
           }
-          clientRef.current = null
         },
         onError: () => {
           // A genuine connection error (not just a close) warrants error status.
@@ -552,14 +561,12 @@ export function useBackupStreaming(): BackupStreamState {
             setStatus('error')
             setError('WebSocket connection failed')
           }
-          clientRef.current = null
         },
         onReconnectFailed: () => {
           if (!completedRef.current) {
             setStatus('error')
             setError('Connection lost, reconnect failed')
           }
-          clientRef.current = null
         },
       },
     )

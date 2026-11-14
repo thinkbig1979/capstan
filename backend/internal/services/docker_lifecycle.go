@@ -29,6 +29,14 @@ type StreamLine struct {
 	Error   string        `json:"error,omitempty"`
 	Outcome truth.Outcome `json:"outcome,omitempty"`
 	Reason  string        `json:"reason,omitempty"`
+	// Status is the verified end state (ar.Details["status"]) on a terminal
+	// start/stop/restart done frame. Server-side only: operations.go persists
+	// it the way the REST verbs do (agent-os-hnys); the wire frame is unchanged.
+	Status string `json:"-"`
+	// Refused marks a done frame for a run refused before compose started
+	// (mutatingComposeArgs). Nothing ran, so nothing is persisted, as REST's
+	// refuseSharedProjectName stores nothing (agent-os-hnys review R1).
+	Refused bool `json:"-"`
 }
 
 // lifecycleAction names the lifecycle operations that have a verifiable end state.
@@ -693,7 +701,7 @@ func (s *DockerService) RunStreaming(ctx context.Context, stack models.Stack, su
 			// (agent-os-z91e.38). Error carries the full reason, hint included:
 			// useStreamingOperation shows a failed done frame's error first.
 			ar := refusedCompose(err)
-			out <- StreamLine{Type: "done", Success: false, Error: ar.Reason, Outcome: ar.Outcome, Reason: ar.Reason}
+			out <- StreamLine{Type: "done", Success: false, Error: ar.Reason, Outcome: ar.Outcome, Reason: ar.Reason, Refused: true}
 			return
 		}
 		//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
@@ -801,6 +809,7 @@ func (s *DockerService) RunStreaming(ctx context.Context, stack models.Stack, su
 			Error:   streamError(ar),
 			Outcome: ar.Outcome,
 			Reason:  ar.Reason,
+			Status:  verifiedStatus(ar),
 		}
 	}()
 
@@ -822,6 +831,12 @@ func streamingAction(subcommand string) lifecycleAction {
 		return actionPull
 	}
 	return ""
+}
+
+// verifiedStatus is the end state a lifecycle verification recorded, or "".
+func verifiedStatus(ar truth.ActionResult) string {
+	s, _ := ar.Details["status"].(string)
+	return s
 }
 
 // failedDoneLine is the terminal done frame for a run that failed before it

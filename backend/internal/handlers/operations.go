@@ -166,7 +166,10 @@ func (h *OperationsHandler) handleOperation(jwtSecret string, authDisabled bool)
 			// done frame the client was sent.
 			var output strings.Builder
 			var result services.StreamLine
-			defer func() { h.logRun(c, conn.UserID, stackID, action, result, output.String()) }()
+			defer func() {
+				h.logRun(c, conn.UserID, stackID, action, result, output.String())
+				h.persistStatus(stackID, action, result)
+			}()
 			collect := func(line services.StreamLine) {
 				if line.Line != "" {
 					output.WriteString(line.Line + "\n")
@@ -255,6 +258,12 @@ func (h *OperationsHandler) handleOperation(jwtSecret string, authDisabled bool)
 			for line := range h.docker.RunStreaming(opCtx, *stack, subcommand, extraArgs) {
 				if line.Type == "done" {
 					result = line
+					// A restart's down phase already ran, so a refused up
+					// phase still changed the stack: store it, as REST's
+					// RestartVerified does (agent-os-hnys review finding A).
+					if action == "restart" {
+						result.Refused = false
+					}
 				} else {
 					collect(line)
 				}
@@ -265,6 +274,26 @@ func (h *OperationsHandler) handleOperation(jwtSecret string, authDisabled bool)
 		}()
 
 		releaseLock()
+	}
+}
+
+// persistStatus stores a streamed run's verified stack status, as the REST
+// lifecycle routes do (agent-os-hnys). It runs on every return path of the
+// streaming body, after the drain, so a run whose client left still records
+// its result. Pull changes no lifecycle state and REST does not store one for
+// it; a run that sent no done frame has no result to store; a refused run
+// started nothing, and REST's refusal stores nothing either.
+func (h *OperationsHandler) persistStatus(stackID, action string, done services.StreamLine) {
+	if action == "pull" || done.Type != "done" || done.Refused {
+		return
+	}
+	ar := truth.ActionResult{Outcome: done.Outcome}
+	if done.Status != "" {
+		ar.Details = map[string]any{"status": done.Status}
+	}
+	status := lifecycleStatus(ar)
+	if err := h.db.UpdateStackStatus(stackID, status); err != nil {
+		slog.Warn("Failed to persist verified stack status", "stackID", stackID, "status", status, "error", err)
 	}
 }
 

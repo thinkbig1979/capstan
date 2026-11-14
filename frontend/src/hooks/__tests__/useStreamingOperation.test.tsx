@@ -410,3 +410,45 @@ describe('useStreamingOperation — the parsed frame is asserted, not validated'
     expect(result.current.lines).toContain('--- pulling ---')
   })
 })
+
+// agent-os-ljm0 review R2: an error FRAME (a scanner error, docker_lifecycle.go)
+// arrives mid-run and the run goes on to a done frame. `finished` is what tells
+// a consumer the outcome is final: only a done frame or the socket ending.
+describe('useStreamingOperation — finished marks the terminal outcome (ljm0 R2)', () => {
+  it('ljm0R2: an error frame mid-run is not finished; the later done frame is', () => {
+    const { result } = renderOperation()
+    act(() => { result.current.execute('my-stack', 'start') })
+    expect(result.current.finished).toBe(false)
+
+    act(() => { send({ type: 'error', error: 'line too long' }) })
+    expect(result.current.status).toBe('error')
+    expect(result.current.finished).toBe(false)
+
+    act(() => { send({ type: 'done', outcome: 'success' }) })
+    expect(result.current.status).toBe('success')
+    expect(result.current.finished).toBe(true)
+  })
+
+  it('ljm0R2: an error frame then the socket ending is finished, still error', () => {
+    const { result } = renderOperation()
+    act(() => { result.current.execute('my-stack', 'start') })
+    act(() => { send({ type: 'error', error: 'compose exploded' }) })
+    act(() => { simulateClose() })
+
+    expect(result.current.status).toBe('error')
+    expect(result.current.finished).toBe(true)
+  })
+
+  it('ljm0R2: a new execute and reset clear finished', () => {
+    const { result } = renderOperation()
+    act(() => { result.current.execute('my-stack', 'start') })
+    act(() => { send({ type: 'done', outcome: 'success' }) })
+    expect(result.current.finished).toBe(true)
+
+    act(() => { result.current.execute('my-stack', 'stop') })
+    expect(result.current.finished).toBe(false)
+    act(() => { send({ type: 'done', outcome: 'success' }) })
+    act(() => { result.current.reset() })
+    expect(result.current.finished).toBe(false)
+  })
+})

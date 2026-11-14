@@ -38,7 +38,7 @@ vi.mock('sonner', () => ({
 const execute = vi.fn()
 const reset = vi.fn()
 // Mutated (via Object.assign) per test to drive the running/success branches.
-const operationState = { status: 'idle', action: '', error: null as string | null, lines: [] as string[] }
+const operationState = { status: 'idle', action: '', error: null as string | null, lines: [] as string[], finished: false }
 
 vi.mock('@/hooks/useStreamingOperation', () => ({
   useStreamingOperation: () => ({ ...operationState, execute, cancel: vi.fn(), reset }),
@@ -121,7 +121,7 @@ function renderPage(
 describe('StackPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    Object.assign(operationState, { status: 'idle', action: '', error: null, lines: [] })
+    Object.assign(operationState, { status: 'idle', action: '', error: null, lines: [], finished: false })
     getStack.mockResolvedValue(makeStack())
     checkUpdates.mockResolvedValue({ updates: [] })
     getUpdateJobs.mockResolvedValue({ jobs: [] })
@@ -392,7 +392,7 @@ describe('StackPage', () => {
     })
 
     it('refreshes the stack and confirms the action by name after success', async () => {
-      Object.assign(operationState, { status: 'success', action: 'restart' })
+      Object.assign(operationState, { status: 'success', action: 'restart', finished: true })
 
       // The spy has to be in place before the mount, because the effect that
       // invalidates runs on it.
@@ -411,6 +411,57 @@ describe('StackPage', () => {
       // pill would still read "stopped".
       expect(invalidate).toHaveBeenCalledWith({ queryKey: ['stack', 's1'] })
       expect(invalidate).toHaveBeenCalledWith({ queryKey: ['stacks'] })
+    })
+
+    // agent-os-ljm0: every terminal outcome refreshes the stack and says what
+    // happened, not only success. 'disconnected' is not here: the hook already
+    // refetches on a close with no done frame.
+    it.each([
+      ['error', 'error', 'Restart failed'],
+      ['partial', 'warning', 'Restart partly completed'],
+      ['no_change', 'info', 'Restart: no change'],
+    ] as const)('ljm0: refreshes the stack and notifies after %s', async (status, level, title) => {
+      Object.assign(operationState, { status, action: 'restart', finished: true, error: status === 'error' ? 'compose up failed' : null })
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
+      })
+      const invalidate = vi.spyOn(queryClient, 'invalidateQueries')
+
+      renderPage('/stacks/s1', queryClient)
+
+      const { toast } = await import('sonner')
+      await waitFor(() => {
+        expect(toast[level]).toHaveBeenCalledTimes(1)
+      })
+      const [shownTitle, opts] = vi.mocked(toast[level]).mock.calls[0]
+      expect(shownTitle).toBe(title)
+      if (status === 'error') {
+        expect(opts).toEqual({ description: 'compose up failed' })
+      }
+      expect(toast.success).not.toHaveBeenCalled()
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ['stack', 's1'] })
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ['stacks'] })
+    })
+
+    // Review R2: a mid-run error frame (status 'error', not finished) must not
+    // toast; the run's done frame then toasts once, with its own outcome.
+    it('ljm0R2: an error frame then a successful done frame toasts once, the success', async () => {
+      Object.assign(operationState, { status: 'error', action: 'restart', error: 'line too long', finished: false })
+      renderPage('/stacks/s1')
+      const { toast } = await import('sonner')
+      await screen.findByTestId('stack-detail')
+      expect(toast.error).not.toHaveBeenCalled()
+
+      Object.assign(operationState, { status: 'success', error: 'line too long', finished: true })
+      // The page reads the mocked hook on render; a new jobs map (which the
+      // page subscribes to) re-renders it, as the hook's own state change would.
+      act(() => { useUpdateJobStore.setState({ jobs: {} }) })
+
+      await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Restart completed'))
+      expect(toast.success).toHaveBeenCalledTimes(1)
+      expect(toast.error).not.toHaveBeenCalled()
+      expect(toast.warning).not.toHaveBeenCalled()
+      expect(toast.info).not.toHaveBeenCalled()
     })
   })
 
