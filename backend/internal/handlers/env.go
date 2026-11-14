@@ -253,10 +253,21 @@ func hideMultilineBodies(entries []EnvEntry, raw string) {
 	// one-row multi-line value is (bodyLooksSensitive, review P2), or when a
 	// statement compose reads after one of its closing quotes does
 	// (agent-os-olcn: `b" API_TOKEN: 'c`, whose key the line parser rejects).
-	// Each row is scanned at most once: the walk resumes after the body, which
-	// keeps this linear in the file (a chain of re-opened values made a
-	// per-row scan quadratic).
-	for i := 0; i < len(entries); i++ {
+	// Every row is judged, none jumped over (review of agent-os-olcn: a jump
+	// past one body skipped the next opener, so a PEM body base hid was
+	// shown), and the rows are judged as pass 1 left them, all blanking done
+	// after. Rows only ever get hidden. Linear in the file: whether a body
+	// has a line that looks secret is a difference of prefix counts, and the
+	// bodies to hide are summed in one difference array.
+	looksBefore := make([]int, len(entries)+1)
+	for k, e := range entries {
+		looksBefore[k+1] = looksBefore[k]
+		if bodyLooksSensitive([]string{lineText(e)}) {
+			looksBefore[k+1]++
+		}
+	}
+	hide := make([]int, len(entries)+1)
+	for i := range entries {
 		if opener[i] || strings.Contains(entries[i].Value, "\n") {
 			continue
 		}
@@ -265,14 +276,15 @@ func hideMultilineBodies(entries []EnvEntry, raw string) {
 			continue
 		}
 		end, tailSensitive := walks.bodyEnd(i, q)
-		body := make([]string, 0, end-i)
-		for k := i + 1; k <= end; k++ {
-			body = append(body, lineText(entries[k]))
+		if tailSensitive || looksBefore[end+1]-looksBefore[i+1] > 0 {
+			hide[i+1]++
+			hide[end+1]--
 		}
-		if tailSensitive || bodyLooksSensitive(body) {
-			blank(i+1, end)
+	}
+	for k, n := 0, 0; k < len(entries); k++ {
+		if n += hide[k]; n > 0 {
+			blank(k, k)
 		}
-		i = end
 	}
 }
 

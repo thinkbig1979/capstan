@@ -81,3 +81,46 @@ func TestEnvLocked_olcn_SecretsHiddenWhenLocked(t *testing.T) {
 		})
 	}
 }
+
+// Review of the olcn fix (orch-dm-56 F1, F2, mutant m4): pass 1 blanked a
+// folded row inside another body, pass 2 then walked it as a plain opener
+// and jumped over the next opener, so a body base ec4a1d7 hid was shown.
+// Pass 2 now judges every row with no jump. Each content is one compose
+// reads; base hid SEKRIT in all but the last, which leaked on base too.
+var olcnReviewCases = []struct{ name, content string }{
+	{"F1 pem body after a blanked fold", "API_TOKEN=\"a\nX_TOKEN='b\nc\" Q=1\nMSG=\"m\nn\"\nD='d'\nCERT=\"x\n-----BEGIN PRIVATE KEY-----\nMIISEKRIT\n-----END PRIVATE KEY-----\" Z=1\nB=1\n"},
+	{"F2 colon secret after a blanked fold", "API_TOKEN=\"a\nX_TOKEN='b\nc\" Q=1\nMSG=\"m\nn\"\nD='d'\nMSG2=\"x\nb\" API_TOKEN: 'c\nSEKRIT'\nB=1\n"},
+	{"m4 sensitivity carried through a reopened body", "TZ=UTC\nMSG=\"x\nb\" NOTES='c\nd' API_TOKEN: 'e\nSEKRIT'\nB=1\n"},
+	// The re-opening row is a folded row (X='a... to z'), which pass 2 does
+	// not judge on its own: only the walk from MSG reaches the tail secret.
+	{"m4 sensitivity carried past a folded reopening row", "TZ=UTC\nMSG=\"x\nX='a\" N=\"c\nz'\nd\" API_TOKEN: 'e\nSEKRIT'\nB=1\n"},
+	{"commented plain opener over a plain opener", "# MSG=\"x\nNOTES=\"y\nb\" API_TOKEN: 'c\nSEKRIT'\nB=1\n"},
+}
+
+func TestEnvLocked_olcn_ReviewCasesHiddenWhenLocked(t *testing.T) {
+	for _, c := range olcnReviewCases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := dotenv.UnmarshalWithLookup(c.content, nil)
+			require.NoError(t, err, "compose reads the fixture")
+
+			router, stackID, token, _ := envQuoteFixture(t, c.content)
+			get := func(withToken bool) string {
+				req := httptest.NewRequest(http.MethodGet, "/stacks/"+stackID+"/env", nil)
+				if withToken {
+					req.Header.Set(middleware.EnvUnlockHeader, token)
+				}
+				w := httptest.NewRecorder()
+				router.ServeHTTP(w, req)
+				require.Equal(t, http.StatusOK, w.Code)
+				return w.Body.String()
+			}
+			require.Contains(t, get(true), "SEKRIT", "positive side: unlocked shows it")
+			assertBodyOmits(t, get(false), "SEKRIT")
+
+			dataDir, grouter := globalEnvTestRouter(t)
+			writeGlobalEnvFile(t, dataDir, c.content)
+			_, glocked := getGlobalVars(t, grouter, "/locked")
+			assertBodyOmits(t, glocked, "SEKRIT")
+		})
+	}
+}
