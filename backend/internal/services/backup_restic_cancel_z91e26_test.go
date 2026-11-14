@@ -72,17 +72,23 @@ func TestExecRunner_Run_CancelKillsTheProcessGroup(t *testing.T) {
 		t.Fatal("Run did not return after its context ended")
 	}
 
+	// One probe per pass, and the verdict is the last probe's: probing again
+	// after the loop raced the reaper, which can show the pid as 'X' in the
+	// microseconds after the loop saw it as 'Z' (agent-os-drhx).
 	deadline := time.Now().Add(3 * time.Second) // wall-clock ok: a killed process goes away in milliseconds
-	for time.Now().Before(deadline) && processAlive(pid) {
+	alive := processAlive(pid)
+	for alive && time.Now().Before(deadline) {
 		time.Sleep(20 * time.Millisecond)
+		alive = processAlive(pid)
 	}
-	if processAlive(pid) {
+	if alive {
 		_ = syscall.Kill(pid, syscall.SIGKILL) //nolint:errcheck // Cleanup of the leaked grandchild before failing.
 		t.Fatalf("grandchild %d in the child's process group survived the cancel: the group kill did not run", pid)
 	}
 }
 
-// processAlive reports whether pid exists and is not a zombie awaiting its reaper.
+// processAlive reports whether pid exists and is neither a zombie awaiting its
+// reaper nor a task its reaper is already releasing.
 func processAlive(pid int) bool {
 	if err := syscall.Kill(pid, 0); errors.Is(err, syscall.ESRCH) {
 		return false
@@ -91,10 +97,30 @@ func processAlive(pid int) bool {
 	if err != nil {
 		return false
 	}
+	return statAlive(string(stat))
+}
+
+// statAlive reads the state field of a /proc/<pid>/stat line. 'Z' is a zombie;
+// 'X' ('x' on old kernels) is a zombie its parent is reaping right now, which
+// /proc still lists until the pid is released.
+func statAlive(s string) bool {
 	// The state follows the parenthesised command name.
-	s := string(stat)
 	if i := strings.LastIndex(s, ") "); i >= 0 && i+2 < len(s) {
-		return s[i+2] != 'Z'
+		switch s[i+2] {
+		case 'Z', 'X', 'x':
+			return false
+		}
+		return true
 	}
 	return true
+}
+
+func TestStatAlive_DeadStatesAreNotAlive(t *testing.T) {
+	line := func(state string) string { return "4242 (sleep) " + state + " 1 4242 4242 0 -1" }
+	require.True(t, statAlive(line("S")), "a sleeping process is alive")
+	require.True(t, statAlive(line("R")), "a running process is alive")
+	require.False(t, statAlive(line("Z")), "a zombie is not alive")
+	// A zombie being reaped shows 'X' for a moment before its pid goes away.
+	require.False(t, statAlive(line("X")), "an exiting 'X' (EXIT_DEAD) task reported alive")
+	require.False(t, statAlive(line("x")), "an exiting 'x' (old kernels) task reported alive")
 }
