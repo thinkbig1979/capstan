@@ -188,8 +188,9 @@ const tokenSpanSentinel = "CapstanMaskedTokenSpan9wwa"
 
 // maskTokenSpans replaces with tokenSpanSentinel each union of overlapping occurrences of
 // token and of secrets that contains at least one occurrence of token.
-// Secrets MaskSecrets would skip (too short, or multi-line) do not grow a
-// span, so this masks nothing the masker itself would leave.
+// The secrets are read as MaskSecrets reads them (secretNeedles: too short
+// skipped, a multi-line one by its lines), so this masks nothing the masker
+// itself would leave.
 func maskTokenSpans(s, token string, secrets []string) string {
 	if token == "" || !strings.Contains(s, token) {
 		return s
@@ -210,10 +211,8 @@ func maskTokenSpans(s, token string, secrets []string) string {
 		}
 	}
 	find(token, true)
-	for _, v := range secrets {
-		if len(v) >= composeSecretMinLen && !strings.Contains(v, "\n") {
-			find(v, false)
-		}
+	for _, v := range secretNeedles(secrets) {
+		find(v, false)
 	}
 	sort.Slice(spans, func(i, j int) bool { return spans[i].a < spans[j].a })
 	var b strings.Builder

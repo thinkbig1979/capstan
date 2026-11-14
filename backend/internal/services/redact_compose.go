@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/compose-spec/compose-go/v2/dotenv"
+
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
@@ -198,15 +200,18 @@ func StackSecretValues(stack models.Stack, globalPath string) []string {
 	seen := map[string]bool{}
 	var secrets []string
 	add := func(v string) {
-		if len(v) >= composeSecretMinLen && !seen[v] {
-			seen[v] = true
-			secrets = append(secrets, v)
+		for _, s := range append([]string{v}, secretLines(v)...) {
+			if len(s) >= composeSecretMinLen && !seen[s] {
+				seen[s] = true
+				secrets = append(secrets, s)
+			}
 		}
 	}
 
 	dotEnv, envFile := stackEnvPaths(stack)
 	chains := supersetEnvFileChains(globalPath, dotEnv, envFile)
 	read := map[string]bool{}
+	var files []string
 	for _, chain := range chains {
 		for _, p := range chain {
 			if read[p] {
@@ -218,7 +223,28 @@ func StackSecretValues(stack models.Stack, globalPath string) []string {
 			if err != nil {
 				continue
 			}
+			files = append(files, p)
 			for _, v := range sensitiveEnvValues(string(data)) {
+				add(v)
+			}
+		}
+	}
+
+	// compose-go stops a chain at its first file that does not parse, so a
+	// broken global.env would hide the stack's own files from it. Each file
+	// is therefore also resolved alone (agent-os-0c9k); its ${VAR} references
+	// to another file may then resolve differently, which only adds values.
+	processEnv := processComposeEnv()
+	for _, p := range files {
+		env, err := dotenv.GetEnvFromFile(processEnv, []string{p})
+		if err != nil {
+			// The partial map is still used. err is not logged: it can quote
+			// the offending line, which can be a secret.
+			slog.Debug("compose-go could not parse an env file on its own; redacting with what it read",
+				"stack", stack.ProjectName)
+		}
+		for k, v := range env {
+			if IsSensitiveEnvKey(k) {
 				add(v)
 			}
 		}
@@ -247,33 +273,96 @@ func StackSecretValues(stack models.Stack, globalPath string) []string {
 // sensitiveEnvValues returns the values of sensitive keys in a dotenv file.
 // Both the raw value and its unquoted, comment-stripped form are returned
 // when they differ, because compose output may show either.
+//
+// Every reading is ADDED, never one instead of another (agent-os-0c9k):
+//   - each line on its own, as the older parser read it, with the key ending
+//     at the first "=";
+//   - the same line with the key ending at the first "=" or ":", as compose-go
+//     reads it (locateKeyName), so `KEY: value` is a variable too;
+//   - for a quoted value that does not close on its line, everything up to its
+//     closing quote on a later line, or to the end of the file when it never
+//     closes, since all of that may be the value. The lines after it are
+//     still read one by one as well.
+//
+// A multi-line value is returned whole and line by line (secretLines).
 func sensitiveEnvValues(content string) []string {
 	var values []string
 	add := func(v string) {
-		if len(v) >= composeSecretMinLen {
-			values = append(values, v)
+		for _, s := range append([]string{v}, secretLines(v)...) {
+			if len(s) >= composeSecretMinLen {
+				values = append(values, s)
+			}
 		}
 	}
-	for _, line := range strings.Split(content, "\n") {
-		line = strings.TrimSpace(line)
+	lines := strings.Split(content, "\n")
+	for i := range lines {
+		line := strings.TrimSpace(lines[i])
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		key, value, ok := strings.Cut(line, "=")
-		if !ok || !IsSensitiveEnvKey(strings.TrimSpace(key)) {
-			continue
+		seps := []int{strings.IndexByte(line, '=')}
+		if sep := strings.IndexAny(line, "=:"); sep != seps[0] {
+			seps = append(seps, sep)
 		}
-		raw := strings.TrimSpace(value)
-		add(raw)
-		clean := raw
-		if len(clean) >= 2 && (clean[0] == '"' || clean[0] == '\'') && clean[len(clean)-1] == clean[0] {
-			clean = clean[1 : len(clean)-1]
-		} else if i := strings.Index(clean, " #"); i != -1 {
-			clean = strings.TrimSpace(clean[:i])
-		}
-		if clean != raw {
-			add(clean)
+		for _, sep := range seps {
+			if sep < 0 || !IsSensitiveEnvKey(strings.TrimSpace(line[:sep])) {
+				continue
+			}
+			raw := strings.TrimSpace(line[sep+1:])
+			add(raw)
+			clean := raw
+			if len(clean) >= 2 && (clean[0] == '"' || clean[0] == '\'') && clean[len(clean)-1] == clean[0] {
+				clean = clean[1 : len(clean)-1]
+			} else if c := strings.Index(clean, " #"); c != -1 {
+				clean = strings.TrimSpace(clean[:c])
+			}
+			if clean != raw {
+				add(clean)
+			}
+			if raw != "" && (raw[0] == '"' || raw[0] == '\'') && envQuoteEnd(raw, 1, raw[0]) < 0 {
+				// The value goes on past this line: up to its closing quote.
+				text := raw + "\n" + strings.Join(lines[i+1:], "\n")
+				if end := envQuoteEnd(text, 1, raw[0]); end >= 0 {
+					text = text[:end+1]
+				}
+				add(text)
+				add(text[1:])
+				add(strings.TrimSuffix(text[1:], raw[:1]))
+			}
 		}
 	}
 	return values
+}
+
+// envQuoteEnd is the index in s of the quote q that closes a value opened
+// just before from, or -1: a backslash escapes the next byte inside double
+// quotes, as compose-go reads them.
+func envQuoteEnd(s string, from int, q byte) int {
+	for i := from; i < len(s); i++ {
+		switch {
+		case q == '"' && s[i] == '\\':
+			i++
+		case s[i] == q:
+			return i
+		}
+	}
+	return -1
+}
+
+// secretLines is each line of a multi-line secret, trimmed, that is long
+// enough to mask on its own (composeSecretMinLen); nil for a one-line value.
+// Output often shows such a value one line at a time: the compose stream is
+// redacted line by line, and a compose file or diff can re-indent it
+// (agent-os-0c9k).
+func secretLines(v string) []string {
+	if !strings.Contains(v, "\n") {
+		return nil
+	}
+	var out []string
+	for _, l := range strings.Split(v, "\n") {
+		if l = strings.TrimSpace(l); len(l) >= composeSecretMinLen {
+			out = append(out, l)
+		}
+	}
+	return out
 }
