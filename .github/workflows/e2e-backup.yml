@@ -310,6 +310,12 @@ jobs:
           CAPSTAN_API_URL: http://localhost:5001
           AUTH_DISABLED: 'true'
           CAPSTAN_TEST_STACK: test-app
+          # host-tools.spec.ts's HOST-FREE-001/003 click "Remove selected" for
+          # real, which removes every unlabelled stopped container (and unused
+          # images and build cache) on the Docker host. This runner is an
+          # ephemeral GitHub VM, so that is safe here and nowhere else: never set
+          # it on the self-hosted capstan-e2e runner (agent-os-bugc).
+          CAPSTAN_E2E_DESTRUCTIVE: '1'
         # No spec path argument: a hardcoded path
         # (testing/tests/playwright/backup-flow.spec.ts) only ever selected
         # that one file — a newly added spec under testDir was silently never
