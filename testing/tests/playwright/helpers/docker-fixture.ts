@@ -17,8 +17,8 @@ export const LABELLED_CONTAINER = 'capstan-e2e-labelled'
 const COMPOSE_PROJECT_LABEL = 'com.docker.compose.project'
 
 const DESTRUCTIVE_WHAT =
-  'Removes EVERY unlabelled stopped container (and, with defaults, unused images and build cache) on this ' +
-  'Docker host, not only the fixture, so it runs only on an ephemeral GitHub-hosted runner.'
+  'Removes EVERY unlabelled stopped container on this Docker host, not only the fixture, so it runs only on ' +
+  'an ephemeral GitHub-hosted runner.'
 
 /**
  * Why a test that removes what the Free up dialog lists must skip here, or

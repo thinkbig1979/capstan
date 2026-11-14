@@ -311,8 +311,8 @@ jobs:
           AUTH_DISABLED: 'true'
           CAPSTAN_TEST_STACK: test-app
           # host-tools.spec.ts's HOST-FREE-001/003 click "Remove selected" for
-          # real, which removes every unlabelled stopped container (and unused
-          # images and build cache) on the Docker host. This runner is an
+          # real, which removes every unlabelled stopped container on the Docker
+          # host, not only their fixture. This runner is an
           # ephemeral GitHub VM, so that is safe here and nowhere else: never set
           # it on the self-hosted capstan-e2e runner (agent-os-bugc). The spec also
           # requires GITHUB_ACTIONS=true and RUNNER_ENVIRONMENT=github-hosted, which

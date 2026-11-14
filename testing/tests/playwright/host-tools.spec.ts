@@ -13,8 +13,8 @@
  * afterEach, even when the test fails.
  *
  * DESTRUCTIVE TESTS (HOST-FREE-001, HOST-FREE-003) click "Remove selected" for
- * real, which removes every unlabelled stopped container on the host (and, with
- * the defaults, unused images and build cache), not only the fixture. They run
+ * real, which removes every unlabelled stopped container on the host, not only
+ * the fixture (both untick images and build cache, so no image goes). They run
  * only with CAPSTAN_E2E_DESTRUCTIVE=1 on a GitHub-hosted runner
  * (GITHUB_ACTIONS=true, RUNNER_ENVIRONMENT=github-hosted): the backup-flow job,
  * an ephemeral VM. Never set it on a developer machine or on the
@@ -52,6 +52,11 @@ const TEST_STACK_NAME = process.env.CAPSTAN_TEST_STACK ?? 'test-app'
 
 const HOST_CARDS = ['containers', 'images', 'volumes', 'networks', 'build-cache']
 const FREE_SPACE_PATH = '**/api/v1/resources/host/free-space'
+/**
+ * A removal's own budget. A real one on a CI runner took 26 s (3.36 GB of
+ * images), past the 15 s expect default (agent-os-bugc, run 43592886683).
+ */
+const FREE_SPACE_RESPONSE_MS = 120_000
 /** Everything under the host routes: the fail-closed guard in HOST-FREE-002. */
 const HOST_ROUTES = '**/api/v1/resources/host/**'
 
@@ -151,6 +156,18 @@ function cleanupPanelPlace(page: Page): Promise<string> {
  * every ticked row. The policy read is answered here rather than switched on
  * for real: an enabled policy would let this backend run cleanup on the host.
  */
+/**
+ * The free-space POST's response, to be awaited after the click. Registered
+ * before it, so a fast response is not missed. A 409 (another operation holds
+ * the exclusive turn) then fails on its status, not on a dialog timeout.
+ */
+function freeSpaceResponse(page: Page) {
+  return page.waitForResponse(
+    (r) => new URL(r.url()).pathname === '/api/v1/resources/host/free-space' && r.request().method() === 'POST',
+    { timeout: FREE_SPACE_RESPONSE_MS },
+  )
+}
+
 async function fakeCoveringPolicy(page: Page): Promise<void> {
   const policyResp = await page.request.get(`${API_URL}/api/v1/resources/cleanup/policy`)
   expect(policyResp.status(), 'GET cleanup policy').toBe(200)
@@ -361,7 +378,9 @@ test.describe('Host tab', () => {
     await volumes.getByText(/^Show the \d+ items$/).click()
     await expect(volumes.getByRole('listitem').filter({ hasText: LEFTOVER_VOLUME })).toBeVisible()
 
+    const response = freeSpaceResponse(page)
     await dialog.getByRole('button', { name: 'Remove selected' }).click()
+    expect((await response).status(), 'free-space response status').toBe(200)
     await expect
       .poll(() => sent, { message: `the free-space handler was never hit; the guard blocked: ${blocked.join(', ') || 'nothing'}` })
       .toBeDefined()
@@ -397,14 +416,18 @@ test.describe('Host tab', () => {
       if (await box.isChecked()) await box.uncheck()
     }
     await expect(dialog.getByTestId('free-space-row-containers').getByRole('checkbox')).toBeChecked()
+    const response = freeSpaceResponse(page)
     await dialog.getByRole('button', { name: 'Remove selected' }).click()
+    expect((await response).status(), 'free-space response status').toBe(200)
     await expect(dialog).toHaveCount(0)
 
     await expect.poll(() => exists('container', LEFTOVER_CONTAINER), { timeout: 30_000 }).toBe(false)
     expect(exists('container', LABELLED_CONTAINER), 'the compose-labelled container survives').toBe(true)
   })
 
-  test('HOST-FREE-003 (destructive): an unlabelled volume survives a real default Remove selected', async ({ page }) => {
+  test('HOST-FREE-003 (destructive): an unlabelled volume survives a real Remove selected (volumes at their default)', async ({
+    page,
+  }) => {
     const skipReason = destructiveSkipReason()
     test.skip(skipReason !== undefined, skipReason)
     createLeftoverVolume()
@@ -412,7 +435,17 @@ test.describe('Host tab', () => {
 
     const dialog = await openFreeUpDialog(page)
     await expect(dialog.getByTestId('free-space-row-volumes').getByRole('checkbox')).not.toBeChecked()
+    // Images and build cache unticked: a runner's unused images are gigabytes
+    // and a 26 s removal, and they are not what this test is about. Containers
+    // stays ticked, so the removal visibly runs; Volumes is left as it opened.
+    for (const row of ['images', 'buildCache']) {
+      const box = dialog.getByTestId(`free-space-row-${row}`).getByRole('checkbox')
+      if (await box.isChecked()) await box.uncheck()
+    }
+    await expect(dialog.getByTestId('free-space-row-containers').getByRole('checkbox')).toBeChecked()
+    const response = freeSpaceResponse(page)
     await dialog.getByRole('button', { name: 'Remove selected' }).click()
+    expect((await response).status(), 'free-space response status').toBe(200)
     await expect(dialog).toHaveCount(0)
 
     // The container going is the proof the removal ran.
