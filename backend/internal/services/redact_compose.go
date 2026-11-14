@@ -137,11 +137,88 @@ func redactComposeOutput(s string, secrets []string) string {
 	if s == "" {
 		return s
 	}
-	s = RedactURLUserinfoInText(s)
-	for _, v := range secrets {
-		s = strings.ReplaceAll(s, v, userinfoPlaceholder)
-	}
+	s, _ = maskNeedleUnion(RedactURLUserinfoInText(s), secrets, userinfoPlaceholder)
 	return s
+}
+
+// maskNeedleUnion replaces with mask each run of overlapping occurrences of
+// needles in s, all found on s itself, so the order of needles does not
+// matter. Replacing one needle at a time let a masked needle break the match
+// of another that overlapped it, leaving part of that one shown
+// (agent-os-buwq). It returns how many needles occur in s.
+//
+// O(len(s) + len(v)) per needle v that occurs, and one strings.Index per
+// needle that does not; it allocates nothing for an s without a needle.
+func maskNeedleUnion(s string, needles []string, mask string) (string, int) {
+	var ends []int // ends[p] is the furthest end of an occurrence starting at p
+	found := 0
+	for _, v := range needles {
+		first := -1
+		if v != "" {
+			first = strings.Index(s, v)
+		}
+		if first < 0 {
+			continue
+		}
+		if ends == nil {
+			ends = make([]int, len(s))
+		}
+		markOccurrences(s, v, first, ends)
+		found++
+	}
+	if found == 0 {
+		return s, 0
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	at := 0
+	for p := 0; p < len(s); p++ {
+		if ends[p] == 0 {
+			continue
+		}
+		end := ends[p]
+		for q := p + 1; q < end; q++ {
+			end = max(end, ends[q])
+		}
+		b.WriteString(s[at:p])
+		b.WriteString(mask)
+		at = end
+		p = end - 1
+	}
+	b.WriteString(s[at:])
+	return b.String(), found
+}
+
+// markOccurrences records in ends every occurrence of v in s from first (an
+// occurrence) on, overlapping ones included, with a Knuth-Morris-Pratt scan:
+// searching again from each hit plus one compares a self-overlapping needle
+// whole at every byte, n*m (review of agent-os-buwq, F1).
+func markOccurrences(s, v string, first int, ends []int) {
+	// fail[i] is the length of the longest proper prefix of v[:i+1] that is
+	// also its suffix.
+	fail := make([]int, len(v))
+	for i, k := 1, 0; i < len(v); i++ {
+		for k > 0 && v[i] != v[k] {
+			k = fail[k-1]
+		}
+		if v[i] == v[k] {
+			k++
+		}
+		fail[i] = k
+	}
+	for i, k := first, 0; i < len(s); i++ {
+		for k > 0 && s[i] != v[k] {
+			k = fail[k-1]
+		}
+		if s[i] == v[k] {
+			k++
+		}
+		if k == len(v) {
+			a := i + 1 - len(v)
+			ends[a] = max(ends[a], i+1)
+			k = fail[k-1]
+		}
+	}
 }
 
 // redactComposeOutputFor applies redactComposeOutput with the stack's own
