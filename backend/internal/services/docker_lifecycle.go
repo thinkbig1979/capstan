@@ -29,6 +29,10 @@ type StreamLine struct {
 	Error   string        `json:"error,omitempty"`
 	Outcome truth.Outcome `json:"outcome,omitempty"`
 	Reason  string        `json:"reason,omitempty"`
+	// Status is the verified end state (ar.Details["status"]) on a terminal
+	// start/stop/restart done frame. Server-side only: operations.go persists
+	// it the way the REST verbs do (agent-os-hnys); the wire frame is unchanged.
+	Status string `json:"-"`
 }
 
 // lifecycleAction names the lifecycle operations that have a verifiable end state.
@@ -801,6 +805,7 @@ func (s *DockerService) RunStreaming(ctx context.Context, stack models.Stack, su
 			Error:   streamError(ar),
 			Outcome: ar.Outcome,
 			Reason:  ar.Reason,
+			Status:  verifiedStatus(ar),
 		}
 	}()
 
@@ -822,6 +827,12 @@ func streamingAction(subcommand string) lifecycleAction {
 		return actionPull
 	}
 	return ""
+}
+
+// verifiedStatus is the end state a lifecycle verification recorded, or "".
+func verifiedStatus(ar truth.ActionResult) string {
+	s, _ := ar.Details["status"].(string)
+	return s
 }
 
 // failedDoneLine is the terminal done frame for a run that failed before it
