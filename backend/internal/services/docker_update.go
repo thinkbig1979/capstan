@@ -783,11 +783,16 @@ func anonymousVolumes(hostCfg *container.HostConfig, mounts []container.MountPoi
 // anonymous volumes with it, so the data cannot be carried to the new
 // container. Edwin's ruling (2026-11-14): refuse before anything is pulled or
 // stopped, whether or not the container is running, rather than copy the data.
-func refuseAutoRemoveAnonymous(inspect container.InspectResponse) error {
+//
+// shared names the volumes a --volumes-from source container also mounts.
+// Those survive the stop, named or anonymous, because the source still holds
+// them (OBSERVED on Docker 26.1.5, agent-os-60vd), so they are not refused.
+func refuseAutoRemoveAnonymous(inspect container.InspectResponse, shared map[string]bool) error {
 	if inspect.HostConfig == nil || !inspect.HostConfig.AutoRemove {
 		return nil
 	}
-	anon := anonymousVolumes(inspect.HostConfig, inspect.Mounts)
+	anon := slices.DeleteFunc(anonymousVolumes(inspect.HostConfig, inspect.Mounts),
+		func(mp container.MountPoint) bool { return shared[mp.Name] })
 	if len(anon) == 0 {
 		return nil
 	}
@@ -798,6 +803,32 @@ func refuseAutoRemoveAnonymous(inspect container.InspectResponse) error {
 	return fmt.Errorf("not updated: the container was started with --rm (auto-remove), so stopping it "+
 		"for the update would make Docker delete its unnamed volumes (%s) and their data; "+
 		"recreate it without --rm or with named volumes to update it", strings.Join(dests, ", "))
+}
+
+// volumesFromNames returns the names of the volumes the container's
+// --volumes-from source containers mount (agent-os-60vd). A source that cannot
+// be inspected contributes nothing, so its volumes stay subject to the
+// refusal: the --rm container may be their last holder.
+func (s *DockerService) volumesFromNames(ctx context.Context, hostCfg *container.HostConfig) map[string]bool {
+	if hostCfg == nil || !hostCfg.AutoRemove || len(hostCfg.VolumesFrom) == 0 {
+		return nil
+	}
+	names := map[string]bool{}
+	for _, from := range hostCfg.VolumesFrom {
+		// "container[:ro|rw]"; a container name cannot contain a colon.
+		source, _, _ := strings.Cut(from, ":")
+		src, err := s.updateAPI().ContainerInspect(ctx, source)
+		if err != nil {
+			slog.Warn("Could not inspect a --volumes-from source; its volumes are treated as at risk", "source", source, "error", err)
+			continue
+		}
+		for _, mp := range src.Mounts {
+			if mp.Type == mount.TypeVolume && mp.Name != "" {
+				names[mp.Name] = true
+			}
+		}
+	}
+	return names
 }
 
 // dropKeys returns a copy of m without the keys drop reports, or nil for nil.
@@ -848,7 +879,7 @@ func (s *DockerService) recreateStandaloneContainer(
 	name := strings.TrimPrefix(inspect.Name, "/")
 
 	// First, before anything is pulled or stopped (agent-os-64me).
-	if err := refuseAutoRemoveAnonymous(inspect); err != nil {
+	if err := refuseAutoRemoveAnonymous(inspect, s.volumesFromNames(ctx, inspect.HostConfig)); err != nil {
 		say(StreamStderr, "Error: "+err.Error())
 		return "", err
 	}
