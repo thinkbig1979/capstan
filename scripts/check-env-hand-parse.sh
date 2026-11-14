@@ -62,7 +62,7 @@ backend/internal/handlers/env.go|composeLineKey
 backend/internal/handlers/env.go|opensMultilineValue
 backend/internal/handlers/env.go|commentedSecretEnd
 backend/internal/handlers/env.go|opensMultilineTail
-backend/internal/handlers/env.go|tailLooksSensitive
+backend/internal/handlers/env.go|statementsLookSensitive
 backend/internal/handlers/settings.go|globalEnvVarOf
 backend/internal/services/redact_compose.go|sensitiveEnvValues
 backend/internal/services/compose_env.go|resolveComposeEnv
@@ -85,10 +85,11 @@ backend/internal/services/mask_secret_lines.go|maskItemAfterEquals
 #     the locked view's masking (agent-os-yt2f). They read only where the
 #     value starts, whether its quote closes, and (commentedSecretEnd) the URL
 #     check on a commented value; they never return the value.
-#     opensMultilineTail and tailLooksSensitive walk the statements compose
+#     opensMultilineTail and statementsLookSensitive walk the statements compose
 #     reads after a closing quote by the same rule (agent-os-zpbi, review E2,
-#     E3): one asks which quote the last statement leaves open, the other
-#     whether a statement's key is sensitive. Neither returns a value.
+#     E3, R1): one asks which quote the last statement leaves open, the other
+#     whether a statement's key or own value is sensitive. Neither returns a
+#     value.
 #   handlers/settings.go globalEnvVarOf: projects a row parseEnvFile already
 #     keyed to the global env page's {key, value}; for a read-only line
 #     (KEY: value) or a multi-line value it reads where the value starts, by
@@ -264,7 +265,7 @@ func opensMultilineTail(line string) (byte, bool) {
 	return 0, false
 }
 
-func tailLooksSensitive(value string) bool {
+func statementsLookSensitive(value string) bool {
 	sep := strings.IndexAny(tail, "=:")
 	return false
 }

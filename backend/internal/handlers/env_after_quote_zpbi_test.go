@@ -156,13 +156,67 @@ func TestEnvAfterQuote_zpbi_LongTailParsesInLinearTime(t *testing.T) {
 	tail := strings.Repeat(" A=\"\"", 16400) + "\n"
 	// The second line is sensitive, so the locked view also walks its tail
 	// for a quote left open (opensMultilineTail).
-	for _, line := range []string{"A=\"\"" + tail, "DB_PASSWORD=\"\"" + tail} {
-		require.Greater(t, len(line), 80*1024)
+	// The third is a file, not a line: a chain of values each re-opened by the
+	// previous one's closing line, which the locked view follows to its end
+	// (review R2, P2). Scanned again from every row it was quadratic: 34 s
+	// at 4000 lines.
+	chain := "NOTES=\"a\" X=\"x\n" + strings.Repeat("b\" Y=\"c\n", 10300) + "end\"\n"
+	for _, content := range []string{"A=\"\"" + tail, "DB_PASSWORD=\"\"" + tail, chain} {
+		require.Greater(t, len(content), 80*1024)
 		start := time.Now()
-		resp := EnvResponse{Raw: line, Entries: (&EnvHandler{}).parseEnvFile(line)}
+		resp := EnvResponse{Raw: content, Entries: (&EnvHandler{}).parseEnvFile(content)}
 		redactEnvResponse(&resp)
+		vars := parseGlobalEnvText(content)
+		redactGlobalEnvVars(vars, content)
 		elapsed := time.Since(start)
-		require.Len(t, resp.Entries, 1)
-		assert.Less(t, elapsed, 2*time.Second, "an 80 KB line took %s to parse and redact", elapsed)
+		require.NotEmpty(t, resp.Entries)
+		assert.Less(t, elapsed, 2*time.Second, "%d bytes took %s to parse and redact", len(content), elapsed)
+	}
+}
+
+// Review round 3 (R1, P3, R2, P1, P2): every statement compose reads on a
+// line is checked with its own value, and a body that a later statement
+// opens, or that a closing line's tail opens again, is followed. Each content
+// holds the secret SEKRIT where compose reads it as (part of) a variable's
+// value; the locked stack table and global page must not show it.
+var round3Leaks = []struct{ name, content string }{
+	{"R1 unquoted opaque url in tail", "TZ=UTC\nNOTES=\"a\" BACKUP=sftp:user:SEKRIT@host:/path\nB=1\n"},
+	{"R1 quoted opaque url in tail", "TZ=UTC\nNOTES=\"a\" BACKUP=\"sftp:user:SEKRIT@host:/path\"\nB=1\n"},
+	{"R1 url in third statement", "TZ=UTC\nNOTES=\"a\" B=\"c\" BACKUP=sftp:user:SEKRIT@host:/path\nB=1\n"},
+	{"R1 colon form", "TZ=UTC\nNOTES: \"a\" BACKUP: sftp:user:SEKRIT@host:/path\nB=1\n"},
+	{"P3 url in first statement before a tail", "TZ=UTC\nBACKUP=\"sftp:user:SEKRIT@host:/path\" NOTES=x\nB=1\n"},
+	{"R2 closing line tail reopens", "TZ=UTC\nNOTES=\"a\" DB_PASSWORD=\"x\nb\" API_TOKEN=\"c\nSEKRIT\"\nB=1\n"},
+	{"P1 first statement body reopens", "TZ=UTC\nDB_PASSWORD=\"x\nb\" API_TOKEN=\"c\nSEKRIT\"\nB=1\n"},
+	{"P2 pem body opened by a plain tail key", "TZ=UTC\nNOTES=\"a\" CERT=\"\n-----BEGIN PRIVATE KEY-----\nSEKRITbase64==\n-----END PRIVATE KEY-----\"\nB=1\n"},
+	{"P2 json key body opened by a plain tail key", "TZ=UTC\nNOTES='a' GCP_CREDENTIALS='{\n \"private_key\": \"SEKRIT\"\n}'\nB=1\n"},
+}
+
+func TestEnvAfterQuote_zpbi_Round3SecretsHiddenWhenLocked(t *testing.T) {
+	for _, c := range round3Leaks {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := dotenv.UnmarshalWithLookup(c.content, nil)
+			require.NoError(t, err, "compose reads the fixture")
+
+			router, stackID, token, _ := envQuoteFixture(t, c.content)
+			get := func(withToken bool) string {
+				req := httptest.NewRequest(http.MethodGet, "/stacks/"+stackID+"/env", nil)
+				if withToken {
+					req.Header.Set(middleware.EnvUnlockHeader, token)
+				}
+				w := httptest.NewRecorder()
+				router.ServeHTTP(w, req)
+				require.Equal(t, http.StatusOK, w.Code)
+				return w.Body.String()
+			}
+			require.Contains(t, get(true), "SEKRIT", "positive side")
+			locked := get(false)
+			assertBodyOmits(t, locked, "SEKRIT")
+			assert.Contains(t, locked, `"key":"B","value":"1"`, "rows after the secret stay visible")
+
+			dataDir, grouter := globalEnvTestRouter(t)
+			writeGlobalEnvFile(t, dataDir, c.content)
+			_, glocked := getGlobalVars(t, grouter, "/locked")
+			assertBodyOmits(t, glocked, "SEKRIT")
+		})
 	}
 }
