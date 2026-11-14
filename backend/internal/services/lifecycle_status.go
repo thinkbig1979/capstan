@@ -65,14 +65,16 @@ type StackStatusReader interface {
 var _ StackStatusReader = (*DockerService)(nil)
 
 // StoreObservedStackStatus stores the stack's status as Docker reports it
-// after an update changed some of its containers (agent-os-txqx). An update
-// is not a whole-stack verb, so its result cannot be mapped the way
-// StoreLifecycleStatus maps one: a stopped service updated and stopped again,
-// or one failed service of several, would store "running" or "error" for the
-// whole stack. The stack is re-read instead. Every update entry point calls
-// it (kept that way by TestUpdateCallsStoreObservedStatus_Txqx).
+// after an operation changed some of its containers: an update
+// (agent-os-txqx) or a single-container start, stop, restart or delete
+// (agent-os-nyt5). Neither is a whole-stack verb, so its result cannot be
+// mapped the way StoreLifecycleStatus maps one: a stopped service updated and
+// stopped again, one failed service of several, or one container stopped of
+// several, would store the wrong status for the whole stack. The stack is
+// re-read instead. Every update entry point and container action calls it
+// (kept that way by TestUpdateCallsStoreObservedStatus_Txqx).
 //
-// When every result started nothing (a refused update, no Docker service),
+// When every result started nothing (a refused operation, no Docker service),
 // nothing is stored. A failed read stores nothing and is logged: an unknown
 // state must not overwrite the last known one. The read bounds itself:
 // Status runs compose ps under commandWithDeadline on its own background
@@ -90,11 +92,11 @@ func StoreObservedStackStatus(store StackStatusStore, reader StackStatusReader, 
 	}
 	status, _, err := reader.Status(stack)
 	if err != nil {
-		slog.Warn("Could not read the stack's status after an update; its stored status is unchanged", "stackID", stack.ID, "error", err)
+		slog.Warn("Could not read the stack's status after its containers changed; its stored status is unchanged", "stackID", stack.ID, "error", err)
 		return
 	}
 	if err := store.UpdateStackStatus(stack.ID, status); err != nil {
-		slog.Warn("Failed to persist stack status after an update", "stackID", stack.ID, "status", status, "error", err)
+		slog.Warn("Failed to persist stack status after its containers changed", "stackID", stack.ID, "status", status, "error", err)
 	}
 }
 

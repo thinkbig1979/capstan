@@ -10,17 +10,27 @@ import (
 	"testing"
 )
 
-// updateVerbs are the calls that update a container in place: each changes
-// what a stack runs, so each caller stores the stack's re-read status.
+// updateVerbs are the calls that change one container of a stack: an update
+// in place (agent-os-txqx) or a start, stop, restart or delete of a single
+// container (agent-os-nyt5). Each changes what a stack runs, so each caller
+// stores the stack's re-read status.
 var updateVerbs = map[string]bool{
 	"UpdateContainer": true, "UpdateContainerStreaming": true, "UpdateComposeServiceStreaming": true,
+	"StartContainer": true, "StopContainer": true, "RestartContainer": true, "DeleteContainer": true,
 }
 
 // updateStatusStores are the calls that store it. storeStackStatusAfterUpdate
-// is the scheduler's wrapper; the test checks that it calls
+// is the scheduler's wrapper and storeContainerStackStatus the container
+// actions' (agent-os-nyt5); the test checks that each calls
 // StoreObservedStackStatus itself.
 var updateStatusStores = map[string]bool{
-	"StoreObservedStackStatus": true, "storeStackStatusAfterUpdate": true,
+	"StoreObservedStackStatus": true, "storeStackStatusAfterUpdate": true, "storeContainerStackStatus": true,
+}
+
+// storeWrappers are where each wrapper in updateStatusStores is declared.
+var storeWrappers = map[string]string{
+	"storeStackStatusAfterUpdate": "services/scheduler.go",
+	"storeContainerStackStatus":   "handlers/resources.go",
 }
 
 // TestUpdateCallsStoreObservedStatus_Txqx keeps every update entry point on
@@ -38,7 +48,7 @@ func TestUpdateCallsStoreObservedStatus_Txqx(t *testing.T) {
 	fset := token.NewFileSet()
 	var offenders []string
 	seen := map[string]int{}
-	wrapperStores := -1
+	wrapperStores := map[string]int{}
 
 	err := fs.WalkDir(internalSources, ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -61,8 +71,8 @@ func TestUpdateCallsStoreObservedStatus_Txqx(t *testing.T) {
 				continue
 			}
 			verbs, stores, direct := countUpdateCalls(fn.Body)
-			if path == "services/scheduler.go" && fn.Name.Name == "storeStackStatusAfterUpdate" {
-				wrapperStores = direct
+			if storeWrappers[fn.Name.Name] == path {
+				wrapperStores[fn.Name.Name] = direct
 			}
 			if verbs == 0 {
 				continue
@@ -78,20 +88,25 @@ func TestUpdateCallsStoreObservedStatus_Txqx(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Positive arm: the walk must see both callers' files, or a clean result
+	// Positive arm: the walk must see every caller's file, or a clean result
 	// below means nothing.
-	for _, want := range []string{"handlers/updates.go", "services/scheduler.go"} {
+	for _, want := range []string{
+		"handlers/updates.go", "services/scheduler.go",
+		"handlers/resources.go", "handlers/resource_mutations.go", // agent-os-nyt5
+	} {
 		if seen[want] == 0 {
 			t.Errorf("the walk saw no update call in %s; it no longer covers the callers (seen: %v)", want, seen)
 		}
 	}
-	if wrapperStores < 1 {
-		t.Errorf("services/scheduler.go storeStackStatusAfterUpdate does not call StoreObservedStackStatus (found %d), so counting it as a store hides a missing one", wrapperStores)
+	for name, path := range storeWrappers {
+		if wrapperStores[name] < 1 {
+			t.Errorf("%s %s does not call StoreObservedStackStatus (found %d), so counting it as a store hides a missing one", path, name, wrapperStores[name])
+		}
 	}
 
 	sort.Strings(offenders)
 	for _, o := range offenders {
-		t.Errorf("%s updates a container without storing the stack's status through services.StoreObservedStackStatus for each call (agent-os-txqx)", o)
+		t.Errorf("%s changes a container without storing the stack's status through services.StoreObservedStackStatus for each call (agent-os-txqx, nyt5)", o)
 	}
 }
 

@@ -225,13 +225,15 @@ func (h *ResourcesHandler) deleteContainer(c *gin.Context) {
 		))
 	}
 
-	release, ok := h.lockContainerStack(c, id, fail)
+	release, stack, ok := h.lockContainerStack(c, id, fail)
 	if !ok {
 		return
 	}
 	defer release()
 	defer h.invalidateHostSpace()
-	if err := h.containerOps.DeleteContainer(c.Request.Context(), id, force); err != nil {
+	err := h.containerOps.DeleteContainer(c.Request.Context(), id, force)
+	h.storeContainerStackStatus(stack, err)
+	if err != nil {
 		fail(err)
 		return
 	}
