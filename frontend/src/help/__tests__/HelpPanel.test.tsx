@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
 import { useEffect } from 'react'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, useNavigate, type NavigateFunction } from 'react-router'
@@ -51,11 +51,42 @@ async function openFromButton() {
 
 const topic = () => screen.findByTestId('help-panel-topic-heading')
 
+/**
+ * Waits for the doc's heading by its anchor, a cheap selector. A findByRole with a
+ * name re-walks the whole rendered doc on every poll, about 0.5 s a poll on a loaded
+ * machine, so it ran out of its 1 s budget before the doc showed (agent-os-ursd).
+ * Assert the role once, after this, with getByRole.
+ */
+const findAnchor = (anchor: string, timeout?: number) =>
+  waitFor(
+    () => {
+      const el = document.querySelector<HTMLElement>(`[data-help-anchor="${anchor}"]`)
+      expect(el).not.toBeNull()
+      return el!
+    },
+    { timeout },
+  )
+
 function deferred<T>() {
   let resolve!: (value: T) => void
   const promise = new Promise<T>((r) => (resolve = r))
   return { promise, resolve }
 }
+
+// The first doc a file renders pays for the cold lazy renderer (react-markdown +
+// remark-gfm import, first render, React's Suspense reveal delay): over 1 s on a
+// loaded machine, so the first test's 1 s findBy budget ran out (agent-os-ursd).
+// Render one doc here, under the hook timeout, so each test measures only itself.
+beforeAll(async () => {
+  const { unmount } = render(
+    <MemoryRouter>
+      <HelpPanel />
+    </MemoryRouter>,
+  )
+  act(() => useHelpStore.getState().openAt({ doc: 'help/settings', anchor: 'backup' }))
+  await findAnchor('backup', 9000)
+  unmount()
+})
 
 beforeEach(() => {
   loadMock.mockReset()
@@ -70,7 +101,8 @@ describe('HelpPanel topic', () => {
 
     expect(await topic()).toHaveTextContent(/^Backup$/)
     // The doc rendered, scrolled to the section (jsdom has no layout; the heading exists).
-    expect(await within(panel).findByRole('heading', { level: 2, name: 'Backup' })).toHaveAttribute('data-help-anchor', 'backup')
+    const section = await findAnchor('backup')
+    expect(within(panel).getByRole('heading', { level: 2, name: 'Backup' })).toBe(section)
     // Opened on the page: focus is on the panel title, not the section.
     expect(screen.getByRole('heading', { name: 'Help' })).toHaveFocus()
   })
