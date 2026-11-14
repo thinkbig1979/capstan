@@ -19,24 +19,29 @@ const ENV_SEARCH_FIELDS = [
  * without "=" (agent-os-n43b), or a quoted value spanning several lines
  * (agent-os-fw2q). The backend sends the multi-line value as one row holding
  * every line; it is edited in the Raw view, and an unedited table save writes
- * it back unchanged. An unlocked session receives a secret body in full, so a
- * sensitive multi-line row stays masked until the eye toggle reveals it, the
- * same way a sensitive one-line value does.
+ * it back unchanged. An unlocked session receives a secret in full, so a
+ * sensitive read-only row stays masked until the eye toggle reveals it, the
+ * same way a sensitive editable value does. Every keyed row (a variable) has
+ * the toggle, one-line ones too (agent-os-hag4); a free-text comment has no
+ * key, is never marked sensitive, and is shown as is.
  */
 function ReadOnlyValue({
   value,
+  keyed,
   masked,
   onToggle,
   toggleLabel,
   toggleClassName,
 }: {
   value: string
+  keyed: boolean
   masked: boolean
   onToggle: () => void
   toggleLabel: string
   toggleClassName?: string
 }) {
-  if (!value.includes('\n')) {
+  const multiline = value.includes('\n')
+  if (!multiline && !keyed) {
     return <span className="italic text-muted-foreground">{value}</span>
   }
   return (
@@ -45,7 +50,7 @@ function ReadOnlyValue({
         <span className="block whitespace-pre-wrap break-all italic text-muted-foreground">
           {masked ? '••••••' : value}
         </span>
-        <span className="text-xs text-muted-foreground">Multi-line value, edit in Raw</span>
+        {multiline && <span className="text-xs text-muted-foreground">Multi-line value, edit in Raw</span>}
       </div>
       <Button variant="ghost" size="icon" onClick={onToggle} className={toggleClassName} aria-label={toggleLabel}>
         {masked ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -148,6 +153,7 @@ export function EnvTableView({
                   {entry.comment ? (
                     <ReadOnlyValue
                       value={entry.value}
+                      keyed={entry.key !== ''}
                       masked={entry.sensitive}
                       onToggle={() => onToggleVisibility(i)}
                       toggleLabel={`Toggle visibility for entry ${i + 1}`}
@@ -228,6 +234,7 @@ export function EnvTableView({
               {entry.comment ? (
                 <ReadOnlyValue
                   value={entry.value}
+                  keyed={entry.key !== ''}
                   masked={entry.sensitive}
                   onToggle={() => onToggleVisibility(i)}
                   toggleLabel={`Toggle visibility for entry ${i + 1}`}
