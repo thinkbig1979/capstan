@@ -104,9 +104,6 @@ function HostOverview({ summaryQuery, onCleanUp }: { summaryQuery: SummaryQuery;
   } else {
     body = (
       <>
-        {summaryQuery.isError && (
-          <RefreshFailedNotice what="the Docker host summary" onRetry={() => void summaryQuery.refetch()} />
-        )}
         <section aria-label="Docker disk use" className="space-y-2 rounded-lg border bg-card p-4">
           <p className="text-sm">
             <span className="font-medium">Docker disk use: {formatBytes(summary.disk.total)}</span>
@@ -140,7 +137,7 @@ function HostOverview({ summaryQuery, onCleanUp }: { summaryQuery: SummaryQuery;
     <div className="space-y-6">
       <HostLiveRow stats={stats} aggregates={aggregates} isConnected={isConnected} containers={containers} />
       {body}
-      <BusiestContainers containers={containers} total={summary?.containers.count} />
+      <BusiestContainers containers={containers} isConnected={isConnected} total={summary?.containers.count} />
       {/* Outside {body}: the schedule has its own queries, and an unreadable
           host summary is no reason to hide it. Its #automatic-cleanup scroll
           waits until the summary has settled and the content above has its
@@ -195,16 +192,23 @@ export function HostTab() {
 
   // Closing drops free so a reload does not reopen it. navigate, not
   // setSearchParams: that would drop the #hash, and view must survive too.
+  // The state carries a pending #automatic-cleanup scroll request through.
   const freeOpen = searchParams.get('free') === '1'
   const setFreeOpen = (open: boolean) => {
     const next = new URLSearchParams(location.search)
     if (open) next.set('free', '1')
     else next.delete('free')
-    navigate({ search: `?${next}`, hash: location.hash }, { replace: true })
+    navigate({ search: `?${next}`, hash: location.hash }, { replace: true, state: location.state })
   }
 
   return (
     <div data-testid="host-tab" className="space-y-4">
+      {/* Above the view row, not in the overview: the counts and the Free up
+          figure on every view come from the same summary, so every view says
+          when they are the last good ones. */}
+      {summaryQuery.isError && !!summary && (
+        <RefreshFailedNotice what="the Docker host summary" onRetry={() => void summaryQuery.refetch()} />
+      )}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <HostViewSwitch active={view} summary={summary} />
         {summary && (

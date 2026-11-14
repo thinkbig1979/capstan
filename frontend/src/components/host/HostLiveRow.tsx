@@ -11,12 +11,21 @@ const Sparkline = lazy(() => import('@/components/dashboard/Sparkline').then((m)
 
 const NO_VALUE = '—'
 
+/**
+ * Every tile has the same three lines (label, value, sub-line) whether or not
+ * the socket is connected, and the CPU tile always holds its trend slot, so
+ * connecting or disconnecting never changes the row's height. A missing
+ * sub-line is a non-breaking space, not an absent element.
+ */
 function LiveTile({ label, value, sub, children }: { label: string; value: ReactNode; sub?: ReactNode; children?: ReactNode }) {
   return (
-    <div data-testid={`host-live-${label.toLowerCase()}`} className="flex min-h-[104px] flex-col gap-1 rounded-lg border bg-card p-4">
+    <div data-testid={`host-live-${label.toLowerCase()}`} className="flex flex-col gap-1 rounded-lg border bg-card p-4">
       <span className="text-label">{label}</span>
-      <span className="font-mono text-xl font-semibold tabular-nums">{value}</span>
-      {sub && <span className="text-xs text-muted-foreground">{sub}</span>}
+      {/* One line: a wrapped value would make the connected tile taller than the dash. */}
+      <span className="truncate font-mono text-xl font-semibold tabular-nums">{value}</span>
+      <span data-testid="host-live-sub" className="truncate text-xs text-muted-foreground">
+        {sub ?? '\u00a0'}
+      </span>
       {children}
     </div>
   )
@@ -32,11 +41,13 @@ interface HostLiveRowProps {
 /**
  * CPU, memory, network and processes from the dashboard-metrics WebSocket
  * (the former Metrics tab's Performance card, agent-os-mi4r). The four tiles
- * always render, with a dash until the socket connects, so the row never
- * changes height under the Automatic cleanup anchor.
+ * always render, with a dash until the socket connects, and each keeps the
+ * same lines in both states (see LiveTile), so the row does not change height
+ * under the Automatic cleanup anchor.
  */
 export function HostLiveRow({ stats, aggregates, isConnected, containers }: HostLiveRowProps) {
-  // agent-os-p9e1: the server omits runningContainers when Docker could not answer.
+  // agent-os-p9e1: the server omits runningContainers when Docker could not
+  // answer. Read only once stats has loaded: before that nothing is known.
   const hostCountUnavailable = stats?.runningContainers === undefined
   const cpuSeries = cpuTotalSeries(containers)
 
@@ -61,13 +72,15 @@ export function HostLiveRow({ stats, aggregates, isConnected, containers }: Host
             )
           }
         >
-          {isConnected && cpuSeries.length > 1 && (
-            <div data-testid="host-live-cpu-trend" data-last={cpuSeries[cpuSeries.length - 1]}>
-              <Suspense fallback={<Skeleton className="h-7 w-full" />}>
-                <Sparkline series={cpuSeries} thresholdPercent={aggregates.totalCpuPercent} width="100%" height={28} />
-              </Suspense>
-            </div>
-          )}
+          <div className="h-7" data-testid="host-live-cpu-slot">
+            {isConnected && cpuSeries.length > 1 && (
+              <div data-testid="host-live-cpu-trend" data-last={cpuSeries[cpuSeries.length - 1]}>
+                <Suspense fallback={<Skeleton className="h-7 w-full" />}>
+                  <Sparkline series={cpuSeries} thresholdPercent={aggregates.totalCpuPercent} width="100%" height={28} />
+                </Suspense>
+              </div>
+            )}
+          </div>
         </LiveTile>
         <LiveTile
           label="Memory"
@@ -92,9 +105,11 @@ export function HostLiveRow({ stats, aggregates, isConnected, containers }: Host
           label="Processes"
           value={isConnected ? String(aggregates.totalPids) : NO_VALUE}
           sub={
-            isConnected && !hostCountUnavailable
-              ? `across ${stats?.runningContainers} running containers`
-              : undefined
+            !isConnected || !stats
+              ? undefined
+              : hostCountUnavailable
+                ? 'running container count unavailable'
+                : `across ${stats.runningContainers} running containers`
           }
         />
       </div>

@@ -28,8 +28,9 @@ view links, shows how much one click would free.
 
 **Gotchas**
 
-- **Live numbers are not stored.** Trends start when you open the tab and reset when
-  you leave. They need the live connection: until it connects the tiles show a dash.
+- **Live numbers are not stored.** Trends start when Capstan opens in this browser tab
+  and reset when you reload or close it. They need the live connection: until it
+  connects, and while it is down, the tiles show a dash and the busiest list is hidden.
 
 - **Volume sizes can read "size unknown".** Docker could not measure every volume, so
   the totals count only the volumes it could. Unknown is not zero.

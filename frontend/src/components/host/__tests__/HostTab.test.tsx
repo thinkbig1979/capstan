@@ -280,6 +280,23 @@ describe('HostTab overview', () => {
     expect(screen.getByTestId('auto-cleanup-panel-stub')).toBeInTheDocument()
   })
 
+  // Review round 1, item 3: the counts and the Free up figure show on every
+  // view, so every view says when they are the last good ones.
+  it('shows the could-not-refresh notice on a list view, beside the kept counts', async () => {
+    const { queryClient } = renderHost('/?tab=host&view=images')
+    await screen.findByTestId('tab-images')
+    await waitFor(() => expect(screen.getByTestId('host-free-space-button')).toHaveTextContent('Free up 2.00 GB'))
+    expect(screen.queryByRole('alert')).toBeNull()
+    hostSummary.mockRejectedValueOnce(new Error('boom'))
+    await queryClient.refetchQueries({ queryKey: queryKeys.resources.hostSummary() })
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('Could not refresh the Docker host summary.')
+    expect(screen.getByTestId('tab-images')).toBeInTheDocument()
+    expect(screen.getByTestId('host-free-space-button')).toHaveTextContent('Free up 2.00 GB')
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
+  })
+
   it('polls the summary every 60 s', async () => {
     const { queryClient } = renderHost()
     await screen.findByTestId('host-disk-bar')
@@ -355,6 +372,7 @@ describe('HostTab overview layout (AC4)', () => {
   })
 
   it('says it is waiting for data when no container metrics have arrived', async () => {
+    metrics.value = { ...metrics.value, isConnected: true, aggregates: { totalCpuPercent: 0, totalMemUsage: 0, totalMemLimit: 0, totalMemPercent: 0, totalNetRx: 0, totalNetTx: 0, totalSwap: 0, totalPids: 0 } }
     renderHost()
     await screen.findByTestId('host-disk-bar')
     const busiest = screen.getByRole('region', { name: 'Busiest containers' })
@@ -362,7 +380,7 @@ describe('HostTab overview layout (AC4)', () => {
     expect(within(busiest).queryAllByTestId('busiest-container-row')).toHaveLength(0)
   })
 
-  it('moves swap onto the Memory tile and keeps "unavailable" processes free of a container count', async () => {
+  it('moves swap onto the Memory tile and says the running count is unavailable once stats lack it', async () => {
     metrics.value = {
       ...metrics.value,
       isConnected: true,
@@ -375,7 +393,10 @@ describe('HostTab overview layout (AC4)', () => {
     expect(memory).toHaveTextContent('25% · swap 210.00 MB')
     const processes = screen.getByTestId('host-live-processes')
     expect(processes).toHaveTextContent('412')
+    // Wait for the resolved stats: before they load nothing is said at all.
+    await waitFor(() => expect(processes).toHaveTextContent('running container count unavailable'))
     expect(processes).not.toHaveTextContent('across')
+    expect(dashboardStats).toHaveBeenCalled()
   })
 
   it('reads the running-container count beside processes when Docker reports it', async () => {

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter, Routes, Route } from 'react-router'
 import type { HostSummary } from '@/types/generated-services'
@@ -19,7 +20,9 @@ vi.mock('@/lib/api', () => ({
         enabled: true,
         minAgeHours: 168,
         intervalHours: 24,
-        categories: { danglingImages: true, unusedImages: false, buildCache: true, containers: false, volumes: false, networks: false },
+        // Covers every category the Free-up dialog ticks by default, so the
+        // dialog offers "Change timing" (a link to this panel).
+        categories: { danglingImages: true, unusedImages: true, buildCache: true, containers: true, volumes: false, networks: false },
         alertThresholdBytes: 0,
         nextRunAt: new Date(Date.now() + 3_600_000).toISOString(),
         minAllowedAgeHours: 6,
@@ -27,6 +30,14 @@ vi.mock('@/lib/api', () => ({
       }),
     getCleanupHistory: () => Promise.resolve({ runs: [], limit: 20 }),
     previewCleanup: () => Promise.resolve({ items: [], totalBytes: 0 }),
+    hostCandidates: () =>
+      Promise.resolve({
+        images: [{ id: 'sha256:img1', label: 'postgres:15.4', size: 1024 }],
+        buildCache: { count: 1, bytes: 1024 },
+        containers: [],
+        volumes: [],
+        networks: [],
+      }),
   },
   dashboardApi: { stats: () => Promise.resolve({ totalContainers: 1 }) },
 }))
@@ -40,7 +51,6 @@ vi.mock('@/hooks/DashboardMetricsContext', () => ({
     ws: { status: 'open' },
   }),
 }))
-vi.mock('@/components/host/FreeUpSpaceDialog', () => ({ FreeUpSpaceDialog: () => null }))
 
 import { HostTab } from '../HostTab'
 
@@ -124,6 +134,37 @@ describe('HostTab #automatic-cleanup (AC8)', () => {
     renderAt('/?tab=host')
     await screen.findByTestId('host-disk-bar')
     await screen.findByText('On')
+    expect(scrolls).toEqual([])
+  })
+
+  // Review round 1, item 4: the dialog's "Change timing" links to the hash the
+  // page already has, so the hash alone never changes. Each click is still a
+  // request to scroll.
+  it('scrolls again when "Change timing" is clicked with the hash already in the URL', async () => {
+    const user = userEvent.setup()
+    hostSummary.mockResolvedValue(makeSummary())
+    summaryLoaded = true
+    renderAt('/?tab=host#automatic-cleanup')
+    await screen.findByText('On')
+    await waitFor(() => expect(scrolls).toHaveLength(1))
+
+    // The user scrolls back to the top, then opens Free up.
+    screen.getByTestId('scroller').scrollTop = 0
+    scrolls.length = 0
+    await user.click(screen.getByTestId('host-free-space-button'))
+    const dialog = await screen.findByRole('dialog', { name: 'Free up space' })
+    // Opening the dialog keeps the hash but is not a scroll request.
+    expect(scrolls).toEqual([])
+    const covered = await within(dialog).findByTestId('free-space-auto-covered')
+    await user.click(within(covered).getByRole('link', { name: 'Change timing' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    await waitFor(() => expect(scrolls).toEqual([{ to: 900, summaryLoaded: true }]))
+
+    // Opening Free up again keeps that request, so it does not scroll again.
+    scrolls.length = 0
+    await user.click(screen.getByTestId('host-free-space-button'))
+    await screen.findByRole('dialog', { name: 'Free up space' })
     expect(scrolls).toEqual([])
   })
 })

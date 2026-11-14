@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BrowserRouter, Routes, Route } from 'react-router'
@@ -267,6 +267,24 @@ describe('DashboardPage', () => {
       expect(screen.getByRole('tab', { name: 'Host' })).toBeInTheDocument()
     })
 
+    // Review round 1, item 2: the guard in useHostReclaimable (`!isError`)
+    // that hides a figure nobody re-measured. Its Sidebar and CollapsedRail
+    // tests went with those links.
+    it('drops the badge when a refetch fails after a successful load', async () => {
+      hostSummary.mockResolvedValue(makeHostSummary({ disk: { reclaimable: 7.2 * GiB } }))
+      const { queryClient } = renderPage('/')
+      await screen.findByTestId('host-tab-badge')
+
+      hostSummary.mockRejectedValue(new Error('503'))
+      await act(async () => {
+        await queryClient.refetchQueries({ queryKey: queryKeys.resources.hostSummary() })
+      })
+      await waitFor(() => expect(queryClient.getQueryState(queryKeys.resources.hostSummary())?.status).toBe('error'))
+      // Precondition: the stale summary is still in the cache.
+      expect(queryClient.getQueryData(queryKeys.resources.hostSummary())).toBeDefined()
+      expect(screen.queryByTestId('host-tab-badge')).toBeNull()
+    })
+
     it('shows no badge, never "0 B", when the summary could not be read', async () => {
       hostSummary.mockRejectedValue(new Error('503'))
       const { queryClient } = renderPage('/')
@@ -306,8 +324,21 @@ describe('DashboardPage', () => {
 
     // agent-os-mi4r AC2: the Metrics tab is gone, with no redirect.
     it('sends the removed ?tab=overview to / with Stacks', async () => {
+      // The redirect runs before the dashboard body mounts: every list query
+      // it starts sees the clean URL, none sees ?tab=overview.
+      const searchesAtFetch: string[] = []
+      listStacks.mockImplementation(() => {
+        searchesAtFetch.push(window.location.search)
+        return Promise.resolve([])
+      })
+      listDirectories.mockImplementation(() => {
+        searchesAtFetch.push(window.location.search)
+        return Promise.resolve([])
+      })
       renderPage('/?tab=overview')
       await waitFor(() => expect(screen.getByTestId('tab-stacks')).toBeInTheDocument())
+      expect(searchesAtFetch.length).toBeGreaterThan(0)
+      expect(searchesAtFetch.filter((q) => q !== '')).toEqual([])
       expect(window.location.pathname).toBe('/')
       expect(window.location.search).toBe('')
       expect(screen.queryByTestId('tab-host')).not.toBeInTheDocument()

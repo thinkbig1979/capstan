@@ -29,6 +29,18 @@ export function hostViewHref(view?: HostView): string {
 /** Where every "Automatic cleanup" link lands: the panel on the Host tab's overview. */
 export const AUTO_CLEANUP_HREF = '/?tab=host#automatic-cleanup'
 
+let cleanupScrollRequests = 0
+
+/**
+ * Router state for a link to AUTO_CLEANUP_HREF from a page that may already
+ * carry #automatic-cleanup (the Free-up dialog on the overview). Each call is a
+ * new request, so AutoCleanupPanel scrolls again although the hash is unchanged.
+ */
+export function autoCleanupLinkState(): { autoCleanupScroll: number } {
+  cleanupScrollRequests += 1
+  return { autoCleanupScroll: cleanupScrollRequests }
+}
+
 const SIZE_UNKNOWN = 'size unknown'
 
 function plural(n: number, one: string, many: string) {

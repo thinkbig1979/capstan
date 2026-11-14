@@ -18,7 +18,7 @@ import { presentError } from '@/lib/error-handler'
 import { formatBytes } from '@/lib/format'
 import type { DockerCleanupCategories, DockerCleanupPolicy } from '@/types'
 import type { HostCandidateItem, HostCandidates, HostFreeSpaceRequest } from '@/types/generated-services'
-import { AUTO_CLEANUP_HREF } from './host-views'
+import { AUTO_CLEANUP_HREF, autoCleanupLinkState } from './host-views'
 
 type RowId = 'images' | 'buildCache' | 'containers' | 'volumes' | 'networks'
 type CategoryKey = keyof DockerCleanupCategories
@@ -275,7 +275,7 @@ export function FreeUpSpaceDialog({ open, onOpenChange }: FreeUpSpaceDialogProps
         {plan && (plan.covered ? (
           <p data-testid="free-space-auto-covered" className="text-sm text-muted-foreground">
             Automatic cleanup already covers these.{' '}
-            <Link to={AUTO_CLEANUP_HREF} onClick={() => onOpenChange(false)}>
+            <Link to={AUTO_CLEANUP_HREF} state={autoCleanupLinkState()} onClick={() => onOpenChange(false)}>
               Change timing
             </Link>
           </p>

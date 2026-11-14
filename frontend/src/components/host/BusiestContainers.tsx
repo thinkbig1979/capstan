@@ -15,16 +15,25 @@ function SparklineFallback() {
   return <Skeleton style={{ width: 60, height: 24 }} />
 }
 
+// Each row is exactly h-10 (border-box, so the 1px divider is inside it) and
+// the list has a 1px border top and bottom: five rows are 5 x 40 + 2 px.
+const ROW_CLASS = 'flex h-10 items-center gap-3 px-3 text-sm'
+const RESERVE_CLASS = 'min-h-[202px]'
+
 /**
  * The five containers using the most CPU, with CPU and memory trend lines
  * (agent-os-mi4r; the full list is the Containers view). The list reserves
- * five rows of height so arriving metrics do not move what sits below it.
+ * the height of five rows, so arriving metrics do not move what sits below it.
+ * While the metrics socket is down the hook keeps the last figures, so they
+ * are hidden rather than shown as live.
  */
 export function BusiestContainers({
   containers,
+  isConnected,
   total,
 }: {
   containers: ContainerMetricHistory[]
+  isConnected: boolean
   /** Every container on the host, from the host summary; undefined when it is unreadable. */
   total?: number
 }) {
@@ -46,8 +55,10 @@ export function BusiestContainers({
           {total === undefined ? 'All containers' : `All ${total} containers`} →
         </Link>
       </div>
-      <div className="min-h-[200px]">
-        {rows.length === 0 ? (
+      <div className={RESERVE_CLASS} data-testid="busiest-containers-list">
+        {!isConnected ? (
+          <p className="py-4 text-center text-sm text-muted-foreground">Connecting to live metrics...</p>
+        ) : rows.length === 0 ? (
           <p className="py-4 text-center text-sm text-muted-foreground">No live container metrics yet. Waiting for data...</p>
         ) : (
           <div className="divide-y divide-border rounded-md border">
@@ -58,7 +69,7 @@ export function BusiestContainers({
               return (
                 <div
                   key={container.containerId}
-                  className="flex items-center gap-3 px-3 py-2 text-sm"
+                  className={ROW_CLASS}
                   data-testid="busiest-container-row"
                 >
                   <span className="min-w-0 flex-1 truncate font-medium" title={container.name}>

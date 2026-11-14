@@ -86,15 +86,38 @@ describe('HostLiveRow — omitted stats', () => {
     renderLiveRow(bothReadsFailed)
 
     // Precondition: the connected layout rendered, not the dashes.
-    expect(screen.getByTestId('host-live-processes')).toHaveTextContent('0')
-    expect(screen.getByTestId('host-live-processes')).not.toHaveTextContent('—')
-    expect(screen.queryByText(/across 0 running containers/)).not.toBeInTheDocument()
+    const processes = screen.getByTestId('host-live-processes')
+    expect(processes).not.toHaveTextContent('—')
+    expect(processes).toHaveTextContent('running container count unavailable')
+    expect(processes).not.toHaveTextContent(/across/)
   })
 
   it('still shows zeros for a genuinely empty host', () => {
     renderLiveRow(emptyHost)
 
-    expect(screen.getByText('across 0 running containers')).toBeInTheDocument()
+    const processes = screen.getByTestId('host-live-processes')
+    expect(processes).toHaveTextContent('across 0 running containers')
+    expect(processes).not.toHaveTextContent('unavailable')
+  })
+
+  // Review round 1, item 5: the row keeps its height across a (dis)connect
+  // because every tile keeps the same lines. jsdom cannot measure height, so
+  // this pins the structure: same element count per tile in both states.
+  it('renders the same lines in every tile whether or not the socket is connected', () => {
+    const shape = () =>
+      ['cpu', 'memory', 'network', 'processes'].map((t) => {
+        const tile = screen.getByTestId(`host-live-${t}`)
+        const sub = tile.querySelector('[data-testid="host-live-sub"]')
+        // An empty span has no line height, so the line must hold text (a
+        // non-breaking space when there is nothing to say).
+        return [t, tile.children.length, (sub?.textContent ?? '').length > 0]
+      })
+    const connected = renderLiveRow(emptyHost)
+    const whenConnected = shape()
+    connected.unmount()
+    renderWithProviders(<HostLiveRow stats={undefined} aggregates={aggregates} isConnected={false} containers={[]} />)
+    expect(shape()).toEqual(whenConnected)
+    expect(screen.getByTestId('host-live-cpu-slot')).toHaveClass('h-7')
   })
 })
 
