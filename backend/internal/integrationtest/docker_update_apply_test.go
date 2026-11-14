@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
+	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
 
 // Coverage for the three apply paths in services/docker_update.go that sat at
@@ -110,6 +111,21 @@ func (c *collector) text() string {
 	return strings.Join(c.lines, "\n")
 }
 
+// updateStreaming runs UpdateContainerStreaming under RetryUpdateAtPull, so a
+// registry that times out on the update's own pull is retried rather than
+// failing the test (agent-os-vdgc). Each attempt gets a fresh collector; the
+// returned one holds the last attempt's log.
+func updateStreaming(ctx context.Context, t *testing.T, svc *services.DockerService, id string, db services.DashboardDB) (truth.ActionResult, *collector) {
+	t.Helper()
+	var c *collector
+	ar := RetryUpdateAtPull(ctx, t, func() (truth.ActionResult, bool) {
+		c = &collector{}
+		_, ar := svc.UpdateContainerStreaming(ctx, id, db, c.emit, c.setStatus)
+		return ar, c.sawStatus(services.StatusRecreating)
+	})
+	return ar, c
+}
+
 func (c *collector) sawStatus(want services.Status) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -144,7 +160,12 @@ func Test_UpdateContainer_Standalone_AppliesAndConverges(t *testing.T) {
 	defer cancel()
 
 	// db is nil, so the compose branch cannot be taken whatever the labels say.
-	result, ar := svc.UpdateContainer(ctx, id, nil)
+	var result models.UpdateResult
+	ar := RetryUpdateAtPull(ctx, t, func() (truth.ActionResult, bool) {
+		var ar truth.ActionResult
+		result, ar = svc.UpdateContainer(ctx, id, nil)
+		return ar, false
+	})
 
 	assert.NotEmpty(t, result.OldDigest, "the pre-update image id must be captured")
 
@@ -160,7 +181,7 @@ func Test_UpdateContainer_Standalone_AppliesAndConverges(t *testing.T) {
 	// was already current, so no_change is the honest outcome and success is only
 	// reachable when the image genuinely advanced.
 	assert.NotEqual(t, "failed", string(ar.Outcome),
-		"a successful standalone update must not be reported as failed (agent-os-ekmk): %s", ar.Reason)
+		"a successful standalone update must not be reported as failed (agent-os-ekmk): %s (%v)", ar.Reason, ar.Err)
 	assert.NotContains(t, ar.Reason, "post-update container inspect failed",
 		"the verification must inspect the recreated container, not the id it replaced")
 }
@@ -178,12 +199,11 @@ func Test_UpdateContainerStreaming_Standalone_EmitsPullProgress(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	c := &collector{}
-	_, ar := svc.UpdateContainerStreaming(ctx, id, nil, c.emit, c.setStatus)
+	ar, c := updateStreaming(ctx, t, svc, id, nil)
 
 	// Same guard as the non-streaming path above (agent-os-ekmk).
 	assert.NotEqual(t, "failed", string(ar.Outcome),
-		"a successful standalone streaming update must not be reported as failed: %s", ar.Reason)
+		"a successful standalone streaming update must not be reported as failed: %s (%v)\nlog:\n%s", ar.Reason, ar.Err, c.text())
 	assert.NotContains(t, ar.Reason, "post-update container inspect failed",
 		"the verification must inspect the recreated container, not the id it replaced")
 
@@ -233,11 +253,10 @@ func Test_UpdateContainerStreaming_Compose_UsesComposePull(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	c := &collector{}
-	_, ar := svc.UpdateContainerStreaming(ctx, containerID, db, c.emit, c.setStatus)
+	ar, c := updateStreaming(ctx, t, svc, containerID, db)
 
 	assert.NotEqual(t, "failed", string(ar.Outcome),
-		"compose streaming apply must not fail: %s", ar.Reason)
+		"compose streaming apply must not fail: %s (%v)\nlog:\n%s", ar.Reason, ar.Err, c.text())
 	assert.True(t, c.sawStatus(services.StatusPulling),
 		"the compose path must also report a pull; statuses seen: %v", c.statuses)
 	assert.Contains(t, c.text(), "==> Pulling web",
@@ -273,11 +292,10 @@ func Test_UpdateContainerStreaming_ComposeLabelsButNoStack_FallsBackToStandalone
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	c := &collector{}
-	_, ar := svc.UpdateContainerStreaming(ctx, containerID, db, c.emit, c.setStatus)
+	ar, c := updateStreaming(ctx, t, svc, containerID, db)
 
 	assert.NotEqual(t, "failed", string(ar.Outcome),
-		"an unresolvable project must fall back, not fail: %s", ar.Reason)
+		"an unresolvable project must fall back, not fail: %s (%v)\nlog:\n%s", ar.Reason, ar.Err, c.text())
 	// The standalone path announces the IMAGE; the compose path announces the
 	// service name. That is how the two are told apart from the log alone.
 	assert.Contains(t, c.text(), "==> Pulling "+updateTestImage,

@@ -24,15 +24,20 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
 
 // RequireDocker skips t if the Docker daemon is unavailable or the docker CLI
@@ -222,6 +227,73 @@ func RetryRegistry(t *testing.T, what string, op func() error) error {
 // registryAttempts bounds RetryRegistry: at most 2+4+6+8 s of waiting, well
 // past the mirror's one-second window.
 const registryAttempts = 5
+
+// RetryUpdateAtPull runs update, a call to UpdateContainer or
+// UpdateContainerStreaming, and runs it again when it failed at its own
+// registry pull for a reason registryTransient accepts, up to registryAttempts
+// times. It returns the last result (agent-os-vdgc).
+//
+// The update's pull goes to the registry from the daemon, unretried, so a slow
+// ECR on a CI runner fails the update with "update apply failed" while nothing
+// under test is wrong. A retry starts from the state the first attempt found:
+// both apply paths pull before they change anything (the standalone path
+// before ContainerStop, the compose path before `compose up`), and pastPull
+// lets a streaming caller veto the retry once StatusRecreating was reported.
+// Any other failure, a permanent pull error or a ctx that ended, is returned
+// at once for the test to assert on.
+func RetryUpdateAtPull(ctx context.Context, t *testing.T, update func() (ar truth.ActionResult, pastPull bool)) truth.ActionResult {
+	t.Helper()
+
+	for attempt := 1; ; attempt++ {
+		ar, pastPull := update()
+		if ar.Outcome != truth.OutcomeFailed || pastPull || !failedAtPull(ar.Err) ||
+			!registryTransient(ar.Err) || ctx.Err() != nil || attempt == registryAttempts {
+			return ar
+		}
+		t.Logf("update failed at its registry pull: attempt %d/%d: %s (%v)", attempt, registryAttempts, ar.Reason, ar.Err)
+		time.Sleep(time.Duration(attempt) * updateRetryPause)
+	}
+}
+
+// updateRetryPause is RetryUpdateAtPull's pause unit, as RetryRegistry's: the
+// nth retry waits n of them. A variable so its own tests need not wait.
+var updateRetryPause = 2 * time.Second
+
+// failedAtPull reports whether an update's apply error is its pull step's: the
+// standalone path wraps it "pulling image", the compose path "compose pull failed"
+// (services/docker_update.go).
+func failedAtPull(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "pulling image") || strings.Contains(msg, "compose pull failed")
+}
+
+var (
+	// A registry that answered with a verdict about the image or the
+	// credentials: asking again gets the same answer.
+	registryPermanent = regexp.MustCompile(`(?i)manifest unknown|unauthorized|denied|not found`)
+	// A registry that did not answer in time, could not be found (DNS),
+	// throttled, or failed on its side.
+	// The status codes are whole words so a digest's hex cannot match.
+	registryTransientText = regexp.MustCompile(`(?i)deadline exceeded|timeout|toomanyrequests|connection reset|connection refused|no such host|\bEOF\b|\b(429|502|503|504)\b`)
+)
+
+// registryTransient reports whether err is a registry failure worth retrying.
+// The error chain is matched first (a deadline or a net timeout in this
+// process); a daemon's error arrives as text, so the text is the fallback. A
+// permanent verdict wins over everything.
+func registryTransient(err error) bool {
+	if err == nil || registryPermanent.MatchString(err.Error()) {
+		return false
+	}
+	var netErr net.Error
+	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) {
+		return true
+	}
+	return registryTransientText.MatchString(err.Error())
+}
 
 // ImageRepoDigests returns the RepoDigests slice for a locally present image
 // by running `docker inspect --format {{json .RepoDigests}} <ref>`.
