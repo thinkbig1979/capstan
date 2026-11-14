@@ -157,7 +157,7 @@ func TestWriteRefusalIsTyped_4hxa(t *testing.T) {
 	require.NoError(t, os.Symlink("other.yaml", filepath.Join(dir, "compose.yaml")))
 	require.NoError(t, os.Symlink("compose.yaml", filepath.Join(dir, "other.yaml")))
 
-	err := writeComposeFileAtomic(filepath.Join(dir, "compose.yaml"), []byte(compose4hxa))
+	err := writeComposeFileAtomic(filepath.Join(dir, "compose.yaml"), []byte(compose4hxa), []string{dir})
 	require.Error(t, err)
 	appErr := writeFailureError(err, "WRITE_ERROR", "Failed to write compose file")
 	assert.Equal(t, http.StatusConflict, appErr.Status)

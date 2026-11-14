@@ -183,7 +183,7 @@ func (h *StacksHandler) Create(c *gin.Context) {
 	}
 
 	composePath := filepath.Join(stackDir, "compose.yaml")
-	if err := writeComposeFileAtomic(composePath, []byte(req.ComposeContent)); err != nil {
+	if err := writeComposeFileAtomic(composePath, []byte(req.ComposeContent), h.config.GetAllStacksDirs()); err != nil {
 		os.RemoveAll(stackDir)
 		handleError(c, writeFailureError(err, "WRITE_ERROR", "Failed to write compose file"))
 		return
@@ -192,7 +192,7 @@ func (h *StacksHandler) Create(c *gin.Context) {
 	envFile := ""
 	if req.EnvContent != "" {
 		envPath := filepath.Join(stackDir, ".env")
-		if err := writeEnvFileAtomic(envPath, req.EnvContent); err != nil {
+		if err := writeEnvFileAtomic(envPath, req.EnvContent, h.config.GetAllStacksDirs()); err != nil {
 			os.RemoveAll(stackDir)
 			handleError(c, writeFailureError(err, "WRITE_ERROR", "Failed to write env file"))
 			return

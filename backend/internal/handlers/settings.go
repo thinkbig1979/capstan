@@ -379,7 +379,9 @@ func (h *SettingsHandler) UpdateGlobalEnv(c *gin.Context) {
 		return
 	}
 
-	if err := writeEnvFileAtomic(globalEnvPath, content); err != nil {
+	// Written only inside DataDir: a global.env that is a link out of it is
+	// refused (409), though it is still read through above (agent-os-3b2d).
+	if err := writeEnvFileAtomic(globalEnvPath, content, []string{h.cfg.DataDir}); err != nil {
 		slog.Error("Failed to write global environment file", "error", err)
 		handleError(c, writeFailureError(err, "INTERNAL_ERROR", "Failed to write global environment file"))
 		return

@@ -423,7 +423,7 @@ func (h *EnvHandler) Put(c *gin.Context) {
 		return
 	}
 
-	if err := writeEnvFileAtomic(envPath, content); err != nil {
+	if err := writeEnvFileAtomic(envPath, content, h.config.GetAllStacksDirs()); err != nil {
 		renderWriteFailure(c, err, "failed to write env file", "")
 		return
 	}
@@ -532,7 +532,7 @@ func (h *EnvHandler) Create(c *gin.Context) {
 		content = req.Raw
 	}
 
-	if err := writeEnvFileAtomic(envPath, content); err != nil {
+	if err := writeEnvFileAtomic(envPath, content, h.config.GetAllStacksDirs()); err != nil {
 		renderWriteFailure(c, err, "failed to create env file", "")
 		return
 	}
