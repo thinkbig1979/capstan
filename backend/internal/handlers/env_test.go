@@ -44,8 +44,9 @@ DB_PORT='5432'
 			name:    "Export prefix",
 			content: "export DB_HOST=localhost\nexport API_KEY=secret\n",
 			expected: []EnvEntry{
-				{Key: "export DB_HOST", Value: "localhost", Line: 1, Sensitive: false, Comment: false},
-				{Key: "export API_KEY", Value: "secret", Line: 2, Sensitive: true, Comment: false},
+				// The compose key, the prefix kept in Export (agent-os-m5uj).
+				{Key: "DB_HOST", Value: "localhost", Line: 1, Sensitive: false, Comment: false, Export: true},
+				{Key: "API_KEY", Value: "secret", Line: 2, Sensitive: true, Comment: false, Export: true},
 			},
 		},
 		{
@@ -94,6 +95,9 @@ DB_PORT='5432'
 				}
 				if entry.Line != tt.expected[i].Line {
 					t.Errorf("Entry %d: expected line %d, got %d", i, tt.expected[i].Line, entry.Line)
+				}
+				if entry.Export != tt.expected[i].Export {
+					t.Errorf("Entry %d: expected export %v, got %v", i, tt.expected[i].Export, entry.Export)
 				}
 				if entry.Sensitive != tt.expected[i].Sensitive {
 					t.Errorf("Entry %d: expected sensitive %v, got %v", i, tt.expected[i].Sensitive, entry.Sensitive)

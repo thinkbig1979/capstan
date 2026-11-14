@@ -482,7 +482,9 @@ func globalValueReadsAsOne(key, value string) bool {
 	if len(vars) != 1 {
 		return false
 	}
-	// The parser keys "export A=1" as "export A"; compose reads it as A (review F1).
+	// The variable compose reads must be the one this line names (review F1).
+	// The parser keys "export A=1" as A since agent-os-m5uj, so rows[0].Key
+	// already matches; the check stays as compose's own reading of the key.
 	composeKey, ok := composeLineKey(line)
 	if !ok {
 		return false
@@ -578,7 +580,7 @@ func mergeGlobalEnv(current string, req []EnvEntry) (string, error) {
 		case isVar && matched[j] == 0:
 			continue // removed on the page
 		case isVar && req[matched[j]-1].Value != fileVars[j]["value"]:
-			b.WriteString(serializeEnvFile([]EnvEntry{{Key: e.Key, Value: req[matched[j]-1].Value}}))
+			b.WriteString(serializeEnvFile([]EnvEntry{{Key: e.Key, Value: req[matched[j]-1].Value, Export: e.Export}}))
 			endsVerbatim = false
 		default:
 			for _, l := range rawLines[e.Line-1 : end] {

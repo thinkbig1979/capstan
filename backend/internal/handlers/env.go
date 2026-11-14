@@ -210,31 +210,86 @@ func hideMultilineBodies(entries []EnvEntry, raw string) {
 		}
 		return lines[e.Line-1]
 	}
+	// A multi-line value parsed as one row holds its own body, which the
+	// Sensitive arm of redactEnvResponse blanks; the rows after it are other
+	// lines (agent-os-fw2q).
+	opener := make([]bool, len(entries))
+	for i, e := range entries {
+		opener[i] = !strings.Contains(e.Value, "\n") &&
+			(e.Sensitive || (e.Comment && e.Key == "" && commentedSecretEnd(e.Value) != -1))
+	}
+	blank := func(from, to int) {
+		for k := from; k <= to; k++ {
+			entries[k] = EnvEntry{Line: entries[k].Line, Comment: entries[k].Comment, Sensitive: true}
+		}
+	}
+
+	// The body of a sensitive or commented-secret opener is the secret.
 	for i := 0; i < len(entries); i++ {
-		e := entries[i]
-		opensBody := e.Sensitive || (e.Comment && e.Key == "" && commentedSecretEnd(e.Value) != -1)
-		// A multi-line value parsed as one row holds its own body, which the
-		// Sensitive arm of redactEnvResponse blanks; the rows after it are
-		// other lines (agent-os-fw2q).
-		if !opensBody || strings.Contains(e.Value, "\n") {
+		if !opener[i] {
 			continue
 		}
-		q, open := opensMultilineValue(lineText(e))
+		q, open := opensMultilineTail(lineText(entries[i]))
 		if raw == "" {
 			open = true
 		}
 		if !open {
 			continue
 		}
-		for i+1 < len(entries) {
-			i++
-			closes, _ := closingQuote(lineText(entries[i]), q)
-			entries[i] = EnvEntry{Line: entries[i].Line, Comment: entries[i].Comment, Sensitive: true}
-			if closes != -1 {
-				break
-			}
-		}
+		end := bodyEnd(entries, i, q, lineText)
+		blank(i+1, end)
+		i = end
 	}
+
+	// The body a plain row opens is hidden when its lines look secret, as a
+	// one-row multi-line value is (bodyLooksSensitive, review P2). Each row is
+	// scanned at most once: the walk resumes after the body, which keeps this
+	// linear in the file (a chain of re-opened values made a per-row scan
+	// quadratic).
+	for i := 0; i < len(entries); i++ {
+		if opener[i] || strings.Contains(entries[i].Value, "\n") {
+			continue
+		}
+		q, open := opensMultilineTail(lineText(entries[i]))
+		if !open {
+			continue
+		}
+		end := bodyEnd(entries, i, q, lineText)
+		body := make([]string, 0, end-i)
+		for k := i + 1; k <= end; k++ {
+			body = append(body, lineText(entries[k]))
+		}
+		if bodyLooksSensitive(body) {
+			blank(i+1, end)
+		}
+		i = end
+	}
+}
+
+// bodyEnd returns the index of the row that closes the quote q opened by
+// entries[open], or the last row when none does. A closing line can open
+// another quoted value after its closing quote (review R2:
+// `b" API_TOKEN="c`), and that body is followed too.
+func bodyEnd(entries []EnvEntry, open int, q byte, lineText func(EnvEntry) string) int {
+	end := open
+	for end+1 < len(entries) {
+		end++
+		text := lineText(entries[end])
+		closes, _ := closingQuote(text, q)
+		if closes == -1 {
+			continue
+		}
+		rest := strings.TrimLeftFunc(text[closes+1:], unicode.IsSpace)
+		if rest == "" || rest[0] == '#' {
+			break
+		}
+		next, again := opensMultilineTail(rest)
+		if !again {
+			break
+		}
+		q = next
+	}
+	return end
 }
 
 // opensMultilineValue reports whether a variable line's value starts with a
@@ -251,6 +306,27 @@ func opensMultilineValue(line string) (quote byte, open bool) {
 	}
 	end, _ := closingQuote(rest[1:], rest[0])
 	return rest[0], end == -1
+}
+
+// opensMultilineTail is opensMultilineValue for the last statement on a
+// line. compose reads on after a closing quote (agent-os-zpbi), so the quote
+// left open can be a later statement's: `NOTES="a" DB_PASSWORD="x` opens a
+// multi-line secret (review E3). One pass along the line.
+func opensMultilineTail(line string) (quote byte, open bool) {
+	for {
+		if q, open := opensMultilineValue(line); open {
+			return q, true
+		}
+		sep := strings.IndexAny(line, "=:")
+		if sep == -1 {
+			return 0, false
+		}
+		tail, ok := textAfterClosingQuote(line[sep+1:])
+		if !ok {
+			return 0, false
+		}
+		line = tail
+	}
 }
 
 // commentedSecretEnd reports whether a comment row is a commented-out
@@ -413,7 +489,15 @@ func (h *EnvHandler) Put(c *gin.Context) {
 			renderResult(c, truth.Failed("env validation failed: "+err.Error(), err))
 			return
 		}
-		content = serializeEnvFile(req.Entries)
+		// Read under the lock, so the rows kept verbatim are the file's
+		// text as it is now, not as the client last saw it (agent-os-omzj).
+		//nolint:gosec // envPath was validated against the configured stacks directories above (validateStackPath, symlink-aware) — see README.md "Command execution and file access"
+		current, err := os.ReadFile(envPath)
+		if err != nil && !os.IsNotExist(err) {
+			handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "READ_ERROR", "Failed to read env file", err))
+			return
+		}
+		content = serializeEnvFileOver(string(current), req.Entries)
 	} else {
 		c.JSON(http.StatusBadRequest, models.NewAppError(
 			http.StatusBadRequest,
@@ -774,14 +858,36 @@ func (h *EnvHandler) parseEnvFile(content string) []EnvEntry {
 				if colonIndex != -1 {
 					value = trimmedLine[colonIndex+1:]
 				}
-				entry.Sensitive = services.IsSensitiveEnvVar(key, value)
+				entry.Sensitive = services.IsSensitiveEnvVar(key, value) || statementsLookSensitive(trimmedLine)
 			}
 			entries = append(entries, entry)
 			continue
 		}
 
+		// compose reads `export KEY=` as KEY (agent-os-m5uj); the flag puts
+		// the prefix back on save.
 		key := strings.TrimSpace(trimmedLine[:eqIndex])
-		value, quote, inlineComment := splitEnvValue(strings.TrimSpace(trimmedLine[eqIndex+1:]))
+		export := false
+		if loc := exportPrefix.FindStringIndex(key); loc != nil {
+			key, export = key[loc[1]:], true
+		}
+		rawValue := strings.TrimSpace(trimmedLine[eqIndex+1:])
+
+		// Text after a closing quote is a variable of its own to compose
+		// (agent-os-zpbi), so the line is not one editable value: it is a
+		// read-only row written back verbatim, masked if either part is secret.
+		if _, ok := textAfterClosingQuote(rawValue); ok {
+			entries = append(entries, EnvEntry{
+				Key:       key,
+				Value:     trimmedLine,
+				Line:      lineNum,
+				Sensitive: services.IsSensitiveEnvVar(key, rawValue) || statementsLookSensitive(trimmedLine),
+				Comment:   true,
+			})
+			continue
+		}
+
+		value, quote, inlineComment := splitEnvValue(rawValue)
 
 		entries = append(entries, EnvEntry{
 			Key:           key,
@@ -791,6 +897,7 @@ func (h *EnvHandler) parseEnvFile(content string) []EnvEntry {
 			Comment:       false,
 			Quote:         quote,
 			InlineComment: inlineComment,
+			Export:        export,
 		})
 	}
 
@@ -922,6 +1029,71 @@ func splitEnvValue(raw string) (value, quote, inlineComment string) {
 	return raw, "", ""
 }
 
+// textAfterClosingQuote returns the text compose reads as the next statement
+// on a line whose value is quoted: what follows the closing quote, when that
+// is not empty and not a "#" comment (compose-go v2 dotenv/parser.go,
+// extractVarValue returns the rest after the quote and parse reads on from
+// there). `"a" DB_PASSWORD=x` gives `DB_PASSWORD=x` (agent-os-zpbi).
+func textAfterClosingQuote(value string) (string, bool) {
+	v := strings.TrimLeftFunc(value, unicode.IsSpace)
+	if v == "" || (v[0] != '\'' && v[0] != '"') {
+		return "", false
+	}
+	end, _ := closingQuote(v[1:], v[0])
+	if end == -1 {
+		return "", false
+	}
+	tail := strings.TrimLeftFunc(v[1+end+1:], unicode.IsSpace)
+	if tail == "" || tail[0] == '#' {
+		return "", false
+	}
+	return tail, true
+}
+
+// statementsLookSensitive reports whether a line holds a variable the locked
+// view must mask, reading it as compose does: a statement, and after a closing
+// quote the next one (agent-os-zpbi). Each statement is judged on its own key
+// and its own value: the quoted span, or the unquoted rest of the line
+// (review R1, P3: one URL check over the whole tail missed sftp:user:pw@host
+// anywhere but at its start). Private key markers are looked for over the
+// whole line. One pass, linear in the line's length (review E2).
+func statementsLookSensitive(line string) bool {
+	if strings.Contains(line, "PRIVATE KEY-----") || strings.Contains(line, `"private_key"`) {
+		return true
+	}
+	s := line
+	for {
+		sep := strings.IndexAny(s, "=:")
+		if sep == -1 {
+			return services.IsSensitiveEnvKey(strings.TrimSpace(s))
+		}
+		value, next, more := statementValue(s[sep+1:])
+		if services.IsSensitiveEnvKey(strings.TrimSpace(s[:sep])) || services.HasURLUserinfo(value) {
+			return true
+		}
+		if !more {
+			return false
+		}
+		s = next
+	}
+}
+
+// statementValue splits the text after a statement's separator into the
+// value compose reads and, after a closing quote, the next statement. An
+// unquoted value, or a quote left open, runs to the end of the line.
+func statementValue(v string) (value, next string, more bool) {
+	v = strings.TrimLeftFunc(v, unicode.IsSpace)
+	if v == "" || (v[0] != '\'' && v[0] != '"') {
+		return v, "", false
+	}
+	end, _ := closingQuote(v[1:], v[0])
+	if end == -1 {
+		return v[1:], "", false
+	}
+	next, more = textAfterClosingQuote(v)
+	return v[1 : 1+end], next, more
+}
+
 // closingQuote returns the index in s of the first quote q not escaped by a
 // backslash, or -1. Like compose, a backslash escapes whatever follows it.
 // trailingEscape reports an unpaired backslash at the end of s, which would
@@ -941,6 +1113,70 @@ func closingQuote(s string, q byte) (idx int, trailingEscape bool) {
 	return -1, escaped
 }
 
+// serializeEnvFileOver writes a table save over the file's current text
+// (agent-os-omzj). The parser trims what it reads, so serializeEnvFile alone
+// loses indentation, CRLF line ends and a missing final newline. Here a row
+// equal to the file's own row at the same line is written as that row's
+// original text, byte for byte, and any other row as serializeEnvFile writes
+// it, with the file's line ending. The output keeps the file's final-newline
+// state. A row only matches when it is the same row, so a file changed since
+// the client read it falls back to the request's rows.
+func serializeEnvFileOver(current string, entries []EnvEntry) string {
+	eol := "\n"
+	if i := strings.IndexByte(current, '\n'); i > 0 && current[i-1] == '\r' {
+		eol = "\r\n"
+	}
+
+	// Each file row's original text: its line, or for a value spanning
+	// lines, every line up to the next row. The raw split keeps a "\r".
+	fileRows := (&EnvHandler{}).parseEnvFile(current)
+	rawLines := strings.Split(current, "\n")
+	lineCount := len(envLines(current))
+	original := make(map[int]int, len(fileRows)) // line -> index in fileRows
+	for k, e := range fileRows {
+		original[e.Line] = k
+	}
+
+	var b strings.Builder
+	for _, e := range entries {
+		if k, ok := original[e.Line]; ok && e.Line > 0 && sameEnvRow(e, fileRows[k]) {
+			end := lineCount
+			if k+1 < len(fileRows) {
+				end = fileRows[k+1].Line - 1
+			}
+			for i := e.Line - 1; i < end; i++ {
+				b.WriteString(rawLines[i])
+				// A line keeps its own "\r"; the file's last line has no end
+				// of its own and takes the file's, if a row follows it.
+				if i == len(rawLines)-1 {
+					b.WriteString(eol)
+				} else {
+					b.WriteString("\n")
+				}
+			}
+			continue
+		}
+		b.WriteString(strings.ReplaceAll(serializeEnvFile([]EnvEntry{e}), "\n", eol))
+	}
+
+	out := b.String()
+	// A last row that is blank has no text of its own: its line is the final
+	// line ending, so trimming it would drop the row (review E4). Its row
+	// wins over the file's missing final newline.
+	lastBlank := out == eol || strings.HasSuffix(out, eol+eol)
+	if current != "" && !strings.HasSuffix(current, "\n") && !lastBlank {
+		out = strings.TrimSuffix(out, eol)
+	}
+	return out
+}
+
+// sameEnvRow reports whether two rows write the same text: every field
+// serializeEnvFile reads. Sensitive and Line are not written.
+func sameEnvRow(a, b EnvEntry) bool {
+	return a.Key == b.Key && a.Value == b.Value && a.Comment == b.Comment &&
+		a.Quote == b.Quote && a.InlineComment == b.InlineComment && a.Export == b.Export
+}
+
 func serializeEnvFile(entries []EnvEntry) string {
 	var buf bytes.Buffer
 
@@ -955,6 +1191,9 @@ func serializeEnvFile(entries []EnvEntry) string {
 		} else if entry.Key == "" && entry.Value == "" {
 			buf.WriteString("\n")
 		} else {
+			if entry.Export {
+				buf.WriteString("export ")
+			}
 			buf.WriteString(entry.Key)
 			buf.WriteString("=")
 			buf.WriteString(entry.Quote)

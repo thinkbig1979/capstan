@@ -40,7 +40,9 @@ import (
 // role is stated separately on the frontend, by the hand-written EnvEntryDraft
 // in frontend/src/types/index.ts (the editor's draft row, which has no line
 // until the file is saved and re-parsed); an absent line decodes here as 0
-// and nothing on the request path reads it (agent-os-tuxp).
+// (agent-os-tuxp). On PUT, Put reads it only to find the file's row at that
+// line: a request row equal to it is written as the file's own text
+// (serializeEnvFileOver, agent-os-omzj), and a 0 never matches.
 //
 // Quote and InlineComment carry what the parser took off the value, so a row
 // the user did not edit is written back byte-identical (agent-os-wcrq):
@@ -49,6 +51,11 @@ import (
 // Quote is "", "'" or `"`; InlineComment is the text after the value or
 // closing quote, such as "  # note". Both come back from the client on PUT,
 // so validateEnvEntries checks them before they reach the file.
+//
+// Export marks a `export KEY=value` line (agent-os-m5uj). Key is then the
+// name compose reads, without the prefix, and serializeEnvFile writes the
+// prefix back, so a renamed or edited row keeps it. omitempty, and optional
+// in TypeScript, like Comment.
 type EnvEntry struct {
 	Key           string `json:"key"`
 	Value         string `json:"value"`
@@ -57,6 +64,7 @@ type EnvEntry struct {
 	Comment       bool   `json:"comment,omitempty"`
 	Quote         string `json:"quote,omitempty"`
 	InlineComment string `json:"inlineComment,omitempty"`
+	Export        bool   `json:"export,omitempty"`
 }
 
 // EnvResponse is the wire shape of GET /:id/env when the stack HAS an env file.

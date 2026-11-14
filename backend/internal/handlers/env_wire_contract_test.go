@@ -83,3 +83,22 @@ func TestEnvEntry_CommentStaysOmitted(t *testing.T) {
 		t.Errorf("comment is optional in TypeScript and must stay omitempty, got: %s", b)
 	}
 }
+
+// Export is optional in TypeScript (agent-os-m5uj), so it is omitted when
+// false and present when true.
+func TestEnvEntry_ExportOmittedUnlessSet(t *testing.T) {
+	plain, err := json.Marshal(EnvEntry{Key: "PORT", Value: "8080", Line: 1})
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	if strings.Contains(string(plain), `"export"`) {
+		t.Errorf("export must stay omitempty, got: %s", plain)
+	}
+	exp, err := json.Marshal(EnvEntry{Key: "PORT", Value: "8080", Line: 1, Export: true})
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	if !strings.Contains(string(exp), `"export":true`) {
+		t.Errorf("an export row must carry the flag, got: %s", exp)
+	}
+}
