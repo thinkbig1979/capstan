@@ -49,7 +49,7 @@ export function GlobalEnvSettingsContent() {
     changedElsewhere,
     reloadChanged,
     isSaving,
-  } = useGlobalEnvVars(setVisible)
+  } = useGlobalEnvVars(setVisible, visible)
 
   // isPending, not isLoading: offline the first fetch is paused, isLoading is false
   // with no data yet, and the branch below would fire (agent-os-cg26).

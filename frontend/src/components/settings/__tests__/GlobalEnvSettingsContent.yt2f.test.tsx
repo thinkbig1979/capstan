@@ -261,7 +261,7 @@ describe('useGlobalEnvVars refuses in handleSave itself, not only through the di
     const wrapper = ({ children }: { children: ReactNode }) => (
       <QueryClientProvider client={client}>{children}</QueryClientProvider>
     )
-    return renderHook(() => useGlobalEnvVars(vi.fn()), { wrapper })
+    return renderHook(() => useGlobalEnvVars(vi.fn(), {}), { wrapper })
   }
 
   it.each([

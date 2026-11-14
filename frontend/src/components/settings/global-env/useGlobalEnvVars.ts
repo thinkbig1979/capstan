@@ -12,15 +12,12 @@ import {
   NO_REDACTED_ROWS,
 } from '@/lib/env-unlock-rebase'
 import { useNextRowId } from '@/components/stack/env-editor/useRowId'
+import { isSensitiveKey } from '@/components/stack/env-editor/sensitiveKey'
 import type { EditableField, EnvRow, EnvVar, IndexedEnvVar } from './types'
 
 /** The fields of a variable the locked view can hide, so an unlock can put them back. */
 const REDACTABLE_FIELDS = ['key', 'value'] as const
 
-const ENV_SEARCH_FIELDS = [
-  (e: IndexedEnvVar) => e.key,
-  (e: IndexedEnvVar) => e.value,
-]
 
 /**
  * Local edit buffer for the global env vars table: syncs from the server
@@ -29,7 +26,10 @@ const ENV_SEARCH_FIELDS = [
  * data-sync effect and handleDelete can clear reveal state for the right
  * indices without owning that state themselves.
  */
-export function useGlobalEnvVars(setVisible: Dispatch<SetStateAction<Record<number, boolean>>>) {
+export function useGlobalEnvVars(
+  setVisible: Dispatch<SetStateAction<Record<number, boolean>>>,
+  visible: Readonly<Record<number, boolean>>,
+) {
   const { data, isPending, isLoadingError, isRefetchError, refetch } = useGlobalEnv()
   const updateGlobalEnv = useUpdateGlobalEnv()
 
@@ -126,7 +126,17 @@ export function useGlobalEnvVars(setVisible: Dispatch<SetStateAction<Record<numb
     () => vars.map((v, i) => ({ ...v, _originalIndex: i })),
     [vars],
   )
-  const { query, setQuery, filtered } = useTextFilter(indexedVars, ENV_SEARCH_FIELDS)
+  // A hidden value is not searched, the same rule the table masks it by: a
+  // match would tell a locked user what it contains (agent-os-sopw).
+  const searchFields = useMemo(
+    () => [
+      (e: IndexedEnvVar) => e.key,
+      (e: IndexedEnvVar) =>
+        (e.sensitive === true || isSensitiveKey(e.key)) && !visible[e._originalIndex] ? '' : e.value,
+    ],
+    [visible],
+  )
+  const { query, setQuery, filtered } = useTextFilter(indexedVars, searchFields)
 
   const handleChange = (index: number, field: EditableField, value: string) => {
     setVars((prev) => {
