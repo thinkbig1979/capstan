@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"log/slog"
 	"net/http"
 	"time"
 
@@ -44,10 +43,7 @@ func (h *StacksHandler) Start(c *gin.Context) {
 
 	h.logAction(c, id, "start", output)
 
-	verifiedStatus := lifecycleStatus(ar)
-	if statusErr := h.db.UpdateStackStatus(id, verifiedStatus); statusErr != nil {
-		slog.Warn("Failed to persist verified stack status", "stackID", id, "status", verifiedStatus, "error", statusErr)
-	}
+	verifiedStatus := services.StoreLifecycleStatus(h.db, id, ar)
 
 	renderDockerResult(c, ar.Err, truth.ActionResult{
 		Outcome: ar.Outcome,
@@ -94,10 +90,7 @@ func (h *StacksHandler) Stop(c *gin.Context) {
 
 	h.logAction(c, id, "stop", output)
 
-	verifiedStatus := lifecycleStatus(ar)
-	if statusErr := h.db.UpdateStackStatus(id, verifiedStatus); statusErr != nil {
-		slog.Warn("Failed to persist verified stack status", "stackID", id, "status", verifiedStatus, "error", statusErr)
-	}
+	verifiedStatus := services.StoreLifecycleStatus(h.db, id, ar)
 
 	renderDockerResult(c, ar.Err, truth.ActionResult{
 		Outcome: ar.Outcome,
@@ -144,10 +137,7 @@ func (h *StacksHandler) Restart(c *gin.Context) {
 
 	h.logAction(c, id, "restart", output)
 
-	verifiedStatus := lifecycleStatus(ar)
-	if statusErr := h.db.UpdateStackStatus(id, verifiedStatus); statusErr != nil {
-		slog.Warn("Failed to persist verified stack status", "stackID", id, "status", verifiedStatus, "error", statusErr)
-	}
+	verifiedStatus := services.StoreLifecycleStatus(h.db, id, ar)
 
 	renderDockerResult(c, ar.Err, truth.ActionResult{
 		Outcome: ar.Outcome,
@@ -212,10 +202,7 @@ func (h *StacksHandler) Pull(c *gin.Context) {
 
 	if restartAfterPull {
 		restartAR, restartOutput := h.dockerSvc().RestartVerified(*stack)
-		verifiedStatus := lifecycleStatus(restartAR)
-		if statusErr := h.db.UpdateStackStatus(id, verifiedStatus); statusErr != nil {
-			slog.Warn("Failed to persist verified stack status", "stackID", id, "status", verifiedStatus, "error", statusErr)
-		}
+		verifiedStatus := services.StoreLifecycleStatus(h.db, id, restartAR)
 
 		renderDockerResult(c, restartAR.Err, truth.ActionResult{
 			Outcome: restartAR.Outcome,
@@ -240,25 +227,6 @@ func (h *StacksHandler) Pull(c *gin.Context) {
 			"duration":  duration.Milliseconds(),
 		}),
 	})
-}
-
-// lifecycleStatus maps an ActionResult outcome to a stack status string for
-// persistence in the database. It prefers the "status" key in details if
-// populated by verifyLifecycle, otherwise falls back to outcome-derived defaults.
-func lifecycleStatus(ar truth.ActionResult) string {
-	if ar.Details != nil {
-		if s, ok := ar.Details["status"].(string); ok && s != "" {
-			return s
-		}
-	}
-	switch ar.Outcome {
-	case truth.OutcomeSuccess, truth.OutcomeNoChange:
-		return string(services.StackStatusRunning)
-	case truth.OutcomePartial:
-		return string(services.StackStatusPartial)
-	default:
-		return string(services.StackStatusError)
-	}
 }
 
 // mergeDetails returns a new map containing all keys from base plus all keys

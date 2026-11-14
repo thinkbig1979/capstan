@@ -47,7 +47,9 @@ func (f *fakeDocker) StopVerified(stack models.Stack) (truth.ActionResult, strin
 	if f.stopErr != nil {
 		return truth.Failed("stop failed", f.stopErr), ""
 	}
-	return truth.Success("stack stopped"), ""
+	// The verified end state rides in Details["status"], as the real
+	// StopVerified's does (TestRunStreaming_DoneCarriesVerifiedStatus_Hnys).
+	return truth.Success("stack stopped", truth.KV("status", "stopped")), ""
 }
 
 func (f *fakeDocker) StartVerified(stack models.Stack) (truth.ActionResult, string) {
@@ -58,9 +60,9 @@ func (f *fakeDocker) StartVerified(stack models.Stack) (truth.ActionResult, stri
 		return truth.Failed("start failed", f.startErr), ""
 	}
 	if f.startPartial != "" {
-		return truth.Partial(f.startPartial), ""
+		return truth.Partial(f.startPartial, truth.KV("status", "partial")), ""
 	}
-	return truth.Success("stack running"), ""
+	return truth.Success("stack running", truth.KV("status", "running")), ""
 }
 
 func (f *fakeDocker) Status(stack models.Stack) (string, []models.Container, error) {
