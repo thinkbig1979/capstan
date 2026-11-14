@@ -752,7 +752,7 @@ func (h *EnvHandler) parseEnvFile(content string) []EnvEntry {
 				Key:       key,
 				Value:     strings.Join(append([]string{trimmedLine}, body...), "\n"),
 				Line:      lineNum,
-				Sensitive: services.IsSensitiveEnvVar(key, value) || bodyLooksSensitive(body),
+				Sensitive: services.IsSensitiveEnvVar(key, value) || bodyLooksSensitive(strings.Split(value, "\n")),
 				Comment:   true,
 			})
 			n = end
@@ -843,16 +843,20 @@ func multilineValueEnd(lines []string, n int) (end int, ok bool) {
 	return 0, false
 }
 
-// bodyLooksSensitive reports whether any body line of a multi-line value would
-// be masked in the locked view as a line of its own: a sensitive variable
-// (DB_PASSWORD: x), a commented-out secret, or a URL credential. Before
+// bodyLooksSensitive reports whether any line of a multi-line value would be
+// masked in the locked view as a line of its own: a sensitive variable
+// (DB_PASSWORD: x), a commented-out secret, a URL credential, or private key
+// material (a PEM "PRIVATE KEY-----" marker, a JSON "private_key" field). Before
 // agent-os-fw2q each body line was its own row and was masked that way; folded
 // into the value, the line is still masked, by masking the whole value. A body
 // with none of these stays visible, as a non-secret multi-line value did
 // (agent-os-yt2f).
 func bodyLooksSensitive(body []string) bool {
 	for _, l := range body {
-		if services.HasURLUserinfo(l) {
+		// Private key material under a key name that is not secret-shaped
+		// (TLS_CERT, GCP_CREDENTIALS): a PEM marker, or a service-account
+		// JSON's "private_key" field (review S1).
+		if services.HasURLUserinfo(l) || strings.Contains(l, "PRIVATE KEY-----") || strings.Contains(l, `"private_key"`) {
 			return true
 		}
 		for _, e := range (&EnvHandler{}).parseEnvFile(l) {

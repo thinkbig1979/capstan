@@ -93,8 +93,9 @@ func TestEnvMultilineQuote_UnterminatedStaysPerLine(t *testing.T) {
 	assertBodyOmits(t, getEnvBody(t, router, stackID, ""), "fw2qafter")
 }
 
-// A closing quote followed by anything but a comment is not a shape compose
-// reads as one value, so it is not folded into one row either.
+// A closing quote followed by anything but a comment is not folded into one
+// row. compose DOES read `K="a\n"EVIL=1` (as K plus EVIL); the table keeps
+// such lines one row each, a deliberate simplification (review C5).
 func TestEnvMultilineQuote_TextAfterClosingQuoteNotFolded(t *testing.T) {
 	got := (&EnvHandler{}).parseEnvFile("K=\"a\n\"EVIL=1\n")
 	assert.Len(t, got, 2)
@@ -137,4 +138,32 @@ func TestEnvMultilineQuote_SecretShapedBodyLineHidesValue(t *testing.T) {
 func TestEnvMultilineQuote_NonSecretValueStaysVisible(t *testing.T) {
 	router, stackID, _, _ := envQuoteFixture(t, "MOTD=\"hello\nfw2qvisibleworld\"\n")
 	assert.Contains(t, getEnvBody(t, router, stackID, ""), "fw2qvisibleworld")
+}
+
+// Review S1: a multi-line private key under a key name that is not
+// secret-shaped (TLS_CERT, GCP_CREDENTIALS) showed whole in the locked views.
+// The PEM marker and a JSON "private_key" field mark the value sensitive.
+func TestEnvMultilineQuote_PrivateKeyBodyHiddenBothViews(t *testing.T) {
+	for name, value := range map[string]string{
+		"pem":  "TLS_CERT=\"-----BEGIN PRIVATE KEY-----\nS1pemsecretbody\n-----END PRIVATE KEY-----\"\n",
+		"json": "GCP_CREDENTIALS='{\"type\": \"service_account\",\n\"private_key\": \"S1jsonsecretbody\"\n}'\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			secret := map[string]string{"pem": "S1pemsecretbody", "json": "S1jsonsecretbody"}[name]
+			content := value + "TZ=UTC\n"
+
+			router, stackID, token, _ := envQuoteFixture(t, content)
+			require.Contains(t, getEnvBody(t, router, stackID, token), secret, "positive side, stack view")
+			locked := getEnvBody(t, router, stackID, "")
+			assertBodyOmits(t, locked, secret)
+			assert.Contains(t, locked, "UTC")
+
+			dataDir, grouter := globalEnvTestRouter(t)
+			writeGlobalEnvFile(t, dataDir, content)
+			_, gUnlocked := getGlobalVars(t, grouter, "/unlocked")
+			require.Contains(t, gUnlocked, secret, "positive side, global view")
+			_, gLocked := getGlobalVars(t, grouter, "/locked")
+			assertBodyOmits(t, gLocked, secret)
+		})
+	}
 }
