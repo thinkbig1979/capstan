@@ -1088,7 +1088,11 @@ func serializeEnvFileOver(current string, entries []EnvEntry) string {
 	}
 
 	out := b.String()
-	if current != "" && !strings.HasSuffix(current, "\n") {
+	// A last row that is blank has no text of its own: its line is the final
+	// line ending, so trimming it would drop the row (review E4). Its row
+	// wins over the file's missing final newline.
+	lastBlank := out == eol || strings.HasSuffix(out, eol+eol)
+	if current != "" && !strings.HasSuffix(current, "\n") && !lastBlank {
 		out = strings.TrimSuffix(out, eol)
 	}
 	return out

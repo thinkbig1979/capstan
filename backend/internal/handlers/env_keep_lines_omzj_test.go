@@ -69,3 +69,54 @@ func TestEnvKeepLines_omzj_UneditedSaveKeepsOddLineEnds(t *testing.T) {
 		assert.Equal(t, content, readEnvQuoteFile(t, envPath))
 	}
 }
+
+// Review E4: in a file with no final newline, a request ending in a blank
+// row keeps that row. The blank last line can only be written as a final
+// newline, so the row wins over the final-newline state; a request ending in
+// a variable still keeps the state.
+func TestEnvKeepLines_omzj_TrailingBlankRowSurvivesNoFinalNewline(t *testing.T) {
+	cases := []struct {
+		name  string
+		extra []map[string]any
+		want  string
+	}{
+		{"blank row added", []map[string]any{{"key": "", "value": "", "sensitive": false}}, "A=1\n\n"},
+		{"nothing added (control)", nil, "A=1"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			router, stackID, token, envPath := envQuoteFixture(t, "A=1")
+			entries := append(getEntriesAsJSON(t, router, stackID, token), c.extra...)
+			w := putEntries(t, router, stackID, token, entries)
+			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+			got := readEnvQuoteFile(t, envPath)
+			assert.Equal(t, c.want, got)
+			assert.Len(t, (&EnvHandler{}).parseEnvFile(got), len(entries), "every row the client sent reads back")
+		})
+	}
+}
+
+// Review E5: a request row equal to the file's row except in one written
+// field is written from the request, not as the file's text. Each file line
+// is indented, so the file's text and the request's form differ.
+func TestEnvKeepLines_omzj_EachWrittenFieldBreaksTheMatch(t *testing.T) {
+	cases := []struct {
+		field, file string
+		change      func(*EnvEntry)
+		want        string
+	}{
+		{"Quote", "  A='x'\n", func(e *EnvEntry) { e.Quote = `"` }, "A=\"x\"\n"},
+		{"InlineComment", "  A=x # c\n", func(e *EnvEntry) { e.InlineComment = " # d" }, "A=x # d\n"},
+		{"Comment", "  FOO\n", func(e *EnvEntry) { e.Comment = false }, "FOO=FOO\n"},
+		{"Export", "  export A=1\n", func(e *EnvEntry) { e.Export = false }, "A=1\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.field, func(t *testing.T) {
+			rows := (&EnvHandler{}).parseEnvFile(c.file)
+			require.Len(t, rows, 1)
+			require.Equal(t, c.file, serializeEnvFileOver(c.file, rows), "unchanged: the file's own text")
+			c.change(&rows[0])
+			assert.Equal(t, c.want, serializeEnvFileOver(c.file, rows))
+		})
+	}
+}
