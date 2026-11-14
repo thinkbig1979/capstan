@@ -1,0 +1,21 @@
+{
+  "_comment": "agent-os-jx88. Shared by useExtractToEnv.jx88.test.ts (selected -> line) and backend/internal/handlers/settings_globalenv_jx88_test.go (compose-go: dotenv(line) must equal template.Substitute(selected)). Lookup: DB_HOST=db.internal, HOME=/home/u.",
+  "cases": [
+    { "selected": "${DB_HOST}:5432", "line": "MY_VAR=${DB_HOST}:5432" },
+    { "selected": "postgres://u@${DB_HOST}/app", "line": "MY_VAR=postgres://u@${DB_HOST}/app" },
+    { "selected": "$HOME", "line": "MY_VAR=$HOME" },
+    { "selected": "pa$$word", "line": "MY_VAR=pa$$word" },
+    { "selected": "nginx:1.2.3", "line": "MY_VAR=nginx:1.2.3" },
+    { "selected": "naïve-ünïcode", "line": "MY_VAR=naïve-ünïcode" },
+    { "selected": "two words", "line": "MY_VAR=\"two words\"" },
+    { "selected": "abc #def", "line": "MY_VAR=\"abc #def\"" },
+    { "selected": "x#y", "line": "MY_VAR=\"x#y\"" },
+    { "selected": "say \"hi\"", "line": "MY_VAR=\"say \\\"hi\\\"\"" },
+    { "selected": "it's", "line": "MY_VAR=\"it's\"" },
+    { "selected": "'leading", "line": "MY_VAR=\"'leading\"" },
+    { "selected": "C:\\dir\\", "line": "MY_VAR=\"C:\\\\dir\\\\\"" },
+    { "selected": "  lead and trail  ", "line": "MY_VAR=\"  lead and trail  \"" },
+    { "selected": "héllo wörld ✓", "line": "MY_VAR=\"héllo wörld ✓\"" },
+    { "selected": "${DB_HOST} and more", "line": "MY_VAR=\"${DB_HOST} and more\"" }
+  ]
+}

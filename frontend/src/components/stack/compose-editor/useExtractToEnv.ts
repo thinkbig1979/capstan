@@ -8,27 +8,22 @@ import type { useCodeMirrorEditor } from '@/hooks/useCodeMirrorEditor'
 import { inferVarName } from './inferVarName'
 import { queryKeys } from '@/lib/query-keys'
 
-/** Characters that change what compose reads from an unquoted .env value. */
-const NEEDS_QUOTES = /[\s$#"\\]/
+/** Characters that change what dotenv reads from an unquoted .env value. */
+const NEEDS_QUOTES = /[\s#"'\\]/
 
 /**
- * The .env line for an extracted value (agent-os-jx88). Unquoted, compose
- * reads " #" as a comment, interpolates "$", trims whitespace and reads a
- * leading quote as quoting, so such a value is single-quoted, which compose
- * reads literally (compose-go v2 dotenv/parser.go, extractVarValue). Inside
- * single quotes a backslash escapes only a quote, so a value holding a ' or
- * ending in a backslash cannot be written this way: it is refused, and the
- * user adds it in the Raw .env view.
+ * The .env line for an extracted value (agent-os-jx88). The selection sits in
+ * the compose YAML, where compose substitutes $VAR, ${VAR} and $$; dotenv
+ * substitutes them the same way in an unquoted or double-quoted value, so "$"
+ * is left alone (single quotes would freeze ${DB_HOST} as text). Unquoted,
+ * dotenv cuts " #" as a comment, trims whitespace and reads a leading quote
+ * as quoting, so a value holding whitespace, #, ", ' or \ is double-quoted,
+ * with " and \ escaped (compose-go v2 dotenv/parser.go, extractVarValue).
+ * Each case is checked with compose-go in settings_globalenv_jx88_test.go.
  */
-export function envLineFor(varName: string, value: string): { line: string; error?: undefined } | { line?: undefined; error: string } {
-  if (!NEEDS_QUOTES.test(value) && !value.startsWith("'")) return { line: `${varName}=${value}` }
-  if (value.includes("'")) {
-    return { error: 'The selection contains a single quote and characters that need quoting; add it in the Raw .env view' }
-  }
-  if (value.endsWith('\\')) {
-    return { error: 'The selection ends in a backslash and has characters that need quoting; add it in the Raw .env view' }
-  }
-  return { line: `${varName}='${value}'` }
+export function envLineFor(varName: string, value: string): string {
+  if (!NEEDS_QUOTES.test(value)) return `${varName}=${value}`
+  return `${varName}="${value.replace(/[\\"]/g, (c) => `\\${c}`)}"`
 }
 
 interface UseExtractToEnvArgs {
@@ -111,12 +106,7 @@ export function useExtractToEnv({
       const currentEnv = envData.hasEnvFile && envData.raw ? envData.raw : ''
 
       const newEnvLine = envLineFor(varName, selectedText)
-      if (newEnvLine.line === undefined) {
-        // Refused before any write (agent-os-jx88).
-        toastInvalid(newEnvLine.error)
-        return
-      }
-      const updatedEnv = currentEnv ? `${currentEnv.trimEnd()}\n${newEnvLine.line}` : newEnvLine.line
+      const updatedEnv = currentEnv ? `${currentEnv.trimEnd()}\n${newEnvLine}` : newEnvLine
 
       // Atomic write — body: { composeContent, envRaw } per ComposeEnvRequest
       try {

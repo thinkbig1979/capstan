@@ -2,11 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 
 // agent-os-jx88: Extract to .env wrote `${varName}=${selectedText}` unquoted,
-// so a selection holding " #" lost its tail to a comment, "$" was
-// interpolated, and whitespace was trimmed: the variable compose read was
-// not the text that was selected. Such a value is now single-quoted (compose
-// reads a single-quoted value literally); one that also holds a single quote
-// is refused, with nothing written.
+// so a selection holding " #" lost its tail to a comment and whitespace was
+// trimmed. The selection sits in the compose YAML, where compose already
+// substitutes $VAR, ${VAR} and $$, and dotenv does the same in an unquoted or
+// double-quoted value, so "$" is left as it is. A value holding whitespace,
+// #, ", ' or \ is double-quoted with " and \ escaped. The table is shared with
+// the backend test that checks each line with compose-go itself
+// (settings_globalenv_jx88_test.go).
 
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), info: vi.fn(), warning: vi.fn(), error: vi.fn() },
@@ -22,7 +24,7 @@ vi.mock('@tanstack/react-query', () => ({
   useQueryClient: () => ({ invalidateQueries: vi.fn() }),
 }))
 
-import { toast } from 'sonner'
+import cases from './extractToEnvCases.json'
 import { useExtractToEnv } from '../useExtractToEnv'
 
 function setup(selected: string) {
@@ -67,40 +69,10 @@ beforeEach(() => {
 })
 
 describe('useExtractToEnv value quoting (jx88)', () => {
-  it.each([
-    ['a value with a space', 'two words', "MY_VAR='two words'"],
-    ['a value with $', 'pa$word', "MY_VAR='pa$word'"],
-    ['a value with " #"', 'abc #def', "MY_VAR='abc #def'"],
-    ['a value with #', 'x#y', "MY_VAR='x#y'"],
-    ['a value with a double quote', 'say "hi"', `MY_VAR='say "hi"'`],
-    ['a value with a backslash', 'C:\\dir', "MY_VAR='C:\\dir'"],
-  ])('jx88: %s is single-quoted', async (_name, selected, line) => {
-    expect(await extractedEnv(selected)).toBe(`A=1\n${line}`)
-  })
-
-  it('jx88: a plain value stays unquoted', async () => {
-    expect(await extractedEnv('nginx:1.2.3')).toBe('A=1\nMY_VAR=nginx:1.2.3')
-  })
-
-  it("jx88: a value with a single quote and nothing to quote stays unquoted", async () => {
-    expect(await extractedEnv("it's")).toBe("A=1\nMY_VAR=it's")
-  })
-
-  it.each([
-    ['a quote and a space', "it's here"],
-    ['a leading quote', "'x"],
-  ])('jx88: %s is refused, nothing written', async (_name, selected) => {
-    expect(await extractedEnv(selected)).toBeUndefined()
-    expect(stacksApi.updateComposeAndEnv).not.toHaveBeenCalled()
-    const shown = [
-      ...vi.mocked(toast.error).mock.calls,
-      ...vi.mocked(toast.warning).mock.calls,
-    ].flat().map((x) => JSON.stringify(x)).join(' ')
-    expect(shown).toMatch(/single quote/i)
-  })
-
-  it('jx88: a value to quote that ends in a backslash is refused, nothing written', async () => {
-    expect(await extractedEnv('C:\\my dir\\')).toBeUndefined()
-    expect(stacksApi.updateComposeAndEnv).not.toHaveBeenCalled()
-  })
+  it.each(cases.cases.map((c) => [c.selected, c.line]))(
+    'jx88: selection %j is written as %j',
+    async (selected, line) => {
+      expect(await extractedEnv(selected)).toBe(`A=1\n${line}`)
+    },
+  )
 })

@@ -1,10 +1,13 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http"
+	"os"
 	"testing"
 
 	"github.com/compose-spec/compose-go/v2/dotenv"
+	"github.com/compose-spec/compose-go/v2/template"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -38,17 +41,36 @@ func TestGlobalEnv_Jx88_CommentsSurviveAnEdit(t *testing.T) {
 	assert.Equal(t, "# Shared settings\n\nTZ=UTC\n\n# mail\nSMTP_HOST=mail.example.com\n", readGlobalEnvTestFile(t, p))
 }
 
-// The frontend half (useExtractToEnv.envLineFor) single-quotes a value that
-// unquoted would change meaning. Observed here with compose's own parser:
-// each line it writes reads back as exactly the selected text, and the same
-// value unquoted does not.
-func TestEnvExtract_Jx88_ComposeReadsSingleQuotedLiterally(t *testing.T) {
-	for _, value := range []string{"two words", "pa$word", "abc #def", "x#y", `say "hi"`, `C:\dir`, " lead"} {
-		got, err := dotenv.UnmarshalWithLookup("MY_VAR='"+value+"'\n", func(string) (string, bool) { return "", false })
-		require.NoError(t, err, value)
-		assert.Equal(t, value, got["MY_VAR"], "single-quoted %q", value)
-	}
-	unquoted, err := dotenv.UnmarshalWithLookup("MY_VAR=abc #def\n", func(string) (string, bool) { return "", false })
+// The frontend half (useExtractToEnv.envLineFor). The selection sits in the
+// compose YAML, where compose substitutes $VAR, ${VAR} and $$; the extracted
+// .env line must give the variable the value compose read at that spot.
+// Observed with compose's own code: template.Substitute for the YAML side,
+// dotenv for the .env side, over the table the frontend test also asserts.
+const extractCasesPath = "../../../frontend/src/components/stack/compose-editor/__tests__/extractToEnvCases.json"
+
+func TestEnvExtract_Jx88_EnvLineReadsAsComposeReadTheYAML(t *testing.T) {
+	raw, err := os.ReadFile(extractCasesPath)
 	require.NoError(t, err)
-	assert.NotEqual(t, "abc #def", unquoted["MY_VAR"], "positive side: unquoted, compose cuts the comment")
+	var table struct {
+		Cases []struct{ Selected, Line string }
+	}
+	require.NoError(t, json.Unmarshal(raw, &table))
+	require.NotEmpty(t, table.Cases)
+	env := map[string]string{"DB_HOST": "db.internal", "HOME": "/home/u"}
+	lookup := func(k string) (string, bool) { v, ok := env[k]; return v, ok }
+
+	for _, c := range table.Cases {
+		fromYAML, err := template.Substitute(c.Selected, lookup)
+		require.NoError(t, err, c.Selected)
+		got, err := dotenv.UnmarshalWithLookup(c.Line+"\n", lookup)
+		require.NoError(t, err, c.Line)
+		assert.Equal(t, fromYAML, got["MY_VAR"], "selected %q, line %q", c.Selected, c.Line)
+		assert.Len(t, got, 1, "line %q", c.Line)
+	}
+
+	// The other side: the single-quoting this replaced reads ${DB_HOST}
+	// literally, which compose did not.
+	got, err := dotenv.UnmarshalWithLookup("MY_VAR='${DB_HOST}:5432'\n", lookup)
+	require.NoError(t, err)
+	assert.NotEqual(t, "db.internal:5432", got["MY_VAR"])
 }
