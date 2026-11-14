@@ -62,6 +62,15 @@
 #                           `FROM <ref>` inside string literals, and any
 #                           string literal that is wholly an image ref with a
 #                           tag or digest ("alpine:3.21").
+#   testing/tests/playwright/**/*.ts   the same two arms as Go, with '...' and
+#                           `...` literals as well as "...": the e2e fixtures
+#                           start containers from the images they name
+#                           (agent-os-t6lp). A bare literal there counts only
+#                           with a `/`, a digest, or a tag that starts with a
+#                           digit or is `latest`: TypeScript is full of
+#                           name:word strings. BLIND SPOT: a bare
+#                           'nginx:alpine' in a .ts file is not seen
+#                           (`image: nginx:alpine` inside one is).
 # The CONSUMER is the runner's docker daemon or BuildKit, which pulls whatever
 # the ref names. Lines whose first non-blank characters are `#` or `//` are
 # comments and skipped.
@@ -91,7 +100,9 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 ALLOWLIST='.github/workflows/security.yml::moby/buildkit:buildx-stable-1::BuildKit image setup-buildx pulls; kept as docker.io, the only name buildx verifies; the daemon fetches it through its mirror.gcr.io registry-mirror (D58); retried once
 .github/workflows/docker-publish.yml::moby/buildkit:buildx-stable-1::BuildKit image setup-buildx pulls; kept as docker.io, the only name buildx verifies; the daemon fetches it through its mirror.gcr.io registry-mirror (D58); retried once
 .github/workflows/docker-publish.yml::mirror.gcr.io/tonistiigi/binfmt:latest::binfmt image setup-qemu pulls; not on ECR Public (404 on public.ecr.aws and ghcr.io, checked 2026-10-10), so the Google Docker Hub cache, by decision D57; retried once
-backend/internal/integrationtest/update_detection_test.go::docker.io/library/other@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa::RepoDigests fixture for LocalRepoDigest; never pulled'
+backend/internal/integrationtest/update_detection_test.go::docker.io/library/other@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa::RepoDigests fixture for LocalRepoDigest; never pulled
+testing/tests/playwright/git-commit-push.spec.ts::nginx:1.25-alpine::text the spec expects in the editor (toContainText); the image it deploys is the public.ecr.aws ref; never pulled
+testing/tests/playwright/help.spec.ts::scratch-never-pulled:0::compose content of a stack the spec creates and never deploys; never pulled'
 
 usage() {
   echo "Usage: $(basename "$0") [DIR | --self-test]" >&2
@@ -108,6 +119,7 @@ read -r -d '' AWK_PROG <<'AWK'
 function kind(f) {
   if (f ~ /(^|\/)Dockerfile[^\/]*$/) return "dockerfile"
   if (f ~ /\.go$/) return "go"
+  if (f ~ /\.ts$/) return "ts"
   return "yaml"
 }
 function emit(ref, ln) {
@@ -172,8 +184,8 @@ FNR == 1 {
   cont = ""
   t = line; sub(/^[[:space:]]+/, "", t)
   if (t == "" ) next
-  if (k == "go" && t ~ /^\/\//) next
-  if (k != "go" && t ~ /^#/) next
+  if ((k == "go" || k == "ts") && t ~ /^\/\//) next
+  if (k != "go" && k != "ts" && t ~ /^#/) next
 
   if (k == "dockerfile") {
     if (toupper(substr(t, 1, 5)) == "FROM ") {
@@ -189,17 +201,25 @@ FNR == 1 {
     next
   }
 
-  if (k == "go") {
+  # Go and TypeScript: Go literals are "...", TypeScript's also '...' and
+  # `...`; one class serves all three (a mismatched pair is not a literal in
+  # either language, so it is not worth telling apart).
+  if (k == "go" || k == "ts") {
     r = line
     while (match(r, /(image:|FROM)[[:space:]]+[A-Za-z0-9._\/:@$-]+/)) {
       m = substr(r, RSTART, RLENGTH); sub(/^(image:|FROM)[[:space:]]+/, "", m)
       emit(m, ln); r = substr(r, RSTART + RLENGTH)
     }
     r = line
-    while (match(r, /"[a-z0-9][a-z0-9._\/-]*(:[A-Za-z0-9][A-Za-z0-9._-]*|@sha256:[0-9a-f]+)"/)) {
+    while (match(r, /["'`][a-z0-9][a-z0-9._\/-]*(:[A-Za-z0-9][A-Za-z0-9._-]*|@sha256:[0-9a-f]+)["'`]/)) {
       m = substr(r, RSTART + 1, RLENGTH - 2); r = substr(r, RSTART + RLENGTH)
       if (m ~ /^sha256:/) continue
+      tag = ""
       if (m ~ /:/ && m !~ /@/) { tag = m; sub(/.*:/, "", tag); if (tag ~ /\//) continue }
+      # TypeScript is full of name:word literals that are not images
+      # ('node:fs' imports, 'dash:stacks' labels, 'display:none'), so there a
+      # bare literal counts only with a path, a digest, or a version-like tag.
+      if (k == "ts" && m !~ /\// && m !~ /@/ && tag !~ /^([0-9]|latest$)/) continue
       if (line ~ /(image:|FROM)[[:space:]]+/ && index(line, "image: " m) + index(line, "FROM " m) > 0) continue
       emit(m, ln)
     }
@@ -287,6 +307,12 @@ check_dir() {
       [ -n "$f" ] && files+=("$f")
     done < <(cd "$dir" && command grep -rlE '^//go:build .*integration' --include='*.go' backend | sort)
   fi
+  local nts=0
+  if [ -d "$dir/testing/tests/playwright" ]; then
+    while IFS= read -r f; do
+      [ -n "$f" ] && files+=("$f") && nts=$((nts + 1))
+    done < <(cd "$dir" && find testing/tests/playwright -type f -name '*.ts' | sort)
+  fi
   if [ "${#files[@]}" -eq 0 ]; then
     echo "check-dockerhub-pulls: no scoped files under $dir" >&2
     return 2
@@ -365,7 +391,7 @@ check_dir() {
   fi
   local npre
   npre=$(command grep -c '^PRE' <<<"$recs")
-  echo "check-dockerhub-pulls: 0 violations; $nref image refs in ${#files[@]} files, $allowed allowlisted (Docker Hub or mirror.gcr.io), $npre pre-pulled"
+  echo "check-dockerhub-pulls: 0 violations; $nref image refs in ${#files[@]} files ($nts Playwright .ts), $allowed allowlisted (Docker Hub or mirror.gcr.io), $npre pre-pulled"
   return 0
 }
 
@@ -455,6 +481,14 @@ package it
 
 const notScanned = "nginx:1.21"
 EOF
+  mkdir -p "$d/testing/tests/playwright/helpers"
+  cat > "$d/testing/tests/playwright/helpers/fixture.ts" <<'EOF'
+import { execFileSync } from 'node:child_process'
+// 'nginx:1.25' in a comment is not a pull
+const image = process.env.FIXTURE_IMAGE ?? 'public.ecr.aws/docker/library/nginx:1'
+const compose = `services:\n  web:\n    image: public.ecr.aws/docker/library/nginx:1\n`
+const labels = ['dash:stacks', "display:none"]
+EOF
 }
 
 fresh() {
@@ -491,6 +525,12 @@ selftest() {
   selftest_case "Go literal" 1 "a_test.go:6: Docker Hub image alpine:3.21" "$d"
   d=$(fresh); sed -i 's|image: public.ecr.aws/docker/library/nginx:1\\n|image: docker.io/library/nginx:1\\n|' "$d/backend/it/a_test.go"
   selftest_case "Go image: in a string, explicit docker.io" 1 "a_test.go:7: Docker Hub image docker.io/library/nginx:1" "$d"
+  d=$(fresh); sed -i "s|'public.ecr.aws/docker/library/nginx:1'|'docker.io/library/nginx:1'|" "$d/testing/tests/playwright/helpers/fixture.ts"
+  selftest_case "Playwright .ts literal, explicit docker.io" 1 "fixture.ts:3: Docker Hub image docker.io/library/nginx:1" "$d"
+  d=$(fresh); sed -i 's|image: public.ecr.aws/docker/library/nginx:1\\n`|image: nginx:alpine\\n`|' "$d/testing/tests/playwright/helpers/fixture.ts"
+  selftest_case "Playwright .ts image: in a template literal" 1 "fixture.ts:4: Docker Hub image nginx:alpine" "$d"
+  d=$(fresh); printf 'const other = "alpine:3.21"\n' >> "$d/testing/tests/playwright/helpers/fixture.ts"
+  selftest_case "Playwright .ts bare literal with a version tag" 1 "fixture.ts:6: Docker Hub image alpine:3.21" "$d"
   d=$(fresh); sed -i 's|^FROM build AS again|FROM ${BASE} AS again|' "$d/docker/Dockerfile"
   selftest_case "variable ref" 1 'Docker Hub image \$\{BASE\}' "$d"
 
