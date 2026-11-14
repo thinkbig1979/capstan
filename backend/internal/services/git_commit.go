@@ -189,10 +189,7 @@ func (s *GitService) getChangeDiff(dirPath, path string, mask *diffMasking) (*mo
 	if err != nil {
 		return nil, fmt.Errorf("failed to read the diff: %w", err)
 	}
-	if mask != nil {
-		diff = MaskFullContextDiff(diff, mask.secrets)
-	}
-	diff = redactToken(diff, cred.token)
+	diff = maskPatch(diff, cred.token, mask)
 	return &models.GitChangeDiff{Path: path, Diff: diff}, nil
 }
 
@@ -290,7 +287,7 @@ func (s *GitService) CommitVerified(dirPath string, req CommitRequest) (ar truth
 	if err != nil {
 		return truth.Failed("could not list the changed files", err), nil
 	}
-	paths, err := selectCommitPaths(dirPath, top, changes, req)
+	paths, err := selectCommitPaths(dirPath, top, changes, req, cred.token)
 	if err != nil {
 		return truth.Failed("could not check the requested files", err), nil
 	}
@@ -321,7 +318,7 @@ func (s *GitService) CommitVerified(dirPath string, req CommitRequest) (ar truth
 		if errors.As(err, &appErr) {
 			code, reason = appErr.Code, appErr.Message
 		}
-		slog.Warn("Commit kept after its push failed", "path", dirPath, "commit", hash, "error", err)
+		slog.Warn("Commit kept after its push failed", "path", dirPath, "commit", hash, "error", redactErr(err, cred.token))
 		return truth.Partial("committed, but the push failed: "+reason,
 			truth.KV("commit", hash),
 			truth.KV("files", len(paths)),
@@ -555,7 +552,7 @@ func (s *GitService) headBranch(top string, cred gitCreds) (branch string, detac
 	}
 	branch, ok := strings.CutPrefix(out, "refs/heads/")
 	if !ok || branch == "" {
-		return "", false, redactErr(fmt.Errorf("HEAD names %q, which is not a branch", out), cred.token)
+		return "", false, fmt.Errorf("HEAD names %q, which is not a branch", redactToken(out, cred.token))
 	}
 	return branch, false, nil
 }
@@ -603,7 +600,7 @@ func (s *GitService) listChanges(dirPath, top string, cred gitCreds) ([]models.G
 	if err != nil {
 		return nil, fmt.Errorf("failed to read status: %w", err)
 	}
-	entries, err := parsePorcelainV2(out)
+	entries, err := parsePorcelainV2(out, cred.token)
 	if err != nil {
 		return nil, err
 	}
@@ -622,7 +619,7 @@ func (s *GitService) listChanges(dirPath, top string, cred gitCreds) ([]models.G
 		abs := filepath.Join(top, filepath.FromSlash(e.path))
 		ok, err := inFolder(dirPath, abs)
 		if err != nil {
-			return nil, fmt.Errorf("failed to check that %q is inside the stack folder: %w", e.path, err)
+			return nil, fmt.Errorf("failed to check that %q is inside the stack folder: %w", redactToken(e.path, cred.token), redactErr(err, cred.token))
 		}
 		if !ok {
 			continue
@@ -653,7 +650,7 @@ type porcelainEntry struct {
 // before the path, type 2 nine (the last is the rename score) and its original
 // path follows as the next NUL record, type u ten. Untracked and ignored
 // records are dropped.
-func parsePorcelainV2(out string) ([]porcelainEntry, error) {
+func parsePorcelainV2(out, token string) ([]porcelainEntry, error) {
 	recs := strings.Split(out, "\x00")
 	var entries []porcelainEntry
 	for i := 0; i < len(recs); i++ {
@@ -672,17 +669,17 @@ func parsePorcelainV2(out string) ([]porcelainEntry, error) {
 		case '?', '!', '#':
 			continue
 		default:
-			return nil, fmt.Errorf("unexpected git status record %q", r)
+			return nil, fmt.Errorf("unexpected git status record %q", redactToken(r, token))
 		}
 		f := strings.SplitN(r, " ", want)
 		if len(f) != want {
-			return nil, fmt.Errorf("git status record has %d fields, want %d: %q", len(f), want, r)
+			return nil, fmt.Errorf("git status record has %d fields, want %d: %q", len(f), want, redactToken(r, token))
 		}
 		e := porcelainEntry{xy: f[1], path: f[want-1], unmerged: r[0] == 'u'}
 		if r[0] == '2' {
 			i++
 			if i >= len(recs) || recs[i] == "" {
-				return nil, fmt.Errorf("git status rename record has no original path: %q", r)
+				return nil, fmt.Errorf("git status rename record has no original path: %q", redactToken(r, token))
 			}
 			e.origPath = recs[i]
 		}
@@ -831,7 +828,7 @@ func (s *GitService) envRule(dirPath, top string, cred gitCreds) (envRule, error
 	git, err := s.historyEnvRule(dirPath, top, false, cred, trees, true, "commit dialog")
 	if err != nil {
 		slog.Warn("Treating every changed file of the folder as an env file: the env files named at HEAD or in the index are unknown",
-			"path", top, "error", err)
+			"path", top, "error", redactErr(err, cred.token))
 		r.composeUnreadable = true
 		return r, nil
 	}
@@ -890,7 +887,7 @@ func resolvesInto(abs string, targets map[string]bool) bool {
 // selectCommitPaths checks every requested file against the change list just
 // read under the lock, and returns the pathspecs to commit: a rename brings its
 // original path, or HEAD would keep a copy and the index a dangling delete.
-func selectCommitPaths(dirPath, top string, changes []models.GitChange, req CommitRequest) ([]string, error) {
+func selectCommitPaths(dirPath, top string, changes []models.GitChange, req CommitRequest, token string) ([]string, error) {
 	byPath := make(map[string]models.GitChange, len(changes))
 	for _, c := range changes {
 		byPath[c.Path] = c
@@ -901,11 +898,12 @@ func selectCommitPaths(dirPath, top string, changes []models.GitChange, req Comm
 	add := func(p string) error {
 		ok, err := inFolder(dirPath, filepath.Join(top, filepath.FromSlash(p)))
 		if err != nil {
-			return fmt.Errorf("failed to check that %q is inside the stack folder: %w", p, err)
+			return fmt.Errorf("failed to check that %q is inside the stack folder: %w", redactToken(p, token), redactErr(err, token))
 		}
 		if !ok {
+			// p may be a rename's original path, read raw from status.
 			return models.NewAppError(http.StatusBadRequest, models.ErrValidation,
-				fmt.Sprintf("%q is outside this stack's folder", p))
+				fmt.Sprintf("%q is outside this stack's folder", redactToken(p, token)))
 		}
 		if !seen[p] {
 			seen[p] = true
@@ -979,7 +977,7 @@ func (s *GitService) commitPaths(top string, cred gitCreds, name, email, message
 // and the ref to push HEAD to.
 func (s *GitService) pushPreconditions(top, branch string, cred gitCreds) (pushTarget, error) {
 	noUpstream := models.NewAppError(http.StatusConflict, models.ErrGitNoUpstream,
-		"Branch "+branch+" tracks no upstream branch; Capstan does not set one")
+		"Branch "+redactToken(branch, cred.token)+" tracks no upstream branch; Capstan does not set one")
 	if _, err := s.gitCommandWithCreds(top, cred, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"); err != nil {
 		if gitExitCode(err) < 0 {
 			return pushTarget{}, fmt.Errorf("failed to read the upstream: %w", err)
@@ -1002,7 +1000,7 @@ func (s *GitService) pushPreconditions(top, branch string, cred gitCreds) (pushT
 	}
 	if len(remotes) > 1 || len(merges) > 1 {
 		return pushTarget{}, models.NewAppError(http.StatusConflict, models.ErrGitNoUpstream,
-			"Branch "+branch+" has more than one upstream configured; Capstan pushes to exactly one")
+			"Branch "+redactToken(branch, cred.token)+" has more than one upstream configured; Capstan pushes to exactly one")
 	}
 	remote, mergeRef := remotes[0], merges[0]
 	if remote == "" || mergeRef == "" {
@@ -1013,12 +1011,12 @@ func (s *GitService) pushPreconditions(top, branch string, cred gitCreds) (pushT
 	// action log. Refused before anything echoes the name.
 	if strings.Contains(remote, "://") || strings.Contains(remote, "@") {
 		return pushTarget{}, models.NewAppError(http.StatusConflict, models.ErrGitPushURLUnsupported,
-			"Branch "+branch+" tracks a remote named by a URL; Capstan pushes only to a named remote")
+			"Branch "+redactToken(branch, cred.token)+" tracks a remote named by a URL; Capstan pushes only to a named remote")
 	}
 	if remote == "." {
 		// Pushing to "." moves another LOCAL branch and reports success.
 		return pushTarget{}, models.NewAppError(http.StatusConflict, models.ErrGitNoUpstream,
-			"Branch "+branch+" tracks a local branch, not a remote; nothing would be pushed anywhere")
+			"Branch "+redactToken(branch, cred.token)+" tracks a local branch, not a remote; nothing would be pushed anywhere")
 	}
 
 	// --push --all applies pushurl and pushInsteadOf, which can differ from
@@ -1031,14 +1029,14 @@ func (s *GitService) pushPreconditions(top, branch string, cred gitCreds) (pushT
 			return pushTarget{}, fmt.Errorf("failed to read the push URL: %w", err)
 		}
 		return pushTarget{}, models.NewAppError(http.StatusConflict, models.ErrGitNoUpstream,
-			"Branch "+branch+" tracks "+remote+", which is not a configured remote")
+			"Branch "+redactToken(branch, cred.token)+" tracks "+redactToken(remote, cred.token)+", which is not a configured remote")
 	}
 	pushURLs := strings.Split(urls, "\n")
 	if len(pushURLs) != 1 {
 		// git pushes to each URL in turn, so one ref line could report the
 		// first while a later one failed or went somewhere else.
 		return pushTarget{}, models.NewAppError(http.StatusConflict, models.ErrGitPushURLUnsupported,
-			"Remote "+remote+" has more than one push URL; Capstan pushes to exactly one URL")
+			"Remote "+redactToken(remote, cred.token)+" has more than one push URL; Capstan pushes to exactly one URL")
 	}
 	if refusal := pushURLRefusal(remote, strings.TrimSpace(pushURLs[0]), cred); refusal != nil {
 		return pushTarget{}, refusal
@@ -1053,7 +1051,8 @@ func (s *GitService) gitConfigValues(top string, cred gitCreds, key string) ([]s
 		if gitExitCode(err) == 1 {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("failed to read %s: %w", key, err)
+		// key names the branch, read raw from symbolic-ref.
+		return nil, fmt.Errorf("failed to read %s: %w", redactToken(key, cred.token), err)
 	}
 	return strings.Split(v, "\n"), nil
 }
@@ -1071,12 +1070,12 @@ var (
 // schemes and <transport>:: helpers are refused.
 func pushURLRefusal(remote, u string, cred gitCreds) error {
 	unsupported := models.NewAppError(http.StatusConflict, models.ErrGitPushURLUnsupported,
-		"Remote "+remote+" uses a transport Capstan does not push over; use https, http, file, ssh or a local path")
+		"Remote "+redactToken(remote, cred.token)+" uses a transport Capstan does not push over; use https, http, file, ssh or a local path")
 	if u == "" || transportHelperRe.MatchString(u) {
 		return unsupported
 	}
 	if isSSHRemoteURL(u) {
-		return sshRemoteRefusal("Remote "+remote+" pushes", cred)
+		return sshRemoteRefusal("Remote "+redactToken(remote, cred.token)+" pushes", cred)
 	}
 	if m := urlSchemeRe.FindStringSubmatch(u); m != nil {
 		switch strings.ToLower(m[1]) {
@@ -1121,7 +1120,7 @@ func (s *GitService) push(top string, cred gitCreds, t pushTarget) (rng string, 
 		case found && (flag == " " || flag == "*"):
 			return summary, false, nil
 		}
-		return "", false, fmt.Errorf("git push exited 0 with an unexpected answer %q", strings.TrimSpace(stdout))
+		return "", false, fmt.Errorf("git push exited 0 with an unexpected answer %q", redactToken(strings.TrimSpace(stdout), cred.token))
 	}
 	if gitExitCode(runErr) < 0 {
 		return "", false, runErr
@@ -1139,7 +1138,7 @@ func (s *GitService) push(top string, cred gitCreds, t pushTarget) (rng string, 
 				"The remote has commits this branch does not have; pull first")
 		}
 		return "", false, models.NewAppErrorWithDetails(http.StatusConflict, models.ErrGitPushRejected,
-			"The remote refused the push: "+summary, runErr.Error())
+			"The remote refused the push: "+redactToken(summary, cred.token), runErr.Error())
 	}
 	return "", false, fmt.Errorf("git push failed: %w", runErr)
 }

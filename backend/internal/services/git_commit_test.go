@@ -802,7 +802,7 @@ func TestParsePorcelainV2(t *testing.T) {
 		"2 R. N... 100644 100644 100644 abc abc R100 new name\x00old name\x00" +
 		"u UU N... 100644 100644 100644 100644 a b c conflicted\x00" +
 		"? untracked\x00"
-	got, err := parsePorcelainV2(out)
+	got, err := parsePorcelainV2(out, "")
 	require.NoError(t, err)
 	assert.Equal(t, []porcelainEntry{
 		{xy: ".M", path: "a dir/file with spaces.yaml"},
@@ -810,9 +810,9 @@ func TestParsePorcelainV2(t *testing.T) {
 		{xy: "UU", path: "conflicted", unmerged: true},
 	}, got)
 
-	_, err = parsePorcelainV2("2 R. N... 100644 100644 100644 abc abc R100 new\x00")
+	_, err = parsePorcelainV2("2 R. N... 100644 100644 100644 abc abc R100 new\x00", "")
 	assert.Error(t, err, "a rename with no original path")
-	_, err = parsePorcelainV2(" M v1 record\x00")
+	_, err = parsePorcelainV2(" M v1 record\x00", "")
 	assert.Error(t, err, "a v1 record")
 }
 

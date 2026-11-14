@@ -362,7 +362,7 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 		output, err := s.gitCommandUnredacted(dirPath, cred,
 			"rev-list", "--left-right", "--count", trackingBranch+"...HEAD")
 		if err != nil {
-			return nil, redactErr(fmt.Errorf("failed to count ahead/behind against %s: %w", trackingBranch, err), cred.token)
+			return nil, fmt.Errorf("failed to count ahead/behind against %s: %w", redactToken(trackingBranch, cred.token), err)
 		}
 		// A FIELD COUNT OTHER THAN TWO IS NOW AN ERROR (agent-os-vwi7), where it
 		// used to skip the block silently and leave ahead=0/behind=0 standing.
@@ -387,8 +387,8 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 		// into a 500.
 		parts := strings.Fields(output)
 		if len(parts) != 2 {
-			return nil, redactErr(fmt.Errorf("rev-list --left-right --count against %s answered %d fields, want 2: %q",
-				trackingBranch, len(parts), output), cred.token)
+			return nil, fmt.Errorf("rev-list --left-right --count against %s answered %d fields, want 2: %q",
+				redactToken(trackingBranch, cred.token), len(parts), redactToken(output, cred.token))
 		}
 		// Both parsed or neither: GitStatus.tsx renders each count with
 		// `{gitStatus.ahead > 0 && ...}`, so a 0 salvaged from an
@@ -398,11 +398,11 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 		// field that is not one is a real fault, not a missing upstream.
 		behind, err = strconv.Atoi(parts[0])
 		if err != nil {
-			return nil, redactErr(fmt.Errorf("failed to parse behind count %q: %w", parts[0], err), cred.token)
+			return nil, fmt.Errorf("failed to parse behind count %q: %w", redactToken(parts[0], cred.token), redactErr(err, cred.token))
 		}
 		ahead, err = strconv.Atoi(parts[1])
 		if err != nil {
-			return nil, redactErr(fmt.Errorf("failed to parse ahead count %q: %w", parts[1], err), cred.token)
+			return nil, fmt.Errorf("failed to parse ahead count %q: %w", redactToken(parts[1], cred.token), redactErr(err, cred.token))
 		}
 	}
 
@@ -517,10 +517,13 @@ func (s *GitService) gitCommandUnredacted(dirPath string, cred gitCreds, args ..
 	return strings.TrimSpace(stdout.String()), nil
 }
 
-// redactErr masks token in err's text for a message built from raw git
-// output (agent-os-9wwa), and keeps err in the chain, so errors.As and
+// redactErr masks token in err's text (agent-os-9wwa), and keeps err in the
+// chain, so errors.As and
 // gitExitCode still see what it wraps. An error that does not hold the token
-// is returned as it is.
+// is returned as it is. It is a backstop for errors built elsewhere: a
+// message this package builds from a raw value masks that value BEFORE
+// formatting it, because %q and boundedPath escape or cut a token, and a
+// finished string no longer holds it whole.
 //
 // An *models.AppError is copied with its message and a string Details masked:
 // a handler renders those fields, not Error(), so wrapping it would leave the
@@ -597,7 +600,9 @@ func (s *GitService) dirtyPullMessage(dirPath string, cred gitCreds) string {
 	if !ok {
 		return genericDirtyPullMessage
 	}
-	return redactToken(submoduleDriftMessage(paths), cred.token)
+	// Each path is masked before %q quotes it: quoting escapes a token that
+	// holds `"` or `\`, which masking the finished message then misses.
+	return submoduleDriftMessage(redactAll(paths, cred.token))
 }
 
 // submoduleDriftMessage names up to maxNamedSubmodules paths, then a count.
@@ -649,12 +654,20 @@ func submoduleDriftPaths(out string) (paths []string, ok bool) {
 	return paths, len(paths) > 0
 }
 
-func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
+// pullCLI pulls dirPath. creds, when given, is the credential the caller already resolved, so the
+// token PullVerified masks with is the one git ran with (agent-os-9wwa).
+// It is optional because the tests call pullCLI(dir) directly.
+func (s *GitService) pullCLI(dirPath string, creds ...gitCreds) (*models.PullResult, error) {
 	slog.Debug("Pulling git changes (CLI)", "path", dirPath)
 
 	// Resolved once for the whole pull and threaded through every call below
 	// (agent-os-9ha) — see getStatusCLI for why.
-	cred := s.gitCredentials(dirPath)
+	var cred gitCreds
+	if len(creds) > 0 {
+		cred = creds[0]
+	} else {
+		cred = s.gitCredentials(dirPath)
+	}
 
 	// A bare repository has no work tree, so `status` below fails with "this
 	// operation must be run in a work tree" and the pull used to answer 500 for
@@ -1112,7 +1125,7 @@ func (s *GitService) PullVerified(dirPath string, redeploy bool, docker *DockerS
 		preplaced = placeSiblings(top, dirPath, repoStacks)
 	}
 
-	pullResult, err := s.pullCLI(dirPath)
+	pullResult, err := s.pullCLI(dirPath, cred)
 	if err != nil {
 		return truth.Failed("git pull failed", err), nil
 	}
@@ -1623,7 +1636,7 @@ func (s *GitService) getLogCLI(dirPath string, limit, offset int) (*models.LogRe
 		// git answered something we cannot read. Discarding it yields total=0
 		// — "this repository has no commits" — beside a log below that
 		// returns some (agent-os-qyg7.1).
-		return nil, redactErr(fmt.Errorf("failed to parse commit count %q: %w", totalStr, err), cred.token)
+		return nil, fmt.Errorf("failed to parse commit count %q: %w", redactToken(totalStr, cred.token), redactErr(err, cred.token))
 	}
 
 	skip := offset
