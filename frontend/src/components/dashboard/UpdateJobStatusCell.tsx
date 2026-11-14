@@ -48,6 +48,18 @@ function resolveDisplayOutcome(job: UpdateJob): Outcome | null {
   return null
 }
 
+/**
+ * The failed tooltip's text. The backend's reason is often generic ("update
+ * apply failed") and the cause is in error, so both are shown when they differ
+ * (agent-os-64ll). error is the job error the backend already sends to this
+ * client and records in the update history.
+ */
+function failureText(job: UpdateJob | undefined): string | undefined {
+  const { reason, error } = job ?? {}
+  if (reason && error && reason !== error) return `${reason}: ${error}`
+  return reason || error
+}
+
 export function UpdateJobStatusCell({
   job,
   expanded,
@@ -64,7 +76,7 @@ export function UpdateJobStatusCell({
       const displayOutcome = job ? resolveDisplayOutcome(job) : null
 
       if (displayOutcome === 'failed') {
-        const errorMsg = job?.reason || job?.error
+        const errorMsg = failureText(job)
         return (
           <TooltipProvider>
             <Tooltip>
@@ -189,7 +201,7 @@ export function UpdateJobStatusCell({
     const displayOutcome = resolveDisplayOutcome(job)
 
     if (displayOutcome === 'failed') {
-      const errorMsg = job.reason || job.error
+      const errorMsg = failureText(job)
       return (
         <TooltipProvider>
           <Tooltip>
