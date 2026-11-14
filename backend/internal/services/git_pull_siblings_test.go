@@ -50,6 +50,7 @@ type siblingsPulled struct {
 	before  string // HEAD before the pull
 	docker  string
 	lock    *OperationLock
+	db      *database.DB
 	tokens  map[string]string
 	changed []siblingWire
 }
@@ -102,7 +103,7 @@ func runSiblings(t *testing.T, c siblingsPull) siblingsPulled {
 	} else {
 		svc.SetOperationLock(lock)
 	}
-	out := siblingsPulled{work: work, before: headOf(t, work), lock: lock, tokens: map[string]string{}}
+	out := siblingsPulled{work: work, before: headOf(t, work), lock: lock, db: db, tokens: map[string]string{}}
 	for _, id := range c.held {
 		tok, err := lock.Acquire(id, OpKindBackup)
 		if err != nil {

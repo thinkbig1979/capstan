@@ -291,10 +291,7 @@ func (h *OperationsHandler) persistStatus(stackID, action string, done services.
 	if done.Status != "" {
 		ar.Details = map[string]any{"status": done.Status}
 	}
-	status := lifecycleStatus(ar)
-	if err := h.db.UpdateStackStatus(stackID, status); err != nil {
-		slog.Warn("Failed to persist verified stack status", "stackID", stackID, "status", status, "error", err)
-	}
+	services.StoreLifecycleStatus(h.db, stackID, ar)
 }
 
 // logRun writes a streamed run's action-log row. The detail carries the same

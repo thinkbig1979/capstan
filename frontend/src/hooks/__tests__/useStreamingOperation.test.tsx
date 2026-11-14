@@ -227,7 +227,7 @@ describe('useStreamingOperation — race condition guard (finding #18)', () => {
 
 // ─── Connection lost (agent-os-s3fo) ──────────────────────────────────────────
 // The socket's URL is the command, so it must never re-dial. A close with no
-// done or error frame is a lost connection: an unknown outcome, never an
+// done frame is a lost connection: an unknown outcome, never an
 // assumed failure (finding #18), with the stack's status refetched.
 
 const CONNECTION_LOST = 'Connection lost. The operation may still be running; check the stack status.'
@@ -280,18 +280,22 @@ describe('useStreamingOperation — connection lost', () => {
     expect(result.current.lines.at(-1)).toBe(CONNECTION_LOST)
   })
 
-  it('an error FRAME (the command really failed) then close stays error', () => {
+  // agent-os-x588: the operation stream's only error frame is a scanner error
+  // (docker_lifecycle.go), always followed by the run's done frame. Without
+  // that done frame the run may still be going on the server, so a close
+  // after an error frame is a lost connection, not a definite failure.
+  it('x588: an error frame then a close with no done frame is a lost connection, not a failure', () => {
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries')
     const { result } = renderOperation()
     act(() => { result.current.execute('my-stack', 'start') })
 
-    act(() => { send({ type: 'error', error: 'compose exploded' }) })
+    act(() => { send({ type: 'error', error: 'line too long' }) })
     act(() => { simulateClose() })
 
-    expect(result.current.status).toBe('error')
-    expect(result.current.error).toBe('compose exploded')
-    expect(result.current.lines).not.toContain(CONNECTION_LOST)
-    // The status is still refetched: the run ended without a verified result.
+    expect(result.current.status).toBe('disconnected')
+    expect(result.current.lines.at(-1)).toBe(CONNECTION_LOST)
+    expect(result.current.lines).toContain('Error: line too long')
+    // The status is refetched: the run ended without a verified result.
     expect(invalidate).toHaveBeenCalled()
   })
 
@@ -429,13 +433,13 @@ describe('useStreamingOperation — finished marks the terminal outcome (ljm0 R2
     expect(result.current.finished).toBe(true)
   })
 
-  it('ljm0R2: an error frame then the socket ending is finished, still error', () => {
+  it('ljm0R2: an error frame then the socket ending is finished, as a lost connection (x588)', () => {
     const { result } = renderOperation()
     act(() => { result.current.execute('my-stack', 'start') })
     act(() => { send({ type: 'error', error: 'compose exploded' }) })
     act(() => { simulateClose() })
 
-    expect(result.current.status).toBe('error')
+    expect(result.current.status).toBe('disconnected')
     expect(result.current.finished).toBe(true)
   })
 

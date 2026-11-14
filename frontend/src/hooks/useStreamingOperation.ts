@@ -18,8 +18,8 @@ import type { Outcome } from '@/types'
  * - partial   : completed with partial success (render as warning)
  * - error     : failed (maps from backend outcome:'failed' or legacy
  *               success:false, or an error frame from the server)
- * - disconnected : the socket closed with no done or error frame, so the
- *               outcome is unknown. The operation may still be running on the
+ * - disconnected : the socket closed with no done frame (an error frame
+ *               before it included, agent-os-x588), so the outcome is unknown. The operation may still be running on the
  *               server; the stack's queries are refetched (agent-os-s3fo).
  */
 export type OperationStatus = 'idle' | 'running' | 'success' | 'no_change' | 'partial' | 'error' | 'disconnected'
@@ -128,9 +128,6 @@ export function useStreamingOperation(): StreamingOperation {
     setStatus('running')
     setFinished(false)
     completedRef.current = false
-    // An error frame is the server saying the command failed; a close after
-    // it is not a lost connection.
-    let errorFrame = false
 
     // The URL is the command: the server runs it on every upgrade, so this
     // socket must never re-dial (agent-os-s3fo). clientRef keeps the client
@@ -190,7 +187,8 @@ export function useStreamingOperation(): StreamingOperation {
             client.close()
             clientRef.current = null
           } else if (msg.type === 'error') {
-            errorFrame = true
+            // Not the end of the run: the stream's only error frame is a
+            // scanner error, and the done frame still follows it.
             setStatus('error')
             const errMsg = error ?? 'Unknown error'
             setError(errMsg)
@@ -216,9 +214,11 @@ export function useStreamingOperation(): StreamingOperation {
               queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
             },
           })
-          if (!completedRef.current && !errorFrame) {
-            // Leaves 'running', so the page's Start/Stop/Restart/Pull
-            // buttons are enabled again.
+          if (!completedRef.current) {
+            // No done frame, so the run may still be going on the server,
+            // even after an error frame (agent-os-x588). Leaves 'running' and
+            // 'error', so the page's Start/Stop/Restart/Pull buttons are
+            // enabled again and nothing reports a failure it did not see.
             setStatus('disconnected')
             setLines(prev => [...prev, CONNECTION_LOST])
           }

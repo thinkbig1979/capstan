@@ -567,6 +567,10 @@ export function useBackupStreaming(): BackupStreamState {
             setStatus('error')
             setError('Connection lost, reconnect failed')
           }
+          // The ladder is spent: close the client, or its online and
+          // visibilitychange listeners start a new ladder on every tab focus
+          // (agent-os-lgzv). The run history still shows how the run ended.
+          closeIncompleteRun()
         },
       },
     )

@@ -364,8 +364,16 @@ func refusedCompose(err error) truth.ActionResult {
 	if errors.Is(err, errdefs.ErrAmbiguous) {
 		reason += "; give each stack its own compose project name"
 	}
-	return truth.Failed(reason, err)
+	return truth.Failed(reason, composeRefusedError{err})
 }
+
+// composeRefusedError marks a refused compose: nothing ran, so the stack's
+// stored status must not change (StoreLifecycleStatus, agent-os-vush). It
+// reads and unwraps as its cause, so errors.Is(err, errdefs.ErrAmbiguous) and
+// the error text are what they were.
+type composeRefusedError struct{ error }
+
+func (e composeRefusedError) Unwrap() error { return e.error }
 
 // trimOutput returns a truncated copy of output for use in ActionResult.Details.
 func trimOutput(s string) string {
