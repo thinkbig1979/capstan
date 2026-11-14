@@ -209,3 +209,25 @@ func TestGlobalEnvColon_MultilineValueChangeRefused(t *testing.T) {
 	require.Equal(t, http.StatusNoContent, putGlobalVars(t, router, []map[string]string{{"key": "B", "value": "1"}}).Code, "a delete still works")
 	assert.Equal(t, "B=1\n", readGlobalEnvTestFile(t, p))
 }
+
+// Review F1: the parser keys "export A=1" as "export A" (the key the page
+// shows and sends back) while compose's dotenv reads it as A, so the C4
+// re-read must look the value up under compose's key. Every export row is
+// edited; the 1c017b1 behaviour (before C4) is the expected output.
+func TestGlobalEnvColon_ExportRowsEditable(t *testing.T) {
+	dataDir, router := globalEnvTestRouter(t)
+	p := writeGlobalEnvFile(t, dataDir, "export A=1\nexport B: 2\nexport C\n")
+	vars, _ := getGlobalVars(t, router, "/unlocked")
+	require.Len(t, vars, 3)
+	for _, v := range vars {
+		v["value"] = "x"
+	}
+	w := putGlobalVars(t, router, vars)
+	require.Equal(t, http.StatusNoContent, w.Code, w.Body.String())
+	assert.Equal(t, "export A=x\nB=x\nC=x\n", readGlobalEnvTestFile(t, p))
+
+	// The quote-shape refusal still holds for an export row.
+	w = putGlobalVars(t, router, []map[string]string{{"key": "export A", "value": `"open`}, {"key": "B", "value": "x"}, {"key": "C", "value": "x"}})
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	assert.Equal(t, "export A=x\nB=x\nC=x\n", readGlobalEnvTestFile(t, p), "nothing written")
+}

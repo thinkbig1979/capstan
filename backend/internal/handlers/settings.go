@@ -477,7 +477,12 @@ func globalValueReadsAsOne(key, value string) bool {
 	if err != nil || len(vars) != 1 {
 		return false
 	}
-	_, ok := vars[key]
+	// The parser keys "export A=1" as "export A"; compose reads it as A (review F1).
+	composeKey, ok := composeLineKey(line)
+	if !ok {
+		return false
+	}
+	_, ok = vars[composeKey]
 	return ok
 }
 
@@ -521,6 +526,9 @@ func mergeGlobalEnv(current string, req []EnvEntry) (string, error) {
 			// The page edits a value in a one-line field, which drops the
 			// line breaks of a multi-line value (review C2): an edit of one
 			// would rewrite it as a different value, and add variables.
+			// Rows of one key match in order, so deleting the multi-line
+			// copy of a duplicated key (A="x\ny" then A=2) pairs the kept
+			// A=2 with the multi-line row and is refused too (review F2).
 			if strings.Contains(fileVars[q[0]]["value"], "\n") {
 				return "", fmt.Errorf("entry at index %d (key %q) is a multi-line value, which cannot be edited on this page; edit global.env directly", i, r.Key)
 			}
