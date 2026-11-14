@@ -126,15 +126,15 @@ export function AutoCleanupPanel({ ready = true }: { ready?: boolean } = {}) {
     if (!el || !hasPolicy || !ready || handledRequest.current === scrollRequest) return
     handledRequest.current = scrollRequest
     const scroller = scrollerOf(el)
-    // The panel's top lands where the page content starts: main's top, which
-    // sits just under the sticky header when the document scrolls. Without a
-    // main, the scroller's own top (the window's for the document).
-    const contentTop =
-      el.closest('main')?.getBoundingClientRect().top ??
-      (scroller === document.scrollingElement || scroller === document.documentElement
+    // The panel's top lands at the scroller's top: the window's top (0) for the
+    // document, whose header scrolls away with it; an element's own top
+    // otherwise. Both stay put while that scroller scrolls, so the result does
+    // not depend on where it started (agent-os-8hfa).
+    const scrollerTop =
+      scroller === document.scrollingElement || scroller === document.documentElement
         ? 0
-        : scroller.getBoundingClientRect().top)
-    scroller.scrollTop += el.getBoundingClientRect().top - contentTop
+        : scroller.getBoundingClientRect().top
+    scroller.scrollTop += el.getBoundingClientRect().top - scrollerTop
   }, [scrollRequest, hasPolicy, ready])
 
   const handleRun = async () => {

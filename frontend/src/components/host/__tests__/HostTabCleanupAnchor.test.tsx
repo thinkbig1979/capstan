@@ -69,7 +69,9 @@ function makeSummary(): HostSummary {
 }
 
 // The panel's distance from the top of <main>: 300 px while the skeleton is
-// above it, 900 px once the disk section and the five cards have rendered.
+// above it, 900 px once the disk section and the five cards have rendered. The
+// mocked rects move with the scroll, as real ones do: scrolling the document
+// moves main and the panel up; scrolling main moves only the panel.
 let summaryLoaded = false
 type ScrollTarget = 'main' | 'document'
 const scrolls: { target: ScrollTarget; to: number; summaryLoaded: boolean }[] = []
@@ -95,7 +97,11 @@ beforeEach(() => {
   summaryLoaded = false
   scrolls.length = 0
   vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
-    const top = this.id === 'automatic-cleanup' ? (summaryLoaded ? 900 : 300) : 0
+    const docY = documentScroller().scrollTop
+    const mainY = document.querySelector('main')?.scrollTop ?? 0
+    let top = 0
+    if (this.id === 'automatic-cleanup') top = (summaryLoaded ? 900 : 300) - docY - mainY
+    else if (this.tagName === 'MAIN') top = -docY
     return { top, left: 0, right: 0, bottom: top, width: 0, height: 0, x: 0, y: top, toJSON: () => ({}) } as DOMRect
   })
 })
@@ -145,6 +151,22 @@ describe('HostTab #automatic-cleanup (AC8)', () => {
     summaryLoaded = true
     resolve(makeSummary())
     await screen.findByTestId('host-disk-bar')
+    await waitFor(() => expect(scrolls).toEqual([{ target: 'document', to: 900, summaryLoaded: true }]))
+  })
+
+  it('lands on the panel when the document was already scrolled, not past it', async () => {
+    let resolve!: (s: HostSummary) => void
+    hostSummary.mockReturnValue(new Promise<HostSummary>((r) => (resolve = r)))
+    renderAt('/?tab=host#automatic-cleanup')
+    await screen.findByText('On')
+    documentScroller().scrollTop = 400
+    scrolls.length = 0
+
+    summaryLoaded = true
+    resolve(makeSummary())
+    await screen.findByTestId('host-disk-bar')
+    // The panel sits 900 px down the page, so the document scrolls to 900,
+    // whatever it started at.
     await waitFor(() => expect(scrolls).toEqual([{ target: 'document', to: 900, summaryLoaded: true }]))
   })
 

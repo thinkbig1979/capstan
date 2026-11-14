@@ -120,8 +120,10 @@ async function openFreeUpDialog(page: Page) {
 
 /**
  * Where #automatic-cleanup sits: 'in view' when its top is inside main's
- * VISIBLE box, i.e. main's rect clipped to the window and kept below the sticky
- * header. main's rect alone is not enough: when the document scrolls instead of
+ * VISIBLE box, i.e. main's rect clipped to the window and kept below the header
+ * while the header is on screen (it scrolls away with the document: its column
+ * is overflow-hidden, so sticky does not hold against the page scroll). main's
+ * rect alone is not enough: when the document scrolls instead of
  * main, main's rect runs past the window and any top would count as inside it.
  */
 function cleanupPanelPlace(page: Page): Promise<string> {
@@ -135,6 +137,28 @@ function cleanupPanelPlace(page: Page): Promise<string> {
     const visibleTop = Math.max(box.top, headerBottom, 0)
     const visibleBottom = Math.min(box.bottom, window.innerHeight)
     return top >= visibleTop - 1 && top < visibleBottom ? 'in view' : `top ${top} outside ${visibleTop}..${visibleBottom}`
+  })
+}
+
+/**
+ * "Change timing" shows only when the stored policy is on and already covers
+ * every ticked row. The policy read is answered here rather than switched on
+ * for real: an enabled policy would let this backend run cleanup on the host.
+ */
+async function fakeCoveringPolicy(page: Page): Promise<void> {
+  const policyResp = await page.request.get(`${API_URL}/api/v1/resources/cleanup/policy`)
+  expect(policyResp.status(), 'GET cleanup policy').toBe(200)
+  const policy = await policyResp.json()
+  await page.route('**/api/v1/resources/cleanup/policy', async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback()
+    await route.fulfill({
+      status: 200,
+      json: {
+        ...policy,
+        enabled: true,
+        categories: { danglingImages: true, unusedImages: true, buildCache: true, containers: true, volumes: false, networks: false },
+      },
+    })
   })
 }
 
@@ -204,27 +228,37 @@ test.describe('Host tab', () => {
 
   test('HOST-NAV-005: the Free up dialog\'s "Change timing" scrolls to the panel', async ({ page }) => {
     createLeftoverContainer() // reclaimable > 0, so the Free up button is enabled
-    // "Change timing" shows only when the stored policy is on and already covers
-    // every ticked row. The policy read is answered here rather than switched on
-    // for real: an enabled policy would let this backend run cleanup on the host.
-    const policyResp = await page.request.get(`${API_URL}/api/v1/resources/cleanup/policy`)
-    expect(policyResp.status(), 'GET cleanup policy').toBe(200)
-    const policy = await policyResp.json()
-    await page.route('**/api/v1/resources/cleanup/policy', async (route) => {
-      if (route.request().method() !== 'GET') return route.fallback()
-      await route.fulfill({
-        status: 200,
-        json: {
-          ...policy,
-          enabled: true,
-          categories: { danglingImages: true, unusedImages: true, buildCache: true, containers: true, volumes: false, networks: false },
-        },
-      })
-    })
+    await fakeCoveringPolicy(page)
 
     const dialog = await openFreeUpDialog(page)
     await expect(cleanupPanelPlace(page)).resolves.not.toBe('in view')
     await dialog.getByTestId('free-space-auto-covered').getByRole('link', { name: 'Change timing' }).click()
+    await expect(dialog).toHaveCount(0)
+    await expect(page).toHaveURL(/\/\?tab=host#automatic-cleanup$/)
+    await expect.poll(() => cleanupPanelPlace(page)).toBe('in view')
+  })
+
+  test('HOST-NAV-006: "Change timing" from an already scrolled page lands on the panel, not past it', async ({
+    page,
+  }) => {
+    createLeftoverContainer()
+    await fakeCoveringPolicy(page)
+    await openAndSettle(page, '/?tab=host')
+    // A window short enough that the page end does not absorb an overshoot:
+    // the panel is the page's last block, so at taller sizes a scroll that goes
+    // too far is cut off at the end of the page and the panel still shows.
+    await page.setViewportSize({ width: 1280, height: 200 })
+    await page.evaluate(() => {
+      document.scrollingElement!.scrollTop = 80
+    })
+    // Clicks dispatched in the page: Playwright's own click would first scroll
+    // its target into view and change the starting offset under test.
+    await page.getByTestId('host-free-space-button').dispatchEvent('click')
+    const dialog = page.getByRole('dialog', { name: 'Free up space' })
+    const changeTiming = dialog.getByTestId('free-space-auto-covered').getByRole('link', { name: 'Change timing' })
+    await expect(changeTiming).toBeVisible()
+    expect(await page.evaluate(() => document.scrollingElement!.scrollTop), 'starting offset').toBe(80)
+    await changeTiming.dispatchEvent('click')
     await expect(dialog).toHaveCount(0)
     await expect(page).toHaveURL(/\/\?tab=host#automatic-cleanup$/)
     await expect.poll(() => cleanupPanelPlace(page)).toBe('in view')
