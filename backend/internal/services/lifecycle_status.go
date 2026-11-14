@@ -60,8 +60,8 @@ type StackStatusReader interface {
 	Status(stack models.Stack) (string, []models.Container, error)
 }
 
-// The scheduler finds the reader by asserting its update checker to this
-// interface, so *DockerService must keep satisfying it.
+// The handlers' update seam and the scheduler's updateChecker both require
+// it of *DockerService.
 var _ StackStatusReader = (*DockerService)(nil)
 
 // StoreObservedStackStatus stores the stack's status as Docker reports it

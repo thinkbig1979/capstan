@@ -39,9 +39,12 @@ var (
 )
 
 // updateChecker is the narrow interface scheduler needs from DockerService.
+// Status is required, not asserted, so the stack status an auto-update stores
+// cannot be skipped by a checker that lacks it (agent-os-txqx).
 type updateChecker interface {
 	CheckForUpdates(ctx context.Context, db DashboardDB) ([]models.ContainerUpdateInfo, error)
 	UpdateContainer(ctx context.Context, containerID string, db DashboardDB) (models.UpdateResult, truth.ActionResult)
+	StackStatusReader
 }
 
 // containerInspector is the extra capability the SCHEDULED apply path needs and
@@ -1594,14 +1597,9 @@ func (s *SchedulerService) runAutoUpdates(ctx context.Context, updates []models.
 
 // storeStackStatusAfterUpdate stores the status of the stack an auto-update
 // touched, re-read from Docker, under the update's lock (agent-os-txqx). A
-// container in no stack, or a checker that cannot read a stack's status (the
-// test fakes), stores nothing.
+// container in no stack stores nothing.
 func (s *SchedulerService) storeStackStatusAfterUpdate(stackID string, ar truth.ActionResult) {
 	if stackID == "" {
-		return
-	}
-	reader, ok := s.docker.(StackStatusReader)
-	if !ok {
 		return
 	}
 	stack, err := s.db.GetStack(stackID)
@@ -1609,5 +1607,5 @@ func (s *SchedulerService) storeStackStatusAfterUpdate(stackID string, ar truth.
 		s.logger.Warn("Could not load the stack an auto-update touched; its stored status is unchanged", "stackID", stackID, "error", err)
 		return
 	}
-	StoreObservedStackStatus(s.db, reader, *stack, ar)
+	StoreObservedStackStatus(s.db, s.docker, *stack, ar)
 }
