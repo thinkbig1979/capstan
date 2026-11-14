@@ -302,21 +302,36 @@ func (h *SettingsHandler) GetGlobalEnv(c *gin.Context) {
 		))
 		return
 	}
-	envVars := parseGlobalEnvText(string(data))
-
 	// Same second factor as the per-stack .env surface: without a live unlock
 	// token, secret-looking values are blanked. Global env routinely holds the
 	// credentials every stack shares, so leaving it ungated would just move the
 	// hole one endpoint sideways.
 	locked := !envUnlocked(c)
-	if locked {
-		redactGlobalEnvVars(envVars, string(data))
+	c.JSON(http.StatusOK, GlobalEnvResponse{Vars: globalEnvResponseVars(string(data), locked), Locked: locked})
+}
+
+// globalEnvResponseVars is the global env page's rows over the file's text,
+// redacted for a locked session. Each row carries its flags whether locked or
+// not: Sensitive is the locked view's rule (agent-os-ruuw), taken from the
+// entries redacted as a locked GET redacts them, on a copy.
+func globalEnvResponseVars(text string, locked bool) []GlobalEnvVar {
+	entries := (&EnvHandler{}).parseEnvFile(text)
+	vars, from := globalEnvVars(entries)
+
+	redacted := EnvResponse{Raw: text, Entries: slices.Clone(entries)}
+	redactEnvResponse(&redacted)
+	out := make([]GlobalEnvVar, len(vars))
+	for i, v := range vars {
+		out[i].Sensitive = globalEnvVarSensitive(redacted.Entries[from[i]], v)
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"vars":   envVars,
-		"locked": locked,
-	})
+	if locked {
+		redactGlobalEnvVars(vars, text)
+	}
+	for i, v := range vars {
+		out[i].Key, out[i].Value = v["key"], v["value"]
+	}
+	return out
 }
 
 func (h *SettingsHandler) UpdateGlobalEnv(c *gin.Context) {

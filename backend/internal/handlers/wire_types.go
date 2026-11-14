@@ -86,6 +86,27 @@ type EnvResponse struct {
 	Locked     bool       `json:"locked,omitempty"`
 }
 
+// GlobalEnvVar is one variable of GET /settings/global-env. Value is the text
+// compose reads after the separator, quotes and an inline comment included.
+//
+// Sensitive marks a value the locked view blanks (agent-os-ruuw): a secret
+// key, or a secret-shaped value under any key. It is set on locked and
+// unlocked responses alike, so the page masks by it rather than by the key's
+// name alone.
+type GlobalEnvVar struct {
+	Key       string `json:"key"`
+	Value     string `json:"value"`
+	Sensitive bool   `json:"sensitive,omitempty"`
+}
+
+// GlobalEnvResponse is the wire shape of GET /settings/global-env. Locked
+// means the session has not re-entered its password and sensitive values are
+// blanked.
+type GlobalEnvResponse struct {
+	Vars   []GlobalEnvVar `json:"vars"`
+	Locked bool           `json:"locked"`
+}
+
 // BuildCacheEntry is our own wire representation of a Docker build-cache
 // record.
 //

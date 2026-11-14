@@ -114,7 +114,10 @@ password is checked.
   fields)
 - `GET /api/v1/settings/global-env` / `PUT /api/v1/settings/global-env` —
   read/write the global `.env` overlay applied across stacks. Gated by
-  `X-Unlock-Token` — see [Secret reveal](#secret-reveal)
+  `X-Unlock-Token` — see [Secret reveal](#secret-reveal). Each `GET` row is
+  `{key, value}` plus `sensitive: true` when a locked `GET` blanks its value
+  (a secret key, or a secret-shaped value such as a private key or a URL with
+  a password, under any key)
 - `GET /api/v1/settings/log-retention` / `PUT /api/v1/settings/log-retention`
   — log retention policy
 - `GET /api/v1/settings/updates` / `PUT /api/v1/settings/updates` —

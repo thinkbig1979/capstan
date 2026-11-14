@@ -56,6 +56,7 @@ import type {
 } from '@/types/generated-services'
 import type { VolumePruneScope } from '@/types/generated-services'
 import type { Directory, GitChangeDiff, GitChangesResult } from '@/types/generated'
+import type { GlobalEnvResponse } from '@/types/generated-handlers'
 
 /**
  * LifecycleResult is the wire type for stack start/stop/restart/pull responses.
@@ -266,7 +267,7 @@ export interface GitSettingsResponse {
 
 export const settingsApi = {
   getGlobalEnv: async () => {
-    const response = await apiClient.get<{ vars: Array<{ key: string; value: string }>; locked?: boolean }>('/settings/global-env')
+    const response = await apiClient.get<GlobalEnvResponse>('/settings/global-env')
     return response.data
   },
 

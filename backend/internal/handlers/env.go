@@ -391,7 +391,7 @@ func redactGlobalEnvVars(vars []map[string]string, raw string) {
 		switch {
 		case !ok:
 			v["key"], v["value"] = "", ""
-		case resp.Entries[from[i]].Sensitive || services.IsSensitiveEnvVar(v["key"], v["value"]):
+		case globalEnvVarSensitive(resp.Entries[from[i]], v):
 			v["key"], v["value"] = red["key"], ""
 		default:
 			v["key"], v["value"] = red["key"], red["value"]

@@ -79,9 +79,10 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   const { historyIndex, historyLength, snapshots, pushToHistory, handleUndo, handleRedo, resetHistory, rebaseHistory } =
     useEnvHistory({ setEntries, setRawContent, setHasUnsavedChanges })
 
-  // Re-masks sensitive-by-name entries when the unlock session ends (manual
-  // lock or auto-expiry) — see useEnvUnlockRemask for the render-time detail.
-  useEnvUnlockRemask(unlockedUntil, setEntries)
+  // Re-masks revealed entries when the unlock session ends (manual lock or
+  // auto-expiry) — see useEnvUnlockRemask for which ones and the render-time
+  // detail.
+  useEnvUnlockRemask(unlockedUntil, setEntries, entries)
 
   const {
     unlockDialogOpen,

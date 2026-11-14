@@ -51,11 +51,20 @@ func getGlobalVars(t *testing.T, router http.Handler, path string) ([]map[string
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	// Key and value only: the flags (sensitive, readOnly) are booleans, read
+	// with getGlobalVarRows.
 	var resp struct {
-		Vars []map[string]string `json:"vars"`
+		Vars []struct {
+			Key   string `json:"key"`
+			Value string `json:"value"`
+		} `json:"vars"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	return resp.Vars, w.Body.String()
+	vars := make([]map[string]string, len(resp.Vars))
+	for i, v := range resp.Vars {
+		vars[i] = map[string]string{"key": v.Key, "value": v.Value}
+	}
+	return vars, w.Body.String()
 }
 
 func putGlobalVars(t *testing.T, router http.Handler, vars []map[string]string) *httptest.ResponseRecorder {

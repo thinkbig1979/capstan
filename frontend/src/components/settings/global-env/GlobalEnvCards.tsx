@@ -2,7 +2,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Eye, EyeOff, Trash2 } from 'lucide-react'
 import { isSensitiveKey } from '@/components/stack/env-editor/sensitiveKey'
-import type { EnvVar, IndexedEnvVar } from './types'
+import type { EditableField, IndexedEnvVar } from './types'
 import { MultilineValue } from './MultilineValue'
 
 interface GlobalEnvCardsProps {
@@ -10,7 +10,7 @@ interface GlobalEnvCardsProps {
   filtered: IndexedEnvVar[]
   query: string
   visible: Record<number, boolean>
-  onChange: (index: number, field: keyof EnvVar, value: string) => void
+  onChange: (index: number, field: EditableField, value: string) => void
   onToggleVisible: (index: number) => void
   onDelete: (index: number) => void
 }
@@ -37,7 +37,9 @@ export function GlobalEnvCards({
       ) : (
         filtered.map((entry) => {
           const index = entry._originalIndex
-          const sensitive = isSensitiveKey(entry.key)
+          // The server's flag covers a secret value under a harmless key
+          // (agent-os-ruuw); the name covers a key typed since the last load.
+          const sensitive = entry.sensitive === true || isSensitiveKey(entry.key)
           const reveal = !!visible[index]
           const multiline = entry.value.includes('\n')
           return (

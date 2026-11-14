@@ -99,7 +99,9 @@ Variables applied to every stack. Docker Compose loads them before a stack's own
 
 - **Changes apply on the next stack restart.** Running stacks keep their old values.
 - **Secrets are masked.** Keys that look like passwords, tokens or API keys stay
-  hidden. Reveal them by entering your password, which unlocks values for 5 minutes.
+  hidden, and so do values that look like secrets (a private key, a URL with a
+  password) under any key. Reveal them by entering your password, which unlocks
+  values for 5 minutes.
 - **A stack's own `.env` wins** when both define the same key.
 
 ## Git
