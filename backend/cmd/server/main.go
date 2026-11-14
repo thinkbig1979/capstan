@@ -214,11 +214,19 @@ func recordUpdateSchedulerNotStarted(db schedulerSettings, log *slog.Logger, rea
 // interface would be a non-nil interface value.
 type updateScheduler interface {
 	Start(interval time.Duration)
+	RekeyLegacyContainerPoliciesInBackground()
 }
 
 // startUpdateScheduler arms the update scan scheduler from persisted settings
-// and reports whether it started.
-func startUpdateScheduler(sched updateScheduler, db schedulerSettings, log *slog.Logger) bool {
+// and reports whether it started. When it does not start, the container-ID
+// policy re-key that Start would have run is started on its own
+// (agent-os-6w3x), so those policies are not left matching nothing.
+func startUpdateScheduler(sched updateScheduler, db schedulerSettings, log *slog.Logger) (started bool) {
+	defer func() {
+		if !started {
+			sched.RekeyLegacyContainerPoliciesInBackground()
+		}
+	}()
 	intervalStr, err := db.GetSetting("update_scan_interval")
 	if err != nil {
 		// This branch and the update_apply_mode branch below fail TOGETHER,

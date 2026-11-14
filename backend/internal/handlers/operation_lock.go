@@ -51,7 +51,9 @@ type stackLister interface {
 // busy sharer answers 409 naming it by project name. The sharers are found
 // again once every lock is held, since a link in another stack's folder may
 // have moved before its lock was taken; a different set answers 409 too. A
-// fault while finding them answers 500: guessing would under-lock. Every
+// fault while finding them answers 500: guessing would under-lock. A file the
+// save writes that is a link loop answers the write helper's 409 refusal
+// naming the link, since no save of it can succeed (agent-os-19kr). Every
 // refusal releases what was already taken; the release returned on success
 // frees everything and is safe to call more than once.
 func lockStacksSharingFiles(c *gin.Context, lock *services.OperationLock, db stackLister, stack *models.Stack, kind string, paths ...string) (release func(), ok bool) {
@@ -65,8 +67,7 @@ func lockStacksSharingFiles(c *gin.Context, lock *services.OperationLock, db sta
 	sharers, err := stacksSharingFiles(db, stack.ID, paths)
 	if err != nil {
 		releaseOwn()
-		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR",
-			"Failed to check which stacks share this stack's files", err))
+		handleError(c, writeFailureError(err, "INTERNAL_ERROR", "Failed to check which stacks share this stack's files"))
 		return nil, false
 	}
 	releaseSharers, busy, err := lockEach(lock, sharers, kind)
@@ -83,8 +84,7 @@ func lockStacksSharingFiles(c *gin.Context, lock *services.OperationLock, db sta
 	again, err := stacksSharingFiles(db, stack.ID, paths)
 	if err != nil {
 		releaseAll()
-		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR",
-			"Failed to check which stacks share this stack's files", err))
+		handleError(c, writeFailureError(err, "INTERNAL_ERROR", "Failed to check which stacks share this stack's files"))
 		return nil, false
 	}
 	if !slices.EqualFunc(sharers, again, func(a, b models.Stack) bool { return a.ID == b.ID }) {
@@ -141,6 +141,23 @@ func stacksSharingFiles(db stackLister, selfID string, paths []string) ([]models
 				return nil, err
 			}
 			targets = append(targets, sharedTarget{resolved: resolved})
+		case errors.Is(err, syscall.ELOOP):
+			// The save's own file is a link loop (agent-os-19kr): answer the
+			// refusal the write helper gives a link it cannot follow. Only when
+			// the file is a link and EvalSymlinks fails too: a chain of 41-255
+			// links is ELOOP to the kernel but followed by EvalSymlinks, and a
+			// loop in a parent folder or a file gone since the Stat are not this
+			// link's fault. Those stay the 500 below.
+			li, lerr := os.Lstat(p)
+			if lerr != nil {
+				return nil, lerr
+			}
+			if li.Mode()&os.ModeSymlink != 0 {
+				if _, evalErr := filepath.EvalSymlinks(p); evalErr != nil && !errors.Is(evalErr, os.ErrNotExist) {
+					return nil, unfollowableLinkRefusal(filepath.Base(p), evalErr)
+				}
+			}
+			return nil, err
 		default:
 			return nil, err
 		}
