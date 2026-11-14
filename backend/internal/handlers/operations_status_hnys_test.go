@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -43,6 +44,8 @@ func TestOperationsPersistStatus_Hnys(t *testing.T) {
 		want   string
 	}{
 		{"stop succeeds", "stop", map[string]services.StreamLine{"down": doneStoppedHnys}, "stopped"},
+		// Seeded "stopped" below, so a run that writes nothing cannot pass.
+		{"restart succeeds", "restart", map[string]services.StreamLine{"down": doneStoppedHnys, "up": doneRunningHnys}, "running"},
 		{"start fails", "start", map[string]services.StreamLine{"up": doneFailedHnys}, "error"},
 		// The early return when the stop phase fails is its own exit path.
 		{"restart fails at stop", "restart", map[string]services.StreamLine{"down": doneFailedHnys, "up": doneRunningHnys}, "error"},
@@ -57,6 +60,9 @@ func TestOperationsPersistStatus_Hnys(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, db := newOperationsFixtureWith(t, NewConnectionManager(5), &scriptedStreamer{done: tc.done})
+			if tc.action == "restart" && tc.want == "running" {
+				require.NoError(t, db.UpdateStackStatus("stack-a", "stopped"))
+			}
 
 			dialOperations(t, srv, "stack-a", tc.action)
 
@@ -133,4 +139,46 @@ func TestOperationsPersistStatusAfterClientLeaves_Hnys(t *testing.T) {
 	}
 
 	require.Equal(t, "stopped", storedStatusHnys(t, db))
+}
+
+// Review R1: a run RunStreaming refuses before compose starts (here: a compose
+// project name two stacks share) stores nothing, as REST's
+// refuseSharedProjectName stores nothing. Real DockerService, as main.go wires it.
+func TestOperationsRefusedRunStoresNothing_Hnys(t *testing.T) {
+	for _, action := range []string{"start", "stop", "restart"} {
+		t.Run(action, func(t *testing.T) {
+			dockerAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasSuffix(r.URL.Path, "/_ping") {
+					w.WriteHeader(http.StatusOK)
+					return
+				}
+				w.WriteHeader(http.StatusNotFound)
+			}))
+			t.Cleanup(dockerAPI.Close)
+			svc := newTestDockerServiceAgainst(t, dockerAPI)
+			db, err := database.NewWithMigrations(":memory:")
+			require.NoError(t, err)
+			t.Cleanup(func() { db.Close() })
+			seedSharedProjectStacks(t, db) // both seeded "running"
+			svc.SetStackLookup(db)
+			router := gin.New()
+			NewOperationsHandler(svc, db, services.NewOperationLock(), NewConnectionManager(5)).
+				RegisterRoutes(router.Group("/api"), "test-secret-key-32-chars-long!!!", true)
+			srv := httptest.NewServer(router)
+			t.Cleanup(srv.Close)
+
+			frames := readOperationFrames(t, srv, "s-alpha", action)
+
+			// Control: the run really was refused, with the reason on the wire.
+			done := framesOfType(frames, "done")
+			require.Len(t, done, 1, "frames: %v", frames)
+			require.Equal(t, "failed", done[0]["outcome"])
+			require.Contains(t, done[0]["reason"], "/srv/stacks/beta")
+			require.NotContains(t, done[0], "refused", "server-only field leaked: %v", done[0])
+
+			stack, err := db.GetStack("s-alpha")
+			require.NoError(t, err)
+			require.Equal(t, "running", stack.Status, "a refused run must not store a status")
+		})
+	}
 }

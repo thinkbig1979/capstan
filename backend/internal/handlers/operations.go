@@ -275,9 +275,10 @@ func (h *OperationsHandler) handleOperation(jwtSecret string, authDisabled bool)
 // lifecycle routes do (agent-os-hnys). It runs on every return path of the
 // streaming body, after the drain, so a run whose client left still records
 // its result. Pull changes no lifecycle state and REST does not store one for
-// it; a run that sent no done frame has no result to store.
+// it; a run that sent no done frame has no result to store; a refused run
+// started nothing, and REST's refusal stores nothing either.
 func (h *OperationsHandler) persistStatus(stackID, action string, done services.StreamLine) {
-	if action == "pull" || done.Type != "done" {
+	if action == "pull" || done.Type != "done" || done.Refused {
 		return
 	}
 	ar := truth.ActionResult{Outcome: done.Outcome}

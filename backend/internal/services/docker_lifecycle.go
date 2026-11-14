@@ -33,6 +33,10 @@ type StreamLine struct {
 	// start/stop/restart done frame. Server-side only: operations.go persists
 	// it the way the REST verbs do (agent-os-hnys); the wire frame is unchanged.
 	Status string `json:"-"`
+	// Refused marks a done frame for a run refused before compose started
+	// (mutatingComposeArgs). Nothing ran, so nothing is persisted, as REST's
+	// refuseSharedProjectName stores nothing (agent-os-hnys review R1).
+	Refused bool `json:"-"`
 }
 
 // lifecycleAction names the lifecycle operations that have a verifiable end state.
@@ -697,7 +701,7 @@ func (s *DockerService) RunStreaming(ctx context.Context, stack models.Stack, su
 			// (agent-os-z91e.38). Error carries the full reason, hint included:
 			// useStreamingOperation shows a failed done frame's error first.
 			ar := refusedCompose(err)
-			out <- StreamLine{Type: "done", Success: false, Error: ar.Reason, Outcome: ar.Outcome, Reason: ar.Reason}
+			out <- StreamLine{Type: "done", Success: false, Error: ar.Reason, Outcome: ar.Outcome, Reason: ar.Reason, Refused: true}
 			return
 		}
 		//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"

@@ -31,10 +31,12 @@ func TestRunStreaming_DoneCarriesVerifiedStatus_Hnys(t *testing.T) {
 
 // The status is for the server only: the done frame's wire shape is unchanged.
 func TestStreamLine_StatusIsNotOnTheWire_Hnys(t *testing.T) {
-	b, err := json.Marshal(StreamLine{Type: "done", Success: true, Outcome: truth.OutcomeSuccess, Status: "stopped"})
+	b, err := json.Marshal(StreamLine{Type: "done", Success: true, Outcome: truth.OutcomeSuccess, Status: "stopped", Refused: true})
 	require.NoError(t, err)
 	var frame map[string]any
 	require.NoError(t, json.Unmarshal(b, &frame))
 	assert.NotContains(t, frame, "status", "frame: %s", b)
+	assert.NotContains(t, frame, "refused", "frame: %s", b)
+	assert.NotContains(t, frame, "Refused", "frame: %s", b)
 	assert.Equal(t, "done", frame["type"], "control: the frame did marshal: %s", b)
 }
