@@ -15,9 +15,11 @@ const ROWS: EnvEntryRow[] = [
   { key: 'TZ', value: 'UTC', sensitive: false, _rowId: 3 },
 ]
 
+const NO_HISTORY = { snapshots: [], rebase: () => {} }
+
 function useHarness(unlockedUntil: number | null) {
   const [entries, setEntries] = useState<EnvEntryRow[]>(ROWS)
-  useEnvUnlockRemask(unlockedUntil, setEntries, entries)
+  useEnvUnlockRemask(unlockedUntil, setEntries, entries, NO_HISTORY)
   return { entries, setEntries }
 }
 
