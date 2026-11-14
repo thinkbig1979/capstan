@@ -14,6 +14,25 @@ const ENV_SEARCH_FIELDS = [
   (e: IndexedEnvEntry) => e.value,
 ]
 
+/**
+ * A row the table shows but does not edit: a comment, a line compose reads
+ * without "=" (agent-os-n43b), or a quoted value spanning several lines
+ * (agent-os-fw2q). The backend sends the multi-line value as one row holding
+ * every line; it is edited in the Raw view, and an unedited table save writes
+ * it back unchanged.
+ */
+function ReadOnlyValue({ value }: { value: string }) {
+  if (!value.includes('\n')) {
+    return <span className="italic text-muted-foreground">{value}</span>
+  }
+  return (
+    <div className="space-y-1">
+      <span className="block whitespace-pre-wrap break-all italic text-muted-foreground">{value}</span>
+      <span className="text-xs text-muted-foreground">Multi-line value, edit in Raw</span>
+    </div>
+  )
+}
+
 interface EnvTableViewProps {
   /**
    * Kept mounted regardless of the active tab — this component owns its own
@@ -106,7 +125,7 @@ export function EnvTableView({
                 </TableCell>
                 <TableCell>
                   {entry.comment ? (
-                    <span className="italic text-muted-foreground">{entry.value}</span>
+                    <ReadOnlyValue value={entry.value} />
                   ) : entry.sensitive ? (
                     <div className="flex items-center gap-2">
                       <Input
@@ -181,7 +200,7 @@ export function EnvTableView({
             </div>
             <div>
               {entry.comment ? (
-                <span className="italic text-muted-foreground">{entry.value}</span>
+                <ReadOnlyValue value={entry.value} />
               ) : entry.sensitive ? (
                 <div className="flex items-center gap-2">
                   <Input

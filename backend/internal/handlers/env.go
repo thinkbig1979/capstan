@@ -213,7 +213,10 @@ func hideMultilineBodies(entries []EnvEntry, raw string) {
 	for i := 0; i < len(entries); i++ {
 		e := entries[i]
 		opensBody := e.Sensitive || (e.Comment && e.Key == "" && commentedSecretEnd(e.Value) != -1)
-		if !opensBody {
+		// A multi-line value parsed as one row holds its own body, which the
+		// Sensitive arm of redactEnvResponse blanks; the rows after it are
+		// other lines (agent-os-fw2q).
+		if !opensBody || strings.Contains(e.Value, "\n") {
 			continue
 		}
 		q, open := opensMultilineValue(lineText(e))
@@ -618,18 +621,22 @@ func validateEnvCommentRow(e EnvEntry) error {
 	if e.Key == "" && e.Value == "" {
 		return nil // serialised as a blank line
 	}
-	// Keeps a comment row one clean line, the rule validateEnvEntries applies
-	// to values. The round trip
-	// alone would pass a mid-line "\r" (bufio's ScanLines drops only a trailing
-	// one), and compose reads it as a space, so it was never an injection.
-	// An unedited file with a mid-line CR in a comment can no longer be saved
-	// from the table.
-	if strings.ContainsAny(e.Value, "\r\n") {
+	// No "\r" anywhere, the rule validateEnvEntries applies to values. The
+	// round trip alone would pass a mid-line "\r" (envLines drops only a
+	// trailing one), and compose reads it as a space, so it was never an
+	// injection. An unedited file with a mid-line CR in a comment, or in a
+	// multi-line value, can no longer be saved from the table.
+	if strings.ContainsRune(e.Value, '\r') {
 		return errors.New("is a comment containing a newline; this would corrupt the env file")
 	}
 	// Ask the parser GET uses, so this accepts exactly the rows it produces.
+	// A "\n" passes only inside a multi-line value it reads back as this one
+	// row (agent-os-fw2q); one that would add a line does not.
 	back := (&EnvHandler{}).parseEnvFile(serializeEnvFile([]EnvEntry{e}))
 	if len(back) != 1 || !back[0].Comment || back[0].Value != e.Value {
+		if strings.Contains(e.Value, "\n") {
+			return errors.New("is a comment containing a newline; this would corrupt the env file")
+		}
 		return errors.New("is a comment that would not be written back as the same comment line")
 	}
 	if back[0].Key != e.Key {
@@ -705,13 +712,11 @@ func (h *EnvHandler) parseEnvFile(content string) []EnvEntry {
 	// TypeError there. The contract is made true here, where the value is
 	// minted, rather than by widening the client type to admit the null.
 	entries := []EnvEntry{}
-	lineNum := 0
+	lines := envLines(content)
 
-	for _, line := range envLines(content) {
-		line = strings.TrimSpace(line)
-		lineNum++
-
-		trimmedLine := strings.TrimSpace(line)
+	for n := 0; n < len(lines); n++ {
+		lineNum := n + 1
+		trimmedLine := strings.TrimSpace(lines[n])
 
 		if trimmedLine == "" {
 			entries = append(entries, EnvEntry{
@@ -730,6 +735,27 @@ func (h *EnvHandler) parseEnvFile(content string) []EnvEntry {
 				Line:    lineNum,
 				Comment: true,
 			})
+			continue
+		}
+
+		// A quoted value compose reads across newlines (agent-os-fw2q) is ONE
+		// read-only row holding every line verbatim: the table cannot edit it
+		// in a one-line field, so it is edited in the raw view, and an
+		// unedited table save writes it back unchanged (serializeEnvFile writes
+		// a comment row's value as is).
+		if end, ok := multilineValueEnd(lines, n); ok {
+			key, _ := composeLineKey(trimmedLine)
+			body := lines[n+1 : end+1]
+			sep := strings.IndexAny(trimmedLine, "=:")
+			value := strings.Join(append([]string{trimmedLine[sep+1:]}, body...), "\n")
+			entries = append(entries, EnvEntry{
+				Key:       key,
+				Value:     strings.Join(append([]string{trimmedLine}, body...), "\n"),
+				Line:      lineNum,
+				Sensitive: services.IsSensitiveEnvVar(key, value) || bodyLooksSensitive(body),
+				Comment:   true,
+			})
+			n = end
 			continue
 		}
 
@@ -786,6 +812,56 @@ func envLines(content string) []string {
 		lines[i] = strings.TrimSuffix(l, "\r")
 	}
 	return lines
+}
+
+// multilineValueEnd reports whether lines[n] starts a quoted value that
+// compose reads across newlines, and the index of the line that closes it
+// (compose-go v2 dotenv/parser.go, extractVarValue). The line must have a key
+// compose accepts, its value must open with a quote that does not close on it,
+// and the closing line may hold only whitespace or a "#" comment after the
+// quote, the rule splitEnvValue applies on one line. Otherwise ok is false and
+// the lines are rows of their own, as before: an unterminated quote is a file
+// compose rejects, and the locked view then hides every row after a sensitive
+// opener (hideMultilineBodies, fail closed).
+func multilineValueEnd(lines []string, n int) (end int, ok bool) {
+	line := strings.TrimSpace(lines[n])
+	if _, ok := composeLineKey(line); !ok {
+		return 0, false
+	}
+	q, open := opensMultilineValue(line)
+	if !open {
+		return 0, false
+	}
+	for k := n + 1; k < len(lines); k++ {
+		idx, _ := closingQuote(lines[k], q)
+		if idx == -1 {
+			continue
+		}
+		rest := strings.TrimLeftFunc(lines[k][idx+1:], unicode.IsSpace)
+		return k, rest == "" || rest[0] == '#'
+	}
+	return 0, false
+}
+
+// bodyLooksSensitive reports whether any body line of a multi-line value would
+// be masked in the locked view as a line of its own: a sensitive variable
+// (DB_PASSWORD: x), a commented-out secret, or a URL credential. Before
+// agent-os-fw2q each body line was its own row and was masked that way; folded
+// into the value, the line is still masked, by masking the whole value. A body
+// with none of these stays visible, as a non-secret multi-line value did
+// (agent-os-yt2f).
+func bodyLooksSensitive(body []string) bool {
+	for _, l := range body {
+		if services.HasURLUserinfo(l) {
+			return true
+		}
+		for _, e := range (&EnvHandler{}).parseEnvFile(l) {
+			if e.Sensitive || (e.Comment && e.Key == "" && commentedSecretEnd(e.Value) != -1) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 var exportPrefix = regexp.MustCompile(`^export\s+`)

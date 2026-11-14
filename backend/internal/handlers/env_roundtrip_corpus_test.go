@@ -44,6 +44,8 @@ func envCorpus() []envCorpusFixture {
 		{name: "export", content: "export EXP_TOKEN=corpusexportsecret\nPLAIN=1\n",
 			secrets: []string{"corpusexportsecret"}, tableExact: true,
 			composeDiffers: "pre-existing: the table keys an export line with its prefix (\"export EXP_TOKEN\"); compose reads EXP_TOKEN. Not in this cluster's beads."},
+		{name: "multiline-quote", content: "A=1\nCERT_KEY=\"-----BEGIN\nabc: def\nTOP_SECRET_PASSWORD: corpusmultiinner\n-----END\" # pem\nPEM='l1\nl2=corpusmultisingle'\nB=2\n",
+			secrets: []string{"corpusmultiinner"}, tableExact: true},
 		{name: "indent-crlf-no-final-newline", content: "  A=1\r\n# c\r\nB=2"},
 	}
 }
