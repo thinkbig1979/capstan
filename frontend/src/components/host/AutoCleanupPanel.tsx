@@ -35,6 +35,22 @@ import {
 
 const AUTO_CLEANUP_ANCHOR = 'automatic-cleanup'
 
+/**
+ * The element that actually scrolls el: its nearest ancestor that both allows
+ * vertical scrolling and overflows, else the document. AppShell's <main> carries
+ * overflow-y: auto but grows with its content, so the document is usually the
+ * one that scrolls (agent-os-8hfa).
+ */
+function scrollerOf(el: HTMLElement): Element {
+  for (let a = el.parentElement; a; a = a.parentElement) {
+    const { overflowY } = getComputedStyle(a)
+    if ((overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') && a.scrollHeight > a.clientHeight) {
+      return a
+    }
+  }
+  return document.scrollingElement ?? document.documentElement
+}
+
 /** "in 5h" for an instant ahead. formatRelativeTime only reads the past. */
 function formatTimeUntil(iso: string): string {
   const ms = new Date(iso).getTime() - Date.now()
@@ -98,8 +114,8 @@ export function AutoCleanupPanel({ ready = true }: { ready?: boolean } = {}) {
   const handledRequest = useRef<string | null>(null)
 
   // /?tab=host#automatic-cleanup (the Free up space dialog's "Change timing",
-  // the Settings notice) lands on this panel. The page scrolls inside <main>, and
-  // scrollIntoView would drag the document too (eslint no-restricted-properties).
+  // the Settings notice) lands on this panel. scrollIntoView is banned (eslint
+  // no-restricted-properties), so this moves the scroller by hand.
   useEffect(() => {
     const el = sectionRef.current
     // Leaving the hash ends the request, so coming back to it is a new one.
@@ -109,8 +125,16 @@ export function AutoCleanupPanel({ ready = true }: { ready?: boolean } = {}) {
     }
     if (!el || !hasPolicy || !ready || handledRequest.current === scrollRequest) return
     handledRequest.current = scrollRequest
-    const scroller = el.closest('main')
-    if (scroller) scroller.scrollTop += el.getBoundingClientRect().top - scroller.getBoundingClientRect().top
+    const scroller = scrollerOf(el)
+    // The panel's top lands at the scroller's top: the window's top (0) for the
+    // document, whose header scrolls away with it; an element's own top
+    // otherwise. Both stay put while that scroller scrolls, so the result does
+    // not depend on where it started (agent-os-8hfa).
+    const scrollerTop =
+      scroller === document.scrollingElement || scroller === document.documentElement
+        ? 0
+        : scroller.getBoundingClientRect().top
+    scroller.scrollTop += el.getBoundingClientRect().top - scrollerTop
   }, [scrollRequest, hasPolicy, ready])
 
   const handleRun = async () => {

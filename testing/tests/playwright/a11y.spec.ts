@@ -13,18 +13,23 @@
  *     need the auth-session job's virgin backend, and are scanned from
  *     auth-session.spec.ts with the same helpers/axe-scan.ts.
  *   - A stack named CAPSTAN_TEST_STACK (default test-app).
+ *   - The `docker` CLI on PATH, talking to the same Docker daemon as the
+ *     backend: host:free-space-dialog creates and removes a named leftover
+ *     container (helpers/docker-fixture.ts).
  *
  * Run:
  *   AUTH_DISABLED=true npx playwright test a11y --retries=0
  *
- * MATRIX (70 scans). Every URL below in light at 1280x720 and in dark at
- * 1280x720, plus nine representative URLs (NARROW_TARGETS) in light and in dark
- * at 375x812. Contrast failures are theme specific (the primary label failed in
+ * MATRIX (76 scans). Every target below in light at 1280x720 and in dark at
+ * 1280x720, plus eleven representative targets (NARROW_TARGETS) in light and in
+ * dark at 375x812. Contrast failures are theme specific (the primary label failed in
  * both themes with different ratios), so dark is scanned in full at desktop and
  * at the narrow width; layout-driven failures are what the narrow viewport adds,
- * and nine URLs cover the layouts. Measured 2026-10-14 (agent-os-25k4): all 26
- * URLs at 375 in both schemes had no finding beyond the editor entry on the
- * ALLOWLIST, so the nine are coverage, not a filter hiding failures.
+ * and eleven targets cover the layouts: nine URLs, plus dash:host (the Host
+ * tab's overview) and host:free-space-dialog, a dialog rather than a URL, which
+ * its setup opens (agent-os-bugc). Measured 2026-10-14 (agent-os-25k4): all 26
+ * URLs then at 375 in both schemes had no finding beyond the editor entry on
+ * the ALLOWLIST, so the nine URLs are coverage, not a filter hiding failures.
  *
  * NO FIXED SLEEPS. A scan starts after `waitForInvalidationSettle`, because the
  * app keeps rendering after load (WS-driven invalidations, debounced 750ms; see
@@ -51,6 +56,7 @@ import {
   type AllowedViolation,
   type Scheme,
 } from './helpers/axe-scan'
+import { createListedLeftoverContainer, removeLeftoverContainer } from './helpers/docker-fixture'
 
 const API_URL = process.env.CAPSTAN_API_URL ?? 'http://localhost:5001'
 const AUTH_DISABLED = (process.env.AUTH_DISABLED ?? 'false') === 'true'
@@ -80,6 +86,12 @@ interface Target {
   name: string
   /** Builds the URL once the stack id is known. */
   url: (stackId: string) => string
+  /** Runs before the page loads, e.g. to create a Docker fixture the page reads on load. */
+  prepare?: () => void | Promise<void>
+  /** Brings the page to the state to scan, after it has loaded and settled. */
+  setup?: (page: Page) => Promise<void>
+  /** Runs after the scan, pass or fail; undoes prepare. */
+  cleanup?: () => void
 }
 
 const TARGETS: Target[] = [
@@ -91,6 +103,23 @@ const TARGETS: Target[] = [
   })),
   // Not /?tab=<view>: that is an unknown tab and lands on Stacks.
   ...HOST_VIEWS.map((v) => ({ name: `host:${v}`, url: () => `/?tab=host&view=${v}` })),
+  // The Free up space dialog (agent-os-bugc). A named leftover container makes
+  // reclaimable > 0, so the button is enabled and the dialog has a filled row.
+  {
+    name: 'host:free-space-dialog',
+    url: () => '/?tab=host',
+    // Waits until the server lists it: the summary is a snapshot up to 30 s old.
+    prepare: async () => {
+      await createListedLeftoverContainer(API_URL)
+    },
+    setup: async (page: Page) => {
+      await page.getByTestId('host-free-space-button').click()
+      const dialog = page.getByRole('dialog', { name: 'Free up space' })
+      await expect(dialog).toBeVisible()
+      await expect(dialog.getByTestId('free-space-row-containers')).toBeVisible()
+    },
+    cleanup: removeLeftoverContainer,
+  },
   ...STACK_TABS.map((t) => ({
     name: `stack:${t}`,
     url: (id: string) => `/stacks/${encodeURIComponent(id)}/${t}`,
@@ -100,7 +129,9 @@ const TARGETS: Target[] = [
 
 const NARROW_TARGETS = [
   'dash:stacks',
+  'dash:host',
   'host:containers',
+  'host:free-space-dialog',
   'dash:updates',
   'dash:backups',
   'stack:overview',
@@ -182,8 +213,19 @@ test.describe('a11y: axe wcag2a/wcag2aa', () => {
 
       for (const target of cfg.targets) {
         test(`A11Y-${cfg.label.replace(' ', '-')}-${target.name}`, async ({ page }) => {
-          await openAndSettle(page, target.url(stackId))
-          const { blocking, other } = classify(await runAxe(page), target.name, cfg.scheme, ALLOWLIST)
+          let results
+          try {
+            await target.prepare?.()
+            await openAndSettle(page, target.url(stackId))
+            if (target.setup) {
+              await target.setup(page)
+              await waitForInvalidationSettle(page)
+            }
+            results = await runAxe(page)
+          } finally {
+            target.cleanup?.()
+          }
+          const { blocking, other } = classify(results, target.name, cfg.scheme, ALLOWLIST)
           for (const o of other) test.info().annotations.push({ type: 'non-blocking', description: o })
           // Counted rather than toEqual([]): a failing toEqual would dump every node.
           expect(
