@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { HelpHint } from '../help-hint'
 import { HELP_INDEX, useHelpStore } from '@/help/helpStore'
@@ -9,6 +9,23 @@ import { MemoryRouter } from 'react-router'
 
 // Captured once: tests swap openAt for a spy, and setState merges, so it has to be put back.
 const realOpenAt = useHelpStore.getState().openAt
+
+// HelpPanel renders docs through a lazy renderer. The first doc a file renders pays
+// for it cold (react-markdown + remark-gfm import, first render, React's Suspense
+// reveal delay): over 1 s on a loaded machine, past the test's 1 s budget
+// (agent-os-ursd). Render one doc here, under the hook timeout, instead.
+beforeAll(async () => {
+  const { unmount } = render(
+    <MemoryRouter>
+      <HelpPanel />
+    </MemoryRouter>,
+  )
+  act(() => useHelpStore.getState().openAt(FIELD_HELP['backup.retention']))
+  await waitFor(() => expect(document.querySelector('[data-help-anchor="retention-and-pruning"]')).not.toBeNull(), {
+    timeout: 9000,
+  })
+  unmount()
+})
 
 beforeEach(() => {
   useHelpStore.setState({ openAt: realOpenAt, open: false, followPage: true, current: HELP_INDEX, history: [], focusHeading: false, shortcutsOpen: false })
@@ -113,12 +130,19 @@ describe('HelpHint', () => {
       await user.click(trigger)
       await user.click(await screen.findByTestId('help-hint-learn-more-button'))
 
-      // Straight after the click, before the lazy doc has rendered its heading:
-      // Radix would have restored focus to the (i) here, and the heading only
-      // takes it back later, which is a race in a browser (the exit animation
-      // delays the restore past a cached doc's heading focus).
+      // Pins onCloseAutoFocus's preventDefault: without it Radix hands focus back
+      // to the (i) as the popover closes, and in a browser the exit animation can
+      // delay that restore past the heading's focus, so the (i) keeps it.
       expect(trigger).not.toHaveFocus()
-      const heading = await screen.findByRole('heading', { level: 3, name: 'Retention and pruning' })
+      // Wait on the anchor, a cheap selector: a findByRole with a name re-walks the whole
+      // rendered doc on every poll, about 0.5 s a poll on a loaded machine, and ran out of
+      // its 1 s budget (agent-os-ursd). The role is asserted once, after.
+      const heading = await waitFor(() => {
+        const el = document.querySelector<HTMLElement>('[data-help-anchor="retention-and-pruning"]')
+        expect(el).not.toBeNull()
+        return el!
+      })
+      expect(screen.getByRole('heading', { level: 3, name: 'Retention and pruning' })).toBe(heading)
       await waitFor(() => expect(heading).toHaveFocus())
       expect(trigger).not.toHaveFocus()
     })
