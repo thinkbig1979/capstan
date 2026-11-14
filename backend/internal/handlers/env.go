@@ -413,7 +413,15 @@ func (h *EnvHandler) Put(c *gin.Context) {
 			renderResult(c, truth.Failed("env validation failed: "+err.Error(), err))
 			return
 		}
-		content = serializeEnvFile(req.Entries)
+		// Read under the lock, so the rows kept verbatim are the file's
+		// text as it is now, not as the client last saw it (agent-os-omzj).
+		//nolint:gosec // envPath was validated against the configured stacks directories above (validateStackPath, symlink-aware) — see README.md "Command execution and file access"
+		current, err := os.ReadFile(envPath)
+		if err != nil && !os.IsNotExist(err) {
+			handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "READ_ERROR", "Failed to read env file", err))
+			return
+		}
+		content = serializeEnvFileOver(string(current), req.Entries)
 	} else {
 		c.JSON(http.StatusBadRequest, models.NewAppError(
 			http.StatusBadRequest,
@@ -990,6 +998,66 @@ func closingQuote(s string, q byte) (idx int, trailingEscape bool) {
 		}
 	}
 	return -1, escaped
+}
+
+// serializeEnvFileOver writes a table save over the file's current text
+// (agent-os-omzj). The parser trims what it reads, so serializeEnvFile alone
+// loses indentation, CRLF line ends and a missing final newline. Here a row
+// equal to the file's own row at the same line is written as that row's
+// original text, byte for byte, and any other row as serializeEnvFile writes
+// it, with the file's line ending. The output keeps the file's final-newline
+// state. A row only matches when it is the same row, so a file changed since
+// the client read it falls back to the request's rows.
+func serializeEnvFileOver(current string, entries []EnvEntry) string {
+	eol := "\n"
+	if i := strings.IndexByte(current, '\n'); i > 0 && current[i-1] == '\r' {
+		eol = "\r\n"
+	}
+
+	// Each file row's original text: its line, or for a value spanning
+	// lines, every line up to the next row. The raw split keeps a "\r".
+	fileRows := (&EnvHandler{}).parseEnvFile(current)
+	rawLines := strings.Split(current, "\n")
+	lineCount := len(envLines(current))
+	original := make(map[int]int, len(fileRows)) // line -> index in fileRows
+	for k, e := range fileRows {
+		original[e.Line] = k
+	}
+
+	var b strings.Builder
+	for _, e := range entries {
+		if k, ok := original[e.Line]; ok && e.Line > 0 && sameEnvRow(e, fileRows[k]) {
+			end := lineCount
+			if k+1 < len(fileRows) {
+				end = fileRows[k+1].Line - 1
+			}
+			for i := e.Line - 1; i < end; i++ {
+				b.WriteString(rawLines[i])
+				// A line keeps its own "\r"; the file's last line has no end
+				// of its own and takes the file's, if a row follows it.
+				if i == len(rawLines)-1 {
+					b.WriteString(eol)
+				} else {
+					b.WriteString("\n")
+				}
+			}
+			continue
+		}
+		b.WriteString(strings.ReplaceAll(serializeEnvFile([]EnvEntry{e}), "\n", eol))
+	}
+
+	out := b.String()
+	if current != "" && !strings.HasSuffix(current, "\n") {
+		out = strings.TrimSuffix(out, eol)
+	}
+	return out
+}
+
+// sameEnvRow reports whether two rows write the same text: every field
+// serializeEnvFile reads. Sensitive and Line are not written.
+func sameEnvRow(a, b EnvEntry) bool {
+	return a.Key == b.Key && a.Value == b.Value && a.Comment == b.Comment &&
+		a.Quote == b.Quote && a.InlineComment == b.InlineComment && a.Export == b.Export
 }
 
 func serializeEnvFile(entries []EnvEntry) string {

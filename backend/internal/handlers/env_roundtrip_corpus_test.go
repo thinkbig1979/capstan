@@ -22,9 +22,10 @@ type envCorpusFixture struct {
 	// secrets are values the unlocked global page shows and the locked one
 	// must not.
 	secrets []string
-	// tableExact: an unedited stack-table save is byte-identical. The table
-	// parser trims every line, so indentation, CRLF line ends and a missing
-	// final newline are not kept (a known gap, filed as a follow-up).
+	// tableExact: an unedited stack-table save is byte-identical, through
+	// the GET and PUT a client makes. Put keeps every unedited row's own text,
+	// so indentation, CRLF line ends and a missing final newline survive
+	// (agent-os-omzj).
 	tableExact bool
 	// composeDiffers names why the table's keys differ from compose's, when
 	// they do on purpose; "" means they must match.
@@ -50,7 +51,7 @@ func envCorpus() []envCorpusFixture {
 			secrets: []string{"corpusmultiinner"}, tableExact: true},
 		{name: "duplicate-key", content: "A=1\n# between\nA=2\nB=3\nA=4\n", tableExact: true},
 		{name: "empty", content: "", tableExact: true},
-		{name: "indent-crlf-no-final-newline", content: "  A=1\r\n# c\r\nB=2"},
+		{name: "indent-crlf-no-final-newline", content: "  A=1\r\n# c\r\nB=2", tableExact: true},
 	}
 }
 
@@ -73,8 +74,17 @@ func TestEnvCorpus_StackTableUneditedSaveIsByteIdentical(t *testing.T) {
 			continue
 		}
 		t.Run(f.name, func(t *testing.T) {
-			got := serializeEnvFile((&EnvHandler{}).parseEnvFile(f.content))
-			assert.True(t, got == f.content, "serialize(parse(x)) != x:\n got %.200q\nwant %.200q", got, f.content)
+			router, stackID, token, envPath := envQuoteFixture(t, f.content)
+			entries := getEntriesAsJSON(t, router, stackID, token)
+			if len(entries) == 0 {
+				// A client cannot send an empty table (Put answers 400 "Must
+				// provide either 'entries' or 'raw'"), so there is no save.
+				return
+			}
+			w := putEntries(t, router, stackID, token, entries)
+			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+			got := readEnvQuoteFile(t, envPath)
+			assert.True(t, got == f.content, "table save changed the file:\n got %.200q\nwant %.200q", got, f.content)
 		})
 	}
 }
