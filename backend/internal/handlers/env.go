@@ -219,7 +219,7 @@ func hideMultilineBodies(entries []EnvEntry, raw string) {
 		if !opensBody || strings.Contains(e.Value, "\n") {
 			continue
 		}
-		q, open := opensMultilineValue(lineText(e))
+		q, open := opensMultilineTail(lineText(e))
 		if raw == "" {
 			open = true
 		}
@@ -251,6 +251,27 @@ func opensMultilineValue(line string) (quote byte, open bool) {
 	}
 	end, _ := closingQuote(rest[1:], rest[0])
 	return rest[0], end == -1
+}
+
+// opensMultilineTail is opensMultilineValue for the last statement on a
+// line. compose reads on after a closing quote (agent-os-zpbi), so the quote
+// left open can be a later statement's: `NOTES="a" DB_PASSWORD="x` opens a
+// multi-line secret (review E3). One pass along the line.
+func opensMultilineTail(line string) (quote byte, open bool) {
+	for {
+		if q, open := opensMultilineValue(line); open {
+			return q, true
+		}
+		sep := strings.IndexAny(line, "=:")
+		if sep == -1 {
+			return 0, false
+		}
+		tail, ok := textAfterClosingQuote(line[sep+1:])
+		if !ok {
+			return 0, false
+		}
+		line = tail
+	}
 }
 
 // commentedSecretEnd reports whether a comment row is a commented-out
@@ -975,10 +996,30 @@ func textAfterClosingQuote(value string) (string, bool) {
 }
 
 // tailLooksSensitive reports whether the variables compose reads after a
-// quoted value's closing quote include one the locked view must mask.
+// quoted value's closing quote include one the locked view must mask: a
+// sensitive key, a URL credential, or private key material anywhere in the
+// tail. It walks the statements in one pass, linear in the line's length
+// (review E2: parsing each tail again rescanned the rest of the line once per
+// quoted segment, 42 s for an 80 KB line).
 func tailLooksSensitive(value string) bool {
 	tail, ok := textAfterClosingQuote(value)
-	return ok && bodyLooksSensitive([]string{tail})
+	if !ok {
+		return false
+	}
+	if services.HasURLUserinfo(tail) || strings.Contains(tail, "PRIVATE KEY-----") || strings.Contains(tail, `"private_key"`) {
+		return true
+	}
+	for ok {
+		if key, keyOK := composeLineKey(tail); keyOK && services.IsSensitiveEnvKey(key) {
+			return true
+		}
+		sep := strings.IndexAny(tail, "=:")
+		if sep == -1 {
+			return false
+		}
+		tail, ok = textAfterClosingQuote(tail[sep+1:])
+	}
+	return false
 }
 
 // closingQuote returns the index in s of the first quote q not escaped by a

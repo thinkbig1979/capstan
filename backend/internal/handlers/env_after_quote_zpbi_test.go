@@ -3,7 +3,9 @@ package handlers
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/compose-spec/compose-go/v2/dotenv"
 	"github.com/stretchr/testify/assert"
@@ -88,4 +90,79 @@ func TestEnvAfterQuote_zpbi_UneditedSaveIsByteIdentical(t *testing.T) {
 	w := putEntries(t, router, stackID, token, getEntriesAsJSON(t, router, stackID, token))
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	assert.Equal(t, content, readEnvQuoteFile(t, envPath))
+}
+
+// Review E3: the statement after a closing quote can open a quoted value
+// compose reads across newlines. Its body lines are the secret's, so the
+// locked views hide them as they do a multi-line value opened by the first
+// statement (hideMultilineBodies), on the stack table and the global page.
+var tailOpensMultiline = []struct{ name, content string }{
+	{"body", "TZ=UTC\nNOTES=\"a\" DB_PASSWORD=\"S3cr3tXYZ\nXYZbody\"\nB=1\n"},
+	{"body then var", "TZ=UTC\nNOTES=\"a\" DB_PASSWORD=\"S3cr3tXYZ\nXYZbody\" OTHER=1\nB=1\n"},
+	{"colon opener", "TZ=UTC\nNOTES: 'a' API_TOKEN='S3cr3tXYZ\nXYZbody'\nB=1\n"},
+}
+
+func TestEnvAfterQuote_zpbi_TailOpensMultilineHiddenWhenLocked(t *testing.T) {
+	for _, c := range tailOpensMultiline {
+		t.Run(c.name, func(t *testing.T) {
+			vars, err := dotenv.UnmarshalWithLookup(c.content, nil)
+			require.NoError(t, err)
+			require.Contains(t, vars["DB_PASSWORD"]+vars["API_TOKEN"], "XYZbody", "the oracle: compose reads the body as the secret")
+
+			router, stackID, token, _ := envQuoteFixture(t, c.content)
+			get := func(withToken bool) string {
+				req := httptest.NewRequest(http.MethodGet, "/stacks/"+stackID+"/env", nil)
+				if withToken {
+					req.Header.Set(middleware.EnvUnlockHeader, token)
+				}
+				w := httptest.NewRecorder()
+				router.ServeHTTP(w, req)
+				require.Equal(t, http.StatusOK, w.Code)
+				return w.Body.String()
+			}
+			require.Contains(t, get(true), "XYZbody", "positive side")
+			locked := get(false)
+			assertBodyOmits(t, locked, "XYZbody")
+			assertBodyOmits(t, locked, "S3cr3tXYZ")
+			assert.Contains(t, locked, `"key":"B","value":"1"`, "rows after the body stay visible")
+		})
+	}
+}
+
+// The global page shows only rows with a key, so a body line reaches it only
+// when the closing line carries a variable (`XYZbody" OTHER=1` is keyed
+// `XYZbody" OTHER`); the other shapes never show the body there, unlocked
+// either.
+func TestEnvAfterQuote_zpbi_TailOpensMultilineHiddenOnLockedGlobalPage(t *testing.T) {
+	for _, c := range tailOpensMultiline[1:2] {
+		t.Run(c.name, func(t *testing.T) {
+			dataDir, router := globalEnvTestRouter(t)
+			writeGlobalEnvFile(t, dataDir, c.content)
+			_, unlocked := getGlobalVars(t, router, "/unlocked")
+			_, locked := getGlobalVars(t, router, "/locked")
+			require.Contains(t, unlocked, "XYZbody", "positive side")
+			assertBodyOmits(t, locked, "XYZbody")
+			assertBodyOmits(t, locked, "S3cr3tXYZ")
+		})
+	}
+}
+
+// Review E2: the tail is checked statement by statement in one pass. A
+// recursive check rescanned the rest of the line per quoted segment: 42 s for
+// this 80 KB line, against milliseconds on the base. The bound leaves room
+// for a loaded machine and the race detector, and is far below the
+// super-linear time.
+func TestEnvAfterQuote_zpbi_LongTailParsesInLinearTime(t *testing.T) {
+	tail := strings.Repeat(" A=\"\"", 16400) + "\n"
+	// The second line is sensitive, so the locked view also walks its tail
+	// for a quote left open (opensMultilineTail).
+	for _, line := range []string{"A=\"\"" + tail, "DB_PASSWORD=\"\"" + tail} {
+		require.Greater(t, len(line), 80*1024)
+		start := time.Now()
+		resp := EnvResponse{Raw: line, Entries: (&EnvHandler{}).parseEnvFile(line)}
+		redactEnvResponse(&resp)
+		elapsed := time.Since(start)
+		require.Len(t, resp.Entries, 1)
+		assert.Less(t, elapsed, 2*time.Second, "an 80 KB line took %s to parse and redact", elapsed)
+	}
 }
