@@ -6,7 +6,6 @@ import { Eye, EyeOff, Plus, Trash2, Save } from 'lucide-react'
 import type { EnvEntryDraft } from '@/types'
 import { useTextFilter } from '@/hooks/useTextFilter'
 import { TableSearch } from '@/components/ui/table-search'
-import { isSensitiveKey } from './sensitiveKey'
 import type { EnvEntryRow, IndexedEnvEntry } from './types'
 
 const ENV_SEARCH_FIELDS = [
@@ -192,8 +191,7 @@ export function EnvTableView({
                     <input
                       type="checkbox"
                       checked={!entry.sensitive}
-                      onChange={(e) => onEntryChange(i, 'sensitive', !e.target.checked)}
-                      disabled={isSensitiveKey(entry.key)}
+                      onChange={() => onToggleVisibility(i)}
                       className="h-4 w-4"
                       aria-label={`Toggle visibility for entry ${i + 1}`}
                     />
@@ -275,8 +273,7 @@ export function EnvTableView({
                   <input
                     type="checkbox"
                     checked={!entry.sensitive}
-                    onChange={(e) => onEntryChange(i, 'sensitive', !e.target.checked)}
-                    disabled={isSensitiveKey(entry.key)}
+                    onChange={() => onToggleVisibility(i)}
                     className="h-4 w-4"
                     aria-label={`Toggle visibility for entry ${i + 1}`}
                   />

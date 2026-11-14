@@ -82,7 +82,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   // Re-masks revealed entries when the unlock session ends (manual lock or
   // auto-expiry) — see useEnvUnlockRemask for which ones and the render-time
   // detail.
-  useEnvUnlockRemask(unlockedUntil, setEntries, entries)
+  useEnvUnlockRemask(unlockedUntil, setEntries, entries, { snapshots, rebase: rebaseHistory })
 
   const {
     unlockDialogOpen,

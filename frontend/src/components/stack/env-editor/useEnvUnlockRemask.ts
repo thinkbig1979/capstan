@@ -4,13 +4,15 @@ import type { EnvEntryRow } from './types'
 
 const NO_ROWS: ReadonlySet<number> = new Set()
 
+type HistorySnapshot = { entries: EnvEntryRow[]; raw: string }
+
 /**
  * When the unlock session ends (manual lock or auto-expiry), re-mask every
  * entry the user had revealed during the session: one whose key looks secret,
  * and one that was masked since it entered the editor, which covers a value
  * the server flagged under a harmless key (agent-os-ruuw). A reveal is stored
  * as `sensitive: false` on the row, so the rows ever masked are remembered by
- * `_rowId`.
+ * `_rowId`. The undo history is re-masked the same way (agent-os-y4gh).
  *
  * Adjusted during render (rather than in an effect) by comparing against
  * the previous render's unlockedUntil — see
@@ -25,31 +27,47 @@ export function useEnvUnlockRemask(
   unlockedUntil: number | null,
   setEntries: Dispatch<SetStateAction<EnvEntryRow[]>>,
   entries: readonly EnvEntryRow[],
+  history: {
+    snapshots: readonly HistorySnapshot[]
+    rebase: (fn: (snapshot: HistorySnapshot) => HistorySnapshot) => void
+  },
 ) {
   const [prevUnlockedUntil, setPrevUnlockedUntil] = useState(unlockedUntil)
   const [everMasked, setEverMasked] = useState<ReadonlySet<number>>(NO_ROWS)
 
   if (entries.some((e) => e.sensitive && !everMasked.has(e._rowId))) {
-    // Only the rows still in the editor are kept.
-    const ids = new Set(entries.map((e) => e._rowId))
-    setEverMasked(
-      new Set([...[...everMasked].filter((id) => ids.has(id)), ...entries.filter((e) => e.sensitive).map((e) => e._rowId)]),
-    )
+    // Never pruned: a deleted row can come back through Undo after the history
+    // has dropped every snapshot that showed it masked (agent-os-y4gh). It grows
+    // only with the rows this editor has seen.
+    setEverMasked(new Set([...everMasked, ...entries.filter((e) => e.sensitive).map((e) => e._rowId)]))
   }
 
   if (unlockedUntil !== prevUnlockedUntil) {
     setPrevUnlockedUntil(unlockedUntil)
     if (unlockedUntil === null) {
-      setEntries((prev) => {
+      // A row masked in any snapshot counts too, so a snapshot's own record
+      // holds even if the render-time check above has not seen that row.
+      const masked = new Set(everMasked)
+      for (const snapshot of history.snapshots) {
+        for (const e of snapshot.entries) if (e.sensitive) masked.add(e._rowId)
+      }
+      const remask = (rows: EnvEntryRow[]) => {
         let changed = false
-        const next = prev.map((e) => {
-          if (!e.sensitive && (isSensitiveKey(e.key) || everMasked.has(e._rowId))) {
+        const next = rows.map((e) => {
+          if (!e.sensitive && (isSensitiveKey(e.key) || masked.has(e._rowId))) {
             changed = true
             return { ...e, sensitive: true }
           }
           return e
         })
-        return changed ? next : prev
+        return changed ? next : rows
+      }
+      setEntries(remask)
+      // A reveal is stored in the undo history like any edit, so Undo or Redo
+      // would restore it after the lock (agent-os-y4gh): re-mask the snapshots.
+      history.rebase((snapshot) => {
+        const next = remask(snapshot.entries)
+        return next === snapshot.entries ? snapshot : { ...snapshot, entries: next }
       })
     }
   }
