@@ -81,9 +81,9 @@ func (l *LinterService) LintCompose(content, workingDir string, env LintEnv, unl
 			l.sortResults(results)
 		}
 	}
-	lines := secretLineNeedles(secrets)
+	needles := append(append([]string(nil), secrets...), secretLineNeedles(secrets)...)
 	for i := range results {
-		results[i].Message = redactComposeOutput(redactComposeOutput(results[i].Message, secrets), lines)
+		results[i].Message = redactComposeOutput(results[i].Message, needles)
 	}
 	if lockedNote {
 		// After the redaction: the note's fixed text is the same for every
@@ -499,10 +499,9 @@ func (e LintEnv) secretValues() []string {
 // (secretLines), longest first. A sensitive value known only resolved, in
 // Vars, can be multi-line where its env text was one line with \n escapes,
 // and a lint message can echo one of its lines (agent-os-vbkt). LintCompose
-// masks these in a second pass, after the whole values: a pass that only
-// replaces can hide more but never shows what the first pass hid, whereas
-// mixing them into one longest-first list can let a line break an
-// overlapping secret's match (agent-os-buwq).
+// masks these together with the whole values in one pass, which masks
+// overlapping occurrences as one, so neither can break the other's match
+// (agent-os-buwq).
 func secretLineNeedles(secrets []string) []string {
 	var out []string
 	seen := map[string]bool{}

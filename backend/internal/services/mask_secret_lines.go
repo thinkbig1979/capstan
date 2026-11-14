@@ -83,12 +83,14 @@ func MaskSecrets(text, filePath string, secrets []string) (string, int) {
 			m.count++
 		}
 	}
-	for _, v := range secretNeedles(secrets) {
-		for i, line := range m.lines {
-			if strings.Contains(line, v) {
-				m.lines[i] = strings.ReplaceAll(line, v, secretMask)
-				m.count++
-			}
+	// Every needle is found on the line as the passes above left it and the
+	// overlapping ones are masked as one (agent-os-buwq). The count is one
+	// per needle a line holds.
+	needles := secretNeedles(secrets)
+	for i, line := range m.lines {
+		if out, n := maskNeedleUnion(line, needles, secretMask); n > 0 {
+			m.lines[i] = out
+			m.count += n
 		}
 	}
 	// Last, so it only masks more of what the passes above leave: a span it
@@ -103,8 +105,9 @@ func MaskSecrets(text, filePath string, secrets []string) (string, int) {
 
 // secretNeedles is what MaskSecrets looks for, line by line: each one-line
 // secret, and each line of a multi-line one (secretLines) in its place, since
-// a line can never hold the whole value (agent-os-0c9k). Longest first, so a
-// needle that holds another is replaced whole.
+// a line can never hold the whole value (agent-os-0c9k). Longest first; the
+// masking finds them all on the same text (maskNeedleUnion), so the order no
+// longer decides what is shown.
 func secretNeedles(secrets []string) []string {
 	var out []string
 	for _, v := range secrets {
