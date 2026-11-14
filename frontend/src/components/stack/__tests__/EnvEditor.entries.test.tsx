@@ -138,7 +138,11 @@ describe('EnvEditor entry editing', () => {
     expect(screen.getAllByText('comment').length).toBeGreaterThan(0)
   })
 
-  it('disables the Visible checkbox whenever the key matches a sensitive naming pattern, regardless of the stored flag', async () => {
+  // agent-os-fgwm: the checkbox used to be disabled by key name. It now goes
+  // through the same gated toggle as the eye button, so hiding a revealed
+  // secret works from it, and revealing asks for the unlock while locked
+  // (EnvEditor.fgwm-value-flag.test.tsx).
+  it('the Visible checkbox re-masks a revealed secret-named row', async () => {
     mockGetEnv.mockResolvedValue({
       hasEnvFile: true,
       filename: '.env',
@@ -154,7 +158,10 @@ describe('EnvEditor entry editing', () => {
       .getAllByLabelText('Toggle visibility for entry 1')
       .filter((el) => el.getAttribute('type') === 'checkbox')
     expect(checkboxes.length).toBeGreaterThan(0)
-    checkboxes.forEach((cb) => expect(cb).toBeDisabled())
+    const value = () => screen.getAllByLabelText('Environment variable value 1')[0] as HTMLInputElement
+    expect(value().type).toBe('text')
+    fireEvent.click(checkboxes[0])
+    expect(value().type).toBe('password')
   })
 
   it('filters rows via the search input and shows a no-matches hint', async () => {

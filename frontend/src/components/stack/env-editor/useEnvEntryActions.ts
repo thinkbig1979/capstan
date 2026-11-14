@@ -55,7 +55,10 @@ export function useEnvEntryActions({
     newEntries[index] = { ...newEntries[index], [field]: value }
 
     if (field === 'key' && typeof value === 'string') {
-      newEntries[index].sensitive = isSensitiveKey(value)
+      // A mask stays on through a rename: the server may have flagged the value,
+      // not the name, and the old key may have been the secret-looking one
+      // (agent-os-fgwm). A reveal goes through toggleVisibility's unlock gate.
+      newEntries[index].sensitive = entries[index].sensitive || isSensitiveKey(value)
     }
 
     setEntries(newEntries)
