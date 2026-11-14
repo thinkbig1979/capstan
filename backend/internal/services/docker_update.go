@@ -698,6 +698,10 @@ func withoutImageDefaults(cfg *container.Config, hostCfg *container.HostConfig, 
 // ("/data", which the API accepts as an anonymous volume) is rewritten to
 // name its volume rather than gaining a second mount beside it.
 func withAnonymousVolumes(hostCfg *container.HostConfig, mounts []container.MountPoint) *container.HostConfig {
+	anon := anonymousVolumes(hostCfg, mounts)
+	if len(anon) == 0 {
+		return hostCfg
+	}
 	out := container.HostConfig{}
 	if hostCfg != nil {
 		out = *hostCfg
@@ -705,32 +709,15 @@ func withAnonymousVolumes(hostCfg *container.HostConfig, mounts []container.Moun
 	out.Binds = slices.Clone(out.Binds)
 	out.Mounts = slices.Clone(out.Mounts)
 
-	named := map[string]bool{}
 	anonBinds := map[string]int{} // destination -> index of a one-part bind
 	for i, b := range out.Binds {
-		// "destination" or "source:destination[:options]"; Capstan runs
-		// Linux daemons only.
-		parts := strings.Split(b, ":")
-		if len(parts) == 1 {
+		if parts := strings.Split(b, ":"); len(parts) == 1 {
 			anonBinds[path.Clean(parts[0])] = i
-			continue
-		}
-		named[path.Clean(parts[1])] = true
-	}
-	for _, m := range out.Mounts {
-		if m.Type != mount.TypeVolume || m.Source != "" {
-			named[path.Clean(m.Target)] = true
 		}
 	}
 
-	carried := false
-	for _, mp := range mounts {
+	for _, mp := range anon {
 		dest := path.Clean(mp.Destination)
-		if mp.Type != mount.TypeVolume || mp.Name == "" || named[dest] {
-			continue
-		}
-		named[dest] = true
-		carried = true
 		if i, ok := anonBinds[dest]; ok {
 			out.Binds[i] = mp.Name + ":" + out.Binds[i]
 			continue
@@ -752,10 +739,65 @@ func withAnonymousVolumes(hostCfg *container.HostConfig, mounts []container.Moun
 		}
 		out.Mounts = append(out.Mounts, m)
 	}
-	if !carried {
-		return hostCfg
-	}
 	return &out
+}
+
+// anonymousVolumes returns the container's anonymous volume mounts, one per
+// destination, in mount order: the volumes at destinations no bind and no
+// sourced mount in the HostConfig names. It is the one definition of
+// "anonymous" for both withAnonymousVolumes, which carries them into the
+// recreated container, and refuseAutoRemoveAnonymous, which refuses an update
+// that would lose them (agent-os-64me).
+func anonymousVolumes(hostCfg *container.HostConfig, mounts []container.MountPoint) []container.MountPoint {
+	named := map[string]bool{}
+	if hostCfg != nil {
+		for _, b := range hostCfg.Binds {
+			// "destination" or "source:destination[:options]"; Capstan runs
+			// Linux daemons only. A one-part bind is an anonymous volume.
+			if parts := strings.Split(b, ":"); len(parts) > 1 {
+				named[path.Clean(parts[1])] = true
+			}
+		}
+		for _, m := range hostCfg.Mounts {
+			if m.Type != mount.TypeVolume || m.Source != "" {
+				named[path.Clean(m.Target)] = true
+			}
+		}
+	}
+
+	var anon []container.MountPoint
+	for _, mp := range mounts {
+		dest := path.Clean(mp.Destination)
+		if mp.Type != mount.TypeVolume || mp.Name == "" || named[dest] {
+			continue
+		}
+		named[dest] = true
+		anon = append(anon, mp)
+	}
+	return anon
+}
+
+// refuseAutoRemoveAnonymous refuses the update of a container started with
+// --rm (HostConfig.AutoRemove) that has anonymous volumes (agent-os-64me).
+// Stopping such a container for the recreate makes Docker remove it, and its
+// anonymous volumes with it, so the data cannot be carried to the new
+// container. Edwin's ruling (2026-11-14): refuse before anything is pulled or
+// stopped, whether or not the container is running, rather than copy the data.
+func refuseAutoRemoveAnonymous(inspect container.InspectResponse) error {
+	if inspect.HostConfig == nil || !inspect.HostConfig.AutoRemove {
+		return nil
+	}
+	anon := anonymousVolumes(inspect.HostConfig, inspect.Mounts)
+	if len(anon) == 0 {
+		return nil
+	}
+	dests := make([]string, len(anon))
+	for i, mp := range anon {
+		dests[i] = path.Clean(mp.Destination)
+	}
+	return fmt.Errorf("not updated: the container was started with --rm (auto-remove), so stopping it "+
+		"for the update would make Docker delete its unnamed volumes (%s) and their data; "+
+		"recreate it without --rm or with named volumes to update it", strings.Join(dests, ", "))
 }
 
 // dropKeys returns a copy of m without the keys drop reports, or nil for nil.
@@ -804,6 +846,12 @@ func (s *DockerService) recreateStandaloneContainer(
 	}
 	imageRef := inspect.Config.Image
 	name := strings.TrimPrefix(inspect.Name, "/")
+
+	// First, before anything is pulled or stopped (agent-os-64me).
+	if err := refuseAutoRemoveAnonymous(inspect); err != nil {
+		say(StreamStderr, "Error: "+err.Error())
+		return "", err
+	}
 
 	setStatus(StatusPulling)
 	say(StreamStatus, "==> Pulling "+imageRef)
