@@ -95,11 +95,14 @@ func (s *GitService) historyDiff(dirPath string, cred gitCreds, oid string, pare
 	if err != nil {
 		return nil, err
 	}
-	out, _, err := s.gitRun(dirPath, cred, noLazyFetchEnv, append(append([]string{}, historyNameArgs...), oid)...)
+	// agent-os-9wwa: the names are read raw, because the env rule and the
+	// exclude pathspecs decide on them; the lists the response shows are
+	// masked where res is built.
+	out, _, err := s.gitRunUnredacted(dirPath, cred, noLazyFetchEnv, append(append([]string{}, historyNameArgs...), oid)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list changed files: %w", err)
 	}
-	groups, err := parseNameStatusZ(out)
+	groups, err := parseNameStatusZ(out, cred.token)
 	if err != nil {
 		return nil, err
 	}
@@ -122,6 +125,10 @@ func (s *GitService) historyDiff(dirPath string, cred gitCreds, oid string, pare
 		}
 	}
 	res := &historyDiff{files: sortedKeys(all), hidden: sortedKeys(hidden)}
+	shown := func(r *historyDiff) *historyDiff {
+		r.files, r.hidden = redactAll(r.files, cred.token), redactAll(r.hidden, cred.token)
+		return r
+	}
 
 	pathspecs := []string{":(top)"}
 	size := 0
@@ -131,39 +138,113 @@ func (s *GitService) historyDiff(dirPath string, cred gitCreds, oid string, pare
 	}
 	switch {
 	case len(res.hidden) > 0 && len(res.hidden) == len(res.files):
-		return res, nil
+		return shown(res), nil
 	case size > maxHiddenPathspecBytes:
 		slog.Warn("Hiding the whole history diff: too many env files to exclude", "path", dirPath, "commit", oid, "hidden", len(res.hidden))
 		res.hidden = res.files
-		return res, nil
+		return shown(res), nil
 	}
 	args := append([]string{}, historyShowArgs...)
 	if mask != nil {
 		args = append(args, "--diff-merges=first-parent", fullContextArg)
 	}
 	args = append(append(args, oid, "--"), pathspecs...)
-	diff, _, err := s.gitRun(dirPath, cred, showEnv, args...)
+	// Raw, so the secret masker sees each value whole; the token is masked
+	// after it (agent-os-9wwa).
+	diff, _, err := s.gitRunUnredacted(dirPath, cred, showEnv, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get diff: %w", err)
 	}
-	if mask != nil {
-		diff = MaskFullContextDiff(diff, mask.secrets)
-	}
+	diff = maskPatch(diff, cred.token, mask)
 	res.diff = strings.TrimSpace(diff)
-	return res, nil
+	return shown(res), nil
+}
+
+// maskPatch is the display boundary of a patch read raw (agent-os-9wwa). The
+// token and a locked session's secrets are masked TOGETHER: masking either one
+// first can split the other, so a secret holding the token, a token holding a
+// secret, or the two overlapping, each left part of one of them shown.
+// maskTokenSpans masks every stretch the token covers, grown by each secret
+// occurrence that overlaps it; the secrets that do not touch the token are
+// left whole for MaskFullContextDiff; a last redactToken covers the
+// unmasked view.
+//
+// While the masker runs, the token's spans hold tokenSpanSentinel rather than
+// "***": "***" starts a YAML alias, so a compose line such as `NOTE: ***`
+// failed the masker's YAML pass and a secret only that pass finds (the item
+// after --password) was shown. The sentinel is a plain scalar.
+func maskPatch(diff, token string, mask *diffMasking) string {
+	if mask != nil {
+		diff = MaskFullContextDiff(maskTokenSpans(diff, token, mask.secrets), mask.secrets)
+		diff = strings.ReplaceAll(diff, tokenSpanSentinel, "***")
+	}
+	return redactToken(diff, token)
+}
+
+// tokenSpanSentinel stands in for a masked token span while the secret masker
+// reads the patch: letters and digits only, so YAML reads it as a plain
+// scalar, and long enough that no secret is expected to equal or hold it.
+const tokenSpanSentinel = "CapstanMaskedTokenSpan9wwa"
+
+// maskTokenSpans replaces with tokenSpanSentinel each union of overlapping occurrences of
+// token and of secrets that contains at least one occurrence of token.
+// Secrets MaskSecrets would skip (too short, or multi-line) do not grow a
+// span, so this masks nothing the masker itself would leave.
+func maskTokenSpans(s, token string, secrets []string) string {
+	if token == "" || !strings.Contains(s, token) {
+		return s
+	}
+	type span struct {
+		a, b int
+		tok  bool
+	}
+	var spans []span
+	find := func(v string, tok bool) {
+		for i := 0; i <= len(s)-len(v); {
+			j := strings.Index(s[i:], v)
+			if j < 0 {
+				return
+			}
+			spans = append(spans, span{i + j, i + j + len(v), tok})
+			i += j + 1
+		}
+	}
+	find(token, true)
+	for _, v := range secrets {
+		if len(v) >= composeSecretMinLen && !strings.Contains(v, "\n") {
+			find(v, false)
+		}
+	}
+	sort.Slice(spans, func(i, j int) bool { return spans[i].a < spans[j].a })
+	var b strings.Builder
+	at := 0
+	for i := 0; i < len(spans); {
+		cur := spans[i]
+		for i++; i < len(spans) && spans[i].a < cur.b; i++ {
+			cur.b = max(cur.b, spans[i].b)
+			cur.tok = cur.tok || spans[i].tok
+		}
+		if cur.tok {
+			b.WriteString(s[at:cur.a])
+			b.WriteString(tokenSpanSentinel)
+			at = cur.b
+		}
+	}
+	b.WriteString(s[at:])
+	return b.String()
 }
 
 // historyTop is the repository's top level, symlinks resolved. A bare
 // repository has no work tree, so its top is the folder itself and bare is
 // true: nothing on disk describes its commits.
 func (s *GitService) historyTop(dirPath string, cred gitCreds) (top string, bare bool, err error) {
-	isBare, err := s.gitCommandWithCreds(dirPath, cred, "rev-parse", "--is-bare-repository")
+	isBare, err := s.gitCommandUnredacted(dirPath, cred, "rev-parse", "--is-bare-repository")
 	if err != nil {
 		return "", false, fmt.Errorf("failed to tell whether the repository is bare: %w", err)
 	}
 	top = dirPath
 	if isBare != "true" {
-		if top, err = s.gitCommandWithCreds(dirPath, cred, "rev-parse", "--show-toplevel"); err != nil {
+		if top, err = s.gitCommandUnredacted(dirPath, cred, "rev-parse", "--show-toplevel"); err != nil {
 			return "", false, fmt.Errorf("failed to find the repository top level: %w", err)
 		}
 	}
@@ -177,7 +258,7 @@ func (s *GitService) historyTop(dirPath string, cred gitCreds) (top string, bare
 // parseNameStatusZ reads `diff-tree -z --name-status`: a status record, then
 // one path, or two for a rename or copy (status R or C), which come back as
 // one group so both sides are decided together.
-func parseNameStatusZ(out string) ([][]string, error) {
+func parseNameStatusZ(out, token string) ([][]string, error) {
 	recs := strings.Split(out, "\x00")
 	var groups [][]string
 	for i := 0; i < len(recs); i++ {
@@ -190,12 +271,12 @@ func parseNameStatusZ(out string) ([][]string, error) {
 			n = 2
 		}
 		if i+n >= len(recs) {
-			return nil, fmt.Errorf("git diff-tree record %q has no path", status)
+			return nil, fmt.Errorf("git diff-tree record %q has no path", redactToken(status, token))
 		}
 		g := recs[i+1 : i+1+n]
 		for _, p := range g {
 			if p == "" {
-				return nil, fmt.Errorf("git diff-tree record %q has an empty path", status)
+				return nil, fmt.Errorf("git diff-tree record %q has an empty path", redactToken(status, token))
 			}
 		}
 		groups = append(groups, append([]string(nil), g...))
@@ -258,9 +339,10 @@ type historyRuleReader struct {
 }
 
 // catBlob is the only cat-file the history view runs: `blob`, so no textconv
-// or filter, and never a lazy fetch.
+// or filter, and never a lazy fetch. Raw (agent-os-9wwa): the env rule reads
+// compose files and link targets from it, and nothing shows it.
 func (s *GitService) catBlob(dirPath string, cred gitCreds, oid string) (string, error) {
-	out, _, err := s.gitRun(dirPath, cred, noLazyFetchEnv, "-c", "core.fsmonitor=false", "cat-file", "blob", oid)
+	out, _, err := s.gitRunUnredacted(dirPath, cred, noLazyFetchEnv, "-c", "core.fsmonitor=false", "cat-file", "blob", oid)
 	return out, err
 }
 
@@ -270,7 +352,7 @@ func (h *historyRuleReader) blobSize(oid string) (int64, error) {
 	if b, ok := h.blobs[oid]; ok {
 		return int64(len(b)), nil
 	}
-	out, _, err := h.s.gitRun(h.dirPath, h.cred, noLazyFetchEnv, "-c", "core.fsmonitor=false", "cat-file", "-s", oid)
+	out, _, err := h.s.gitRunUnredacted(h.dirPath, h.cred, noLazyFetchEnv, "-c", "core.fsmonitor=false", "cat-file", "-s", oid)
 	if err != nil {
 		return 0, err
 	}
@@ -322,10 +404,10 @@ func (h *historyRuleReader) resolve(t historyTree, p string) (string, bool, erro
 		}
 		dest, err := h.blob(e.oid)
 		if err != nil {
-			return "", false, fmt.Errorf("failed to read the link %s at %s: %w", cur, t.name, err)
+			return "", false, fmt.Errorf("failed to read the link %s at %s: %w", redactToken(cur, h.cred.token), t.name, err)
 		}
 		if filepath.IsAbs(dest) {
-			rel, ok, err := repoRel(h.top, dest)
+			rel, ok, err := repoRel(h.top, dest, h.cred.token)
 			if err != nil {
 				return "", false, err
 			}
@@ -355,7 +437,7 @@ func (h *historyRuleReader) treeSource(t historyTree, gitErr *error) composeSour
 			// A compose file whose link leaves the repository (or loops)
 			// named something no tree here shows: unknown, not missing.
 			if !ok {
-				return nil, false, fmt.Errorf("compose file %s at %s is a link that leaves the repository or loops", p, t.name)
+				return nil, false, fmt.Errorf("compose file %s at %s is a link that leaves the repository or loops", redactToken(p, h.cred.token), t.name)
 			}
 			e, found := t.listing[resolved]
 			if !found || e.mode == "160000" || e.mode == "120000" {
@@ -364,16 +446,16 @@ func (h *historyRuleReader) treeSource(t historyTree, gitErr *error) composeSour
 			p = resolved
 			if e.size < 0 {
 				if e.size, err = h.blobSize(e.oid); err != nil {
-					*gitErr = fmt.Errorf("failed to read the size of %s at %s: %w", p, t.name, err)
+					*gitErr = fmt.Errorf("failed to read the size of %s at %s: %w", redactToken(p, h.cred.token), t.name, err)
 					return nil, false, *gitErr
 				}
 			}
 			if e.size > maxComposeBytes {
-				return nil, false, fmt.Errorf("compose file %s at %s is larger than %d bytes", p, t.name, maxComposeBytes)
+				return nil, false, fmt.Errorf("compose file %s at %s is larger than %d bytes", redactToken(p, h.cred.token), t.name, maxComposeBytes)
 			}
 			b, err := h.blob(e.oid)
 			if err != nil {
-				*gitErr = fmt.Errorf("failed to read %s at %s: %w", p, t.name, err)
+				*gitErr = fmt.Errorf("failed to read %s at %s: %w", redactToken(p, h.cred.token), t.name, err)
 				return nil, false, *gitErr
 			}
 			return []byte(b), true, nil
@@ -390,7 +472,7 @@ func (h *historyRuleReader) treeSource(t historyTree, gitErr *error) composeSour
 // for a path outside the repository, which no commit of it holds.
 func (h *historyRuleReader) place(dir, entry string) (string, bool, error) {
 	if filepath.IsAbs(entry) {
-		return repoRel(h.top, entry)
+		return repoRel(h.top, entry, h.cred.token)
 	}
 	p, ok := repoJoin(dir, filepath.ToSlash(entry))
 	return p, ok, nil
@@ -417,6 +499,15 @@ func (s *GitService) historyEnvRule(dirPath, top string, bare bool, cred gitCred
 	}
 	h := &historyRuleReader{s: s, dirPath: dirPath, cred: cred, top: top, blobs: map[string]string{}}
 	unknown := func(msg string, args ...any) {
+		// The paths and errors here come from raw tree listings and blobs.
+		for i, a := range args {
+			switch a := a.(type) {
+			case string:
+				args[i] = redactToken(a, cred.token)
+			case error:
+				args[i] = redactErr(a, cred.token)
+			}
+		}
 		slog.Warn("Hiding every file but the compose files in the "+view+": "+msg, args...)
 		r.composeUnreadable = true
 	}
@@ -460,7 +551,7 @@ func (s *GitService) historyEnvRule(dirPath, top string, bare bool, cred gitCred
 			return nil
 		}
 		for i, abs := range append(named, files...) {
-			rel, ok, err := repoRel(top, abs)
+			rel, ok, err := repoRel(top, abs, cred.token)
 			if err != nil {
 				return err
 			}
@@ -593,7 +684,7 @@ func (s *GitService) historyEnvRule(dirPath, top string, bare bool, cred gitCred
 			return r, err
 		}
 		for abs := range today {
-			rel, ok, err := repoRel(top, abs)
+			rel, ok, err := repoRel(top, abs, cred.token)
 			if err != nil {
 				return r, err
 			}
@@ -612,7 +703,7 @@ func (s *GitService) historyEnvRule(dirPath, top string, bare bool, cred gitCred
 // conflicted path has an entry per stage, so there is one listing per stage
 // present: the stage-0 entries plus that stage's. The first is stage 0.
 func (s *GitService) lsIndex(top string, cred gitCreds) ([]historyTree, error) {
-	out, _, err := s.gitRun(top, cred, noLazyFetchEnv, "-c", "core.fsmonitor=false", "ls-files", "-s", "-z")
+	out, _, err := s.gitRunUnredacted(top, cred, noLazyFetchEnv, "-c", "core.fsmonitor=false", "ls-files", "-s", "-z")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list the index: %w", err)
 	}
@@ -624,14 +715,14 @@ func (s *GitService) lsIndex(top string, cred gitCreds) ([]historyTree, error) {
 		meta, p, ok := strings.Cut(rec, "\t")
 		f := strings.Fields(meta)
 		if !ok || len(f) != 3 {
-			return nil, fmt.Errorf("unexpected git ls-files record %q", rec)
+			return nil, fmt.Errorf("unexpected git ls-files record %q", redactToken(rec, cred.token))
 		}
 		stage, err := strconv.Atoi(f[2])
 		if err != nil {
-			return nil, fmt.Errorf("unexpected git ls-files stage in %q: %w", rec, err)
+			return nil, fmt.Errorf("unexpected git ls-files stage in %q: %w", redactToken(rec, cred.token), redactErr(err, cred.token))
 		}
 		if stage < 0 || stage > 3 {
-			return nil, fmt.Errorf("unexpected git ls-files stage in %q", rec)
+			return nil, fmt.Errorf("unexpected git ls-files stage in %q", redactToken(rec, cred.token))
 		}
 		if stages[stage] == nil {
 			stages[stage] = map[string]treeEntry{}
@@ -693,7 +784,7 @@ const maxLinkHops = 40
 // recursively, with blob sizes. --full-tree: run from a stack folder below
 // the top, ls-tree would list only that folder, relative to it (agent-os-odjs).
 func (s *GitService) lsTree(dirPath string, cred gitCreds, t string) (map[string]treeEntry, error) {
-	out, _, err := s.gitRun(dirPath, cred, noLazyFetchEnv, "-c", "core.fsmonitor=false", "ls-tree", "--full-tree", "-r", "-l", "-z", t)
+	out, _, err := s.gitRunUnredacted(dirPath, cred, noLazyFetchEnv, "-c", "core.fsmonitor=false", "ls-tree", "--full-tree", "-r", "-l", "-z", t)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list the files of %s: %w", t, err)
 	}
@@ -705,7 +796,7 @@ func (s *GitService) lsTree(dirPath string, cred gitCreds, t string) (map[string
 		meta, p, ok := strings.Cut(rec, "\t")
 		f := strings.Fields(meta)
 		if !ok || len(f) != 4 {
-			return nil, fmt.Errorf("unexpected git ls-tree record %q", rec)
+			return nil, fmt.Errorf("unexpected git ls-tree record %q", redactToken(rec, cred.token))
 		}
 		size, err := strconv.ParseInt(f[3], 10, 64)
 		if err != nil {
@@ -721,21 +812,34 @@ func (s *GitService) lsTree(dirPath string, cred gitCreds, t string) (map[string
 // existing ancestor, so a file deleted from disk under a symlinked stacks root
 // still maps (agent-os-odjs). A path it cannot check is an error, never
 // "outside": the caller would then show a file it meant to hide.
-func repoRel(top, abs string) (string, bool, error) {
+//
+// tokens, for a path read from git's raw output (agent-os-9wwa), is the
+// credential to mask in an error: the path is masked BEFORE boundedPath
+// quotes and cuts it, since quoting escapes a token and the cut can split
+// one, and a finished message then no longer holds it whole. Optional, so the
+// callers with paths from disk or the database stay as they are.
+func repoRel(top, abs string, tokens ...string) (string, bool, error) {
+	token := ""
+	if len(tokens) > 0 {
+		token = tokens[0]
+	}
 	ok, err := pathutil.IsContained(top, abs)
 	if err != nil {
-		return "", false, fmt.Errorf("could not tell whether %s is inside the repository: %w", boundedPath(abs), boundedPathErr(err))
+		return "", false, redactErr(fmt.Errorf("could not tell whether %s is inside the repository: %w",
+			boundedPath(redactToken(abs, token)), boundedPathErrShown(err, token)), token)
 	}
 	if !ok {
 		return "", false, nil
 	}
 	resolved, err := pathutil.ResolveExisting(abs)
 	if err != nil {
-		return "", false, fmt.Errorf("could not resolve %s: %w", boundedPath(abs), boundedPathErr(err))
+		return "", false, redactErr(fmt.Errorf("could not resolve %s: %w",
+			boundedPath(redactToken(abs, token)), boundedPathErrShown(err, token)), token)
 	}
 	rel, err := filepath.Rel(top, resolved)
 	if err != nil {
-		return "", false, fmt.Errorf("could not place %s in the repository: %w", boundedPath(resolved), boundedPathErr(err))
+		return "", false, redactErr(fmt.Errorf("could not place %s in the repository: %w",
+			boundedPath(redactToken(resolved, token)), boundedPathErrShown(err, token)), token)
 	}
 	// Contained, yet not local: top was passed with a symlink in it. It names
 	// no file git could list under this name.
@@ -762,11 +866,17 @@ func boundedPath(p string) string {
 // boundedPath does: the OS error (lstat <path>: file name too long) repeats
 // the path whole. The cause stays in the chain.
 func boundedPathErr(err error) error {
+	return boundedPathErrShown(err, "")
+}
+
+// boundedPathErrShown is boundedPathErr with token masked in the path before
+// it is bounded (agent-os-9wwa).
+func boundedPathErrShown(err error, token string) error {
 	var pe *fs.PathError
 	if !errors.As(err, &pe) {
 		return err
 	}
-	return fmt.Errorf("%s %s: %w", pe.Op, boundedPath(pe.Path), pe.Err)
+	return fmt.Errorf("%s %s: %w", pe.Op, boundedPath(redactToken(pe.Path, token)), pe.Err)
 }
 
 // repoJoin joins a repository-relative folder and a relative path as paths

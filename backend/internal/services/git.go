@@ -113,7 +113,11 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 	// (agent-os-9ha).
 	cred := s.gitCredentials(dirPath)
 
-	branch, err := s.gitCommandWithCreds(dirPath, cred, "rev-parse", "--abbrev-ref", "HEAD")
+	// agent-os-9wwa: every value this function DECIDES on is read raw, since
+	// redactToken is a substring rewrite and a token inside a hash, "true", a
+	// branch name or a porcelain line changes the answer. The text fields are
+	// redacted once, where the result is built.
+	branch, err := s.gitCommandUnredacted(dirPath, cred, "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
 		// This guard used to answer EVERY failure of that command with a flat
 		// 404 "Not a git repository", asserting a diagnosis it had not tested
@@ -174,7 +178,7 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 	// repository would be served as branch "HEAD", commit "HEAD". It gets the
 	// answer `git init` gets (agent-os-m2g8). The probe's error is returned:
 	// guessing "not bare" walks into `status`'s 500 below with a vaguer message.
-	isBare, err := s.gitCommandWithCreds(dirPath, cred, "rev-parse", "--is-bare-repository")
+	isBare, err := s.gitCommandUnredacted(dirPath, cred, "rev-parse", "--is-bare-repository")
 	if err != nil {
 		return nil, fmt.Errorf("failed to detect a bare repository: %w", err)
 	}
@@ -183,7 +187,9 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 		return nil, models.NewAppError(404, models.ErrGitNoCommits, "Repository has no commits yet")
 	}
 
-	commitHash, err := s.gitCommandWithCreds(dirPath, cred, "rev-parse", "HEAD")
+	// A hash is git's own output, never repository text, so it is served raw
+	// (agent-os-9wwa D2): masked, it named a commit that does not exist.
+	commitHash, err := s.gitCommandUnredacted(dirPath, cred, "rev-parse", "HEAD")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get HEAD: %w", err)
 	}
@@ -222,7 +228,7 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 	// sent as a "clean, up to date" that nobody checked.
 	if bare {
 		return &models.GitStatusResult{
-			Branch:    branch,
+			Branch:    redactToken(branch, cred.token),
 			Commit:    commit,
 			RemoteURL: remoteURL,
 			IsBare:    true,
@@ -261,7 +267,7 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 	// git_stderrsplit_vwi7_test.go, whose fourth arm also pins the COUNT on a
 	// faulted repository with one real modification — the boolean alone cannot
 	// tell that case from the bug.
-	statusOut, err := s.gitCommandWithCreds(dirPath, cred, "status", "--porcelain")
+	statusOut, err := s.gitCommandUnredacted(dirPath, cred, "status", "--porcelain")
 	if err != nil {
 		return nil, fmt.Errorf("failed to read status: %w", err)
 	}
@@ -290,7 +296,7 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 	// report the nonsense "origin/HEAD" for every detached checkout — a state
 	// where go-git reported "".
 	if branch != "HEAD" {
-		if output, err := s.gitCommandWithCreds(dirPath, cred, //geterrors:ignore a non-zero exit from rev-parse --abbrev-ref @{upstream} IS "no upstream configured", which is the question; the else branch below handles it
+		if output, err := s.gitCommandUnredacted(dirPath, cred, //geterrors:ignore a non-zero exit from rev-parse --abbrev-ref @{upstream} IS "no upstream configured", which is the question; the else branch below handles it
 			"rev-parse", "--abbrev-ref", "@{upstream}"); err == nil {
 			trackingBranch = strings.TrimSpace(output)
 		} else if _, refErr := s.gitCommandWithCreds(dirPath, cred, //geterrors:ignore a non-zero exit from rev-parse --verify refs/remotes/origin/<branch> IS "no such remote-tracking ref", which is the question
@@ -353,10 +359,10 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 		// TestGetStatus_AmbiguousRefnameStillCountsAheadBehind (which asserts
 		// ahead=1, not merely "an error") and
 		// TestGetStatus_UnreadableAheadBehindCountIsAnError.
-		output, err := s.gitCommandWithCreds(dirPath, cred,
+		output, err := s.gitCommandUnredacted(dirPath, cred,
 			"rev-list", "--left-right", "--count", trackingBranch+"...HEAD")
 		if err != nil {
-			return nil, fmt.Errorf("failed to count ahead/behind against %s: %w", trackingBranch, err)
+			return nil, fmt.Errorf("failed to count ahead/behind against %s: %w", redactToken(trackingBranch, cred.token), err)
 		}
 		// A FIELD COUNT OTHER THAN TWO IS NOW AN ERROR (agent-os-vwi7), where it
 		// used to skip the block silently and leave ahead=0/behind=0 standing.
@@ -382,7 +388,7 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 		parts := strings.Fields(output)
 		if len(parts) != 2 {
 			return nil, fmt.Errorf("rev-list --left-right --count against %s answered %d fields, want 2: %q",
-				trackingBranch, len(parts), output)
+				redactToken(trackingBranch, cred.token), len(parts), redactToken(output, cred.token))
 		}
 		// Both parsed or neither: GitStatus.tsx renders each count with
 		// `{gitStatus.ahead > 0 && ...}`, so a 0 salvaged from an
@@ -392,23 +398,23 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 		// field that is not one is a real fault, not a missing upstream.
 		behind, err = strconv.Atoi(parts[0])
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse behind count %q: %w", parts[0], err)
+			return nil, fmt.Errorf("failed to parse behind count %q: %w", redactToken(parts[0], cred.token), redactErr(err, cred.token))
 		}
 		ahead, err = strconv.Atoi(parts[1])
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse ahead count %q: %w", parts[1], err)
+			return nil, fmt.Errorf("failed to parse ahead count %q: %w", redactToken(parts[1], cred.token), redactErr(err, cred.token))
 		}
 	}
 
 	return &models.GitStatusResult{
-		Branch:         branch,
+		Branch:         redactToken(branch, cred.token),
 		Commit:         commit,
 		Dirty:          dirty,
 		DirtyCount:     dirtyCount,
 		Ahead:          ahead,
 		Behind:         behind,
 		RemoteURL:      remoteURL,
-		TrackingBranch: trackingBranch,
+		TrackingBranch: redactToken(trackingBranch, cred.token),
 	}, nil
 }
 
@@ -477,7 +483,7 @@ func (s *GitService) gitCommandWithCreds(dirPath string, cred gitCreds, args ...
 // value that must be classified as git printed it: a remote URL's ssh-or-not
 // shape, which a short token masked to "***" can flip both ways
 // (agent-os-0j5h). The result can hold the token, so it never reaches a
-// message, a log or a response. TestGitCommandUnredactedCallers0j5h lists the
+// message, a log or a response. TestRawGitCallers9wwa lists the
 // callers.
 func (s *GitService) gitCommandUnredacted(dirPath string, cred gitCreds, args ...string) (string, error) {
 	ctx, cancel := withCommandDeadline(context.Background(), s.gitTimeout())
@@ -510,6 +516,44 @@ func (s *GitService) gitCommandUnredacted(dirPath string, cred gitCreds, args ..
 
 	return strings.TrimSpace(stdout.String()), nil
 }
+
+// redactErr masks token in err's text (agent-os-9wwa), and keeps err in the
+// chain, so errors.As and
+// gitExitCode still see what it wraps. An error that does not hold the token
+// is returned as it is. It is a backstop for errors built elsewhere: a
+// message this package builds from a raw value masks that value BEFORE
+// formatting it, because %q and boundedPath escape or cut a token, and a
+// finished string no longer holds it whole.
+//
+// An *models.AppError is copied with its message and a string Details masked:
+// a handler renders those fields, not Error(), so wrapping it would leave the
+// token in the response.
+func redactErr(err error, token string) error {
+	if err == nil || token == "" {
+		return err
+	}
+	if ae, ok := err.(*models.AppError); ok { //nolint:errorlint // only the AppError itself is rendered; a wrapped one is masked through Error() below
+		cp := *ae
+		cp.Message = redactToken(ae.Message, token)
+		if d, ok := ae.Details.(string); ok {
+			cp.Details = redactToken(d, token)
+		}
+		cp.Cause = redactErr(ae.Cause, token)
+		return &cp
+	}
+	if !strings.Contains(err.Error(), token) {
+		return err
+	}
+	return &redactedError{msg: redactToken(err.Error(), token), err: err}
+}
+
+type redactedError struct {
+	msg string
+	err error
+}
+
+func (e *redactedError) Error() string { return e.msg }
+func (e *redactedError) Unwrap() error { return e.err }
 
 // gitDiagnostic reassembles both halves of a failed git child for an error
 // message.
@@ -548,7 +592,7 @@ const maxNamedSubmodules = 3
 // Any doubt (a second status call that fails, a record that is not plain
 // pointer drift) answers with today's generic message.
 func (s *GitService) dirtyPullMessage(dirPath string, cred gitCreds) string {
-	out, err := s.gitCommandWithCreds(dirPath, cred, "status", "--porcelain=v2", "-z")
+	out, err := s.gitCommandUnredacted(dirPath, cred, "status", "--porcelain=v2", "-z")
 	if err != nil {
 		return genericDirtyPullMessage
 	}
@@ -556,7 +600,9 @@ func (s *GitService) dirtyPullMessage(dirPath string, cred gitCreds) string {
 	if !ok {
 		return genericDirtyPullMessage
 	}
-	return submoduleDriftMessage(paths)
+	// Each path is masked before %q quotes it: quoting escapes a token that
+	// holds `"` or `\`, which masking the finished message then misses.
+	return submoduleDriftMessage(redactAll(paths, cred.token))
 }
 
 // submoduleDriftMessage names up to maxNamedSubmodules paths, then a count.
@@ -608,18 +654,28 @@ func submoduleDriftPaths(out string) (paths []string, ok bool) {
 	return paths, len(paths) > 0
 }
 
-func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
+// pullCLI pulls dirPath. creds, when given, is the credential the caller already resolved, so the
+// token PullVerified masks with is the one git ran with (agent-os-9wwa).
+// It is optional because the tests call pullCLI(dir) directly.
+func (s *GitService) pullCLI(dirPath string, creds ...gitCreds) (*models.PullResult, error) {
 	slog.Debug("Pulling git changes (CLI)", "path", dirPath)
 
 	// Resolved once for the whole pull and threaded through every call below
 	// (agent-os-9ha) — see getStatusCLI for why.
-	cred := s.gitCredentials(dirPath)
+	var cred gitCreds
+	if len(creds) > 0 {
+		cred = creds[0]
+	} else {
+		cred = s.gitCredentials(dirPath)
+	}
 
 	// A bare repository has no work tree, so `status` below fails with "this
 	// operation must be run in a work tree" and the pull used to answer 500 for
 	// a request the repository simply cannot satisfy (agent-os-00zg). Same probe
 	// as getStatusCLI, and its error is returned for the same reason.
-	isBare, err := s.gitCommandWithCreds(dirPath, cred, "rev-parse", "--is-bare-repository")
+	// agent-os-9wwa: the decisions below read raw stdout; only the changed
+	// file names are text, and PullVerified redacts them where they are shown.
+	isBare, err := s.gitCommandUnredacted(dirPath, cred, "rev-parse", "--is-bare-repository")
 	if err != nil {
 		return nil, fmt.Errorf("failed to detect a bare repository: %w", err)
 	}
@@ -627,7 +683,7 @@ func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
 		return nil, models.NewAppError(409, models.ErrGitBareRepo, "A bare repository has no work tree to pull into")
 	}
 
-	dirtyOutput, err := s.gitCommandWithCreds(dirPath, cred, "status", "--porcelain")
+	dirtyOutput, err := s.gitCommandUnredacted(dirPath, cred, "status", "--porcelain")
 	if err != nil {
 		return nil, fmt.Errorf("failed to check status: %w", err)
 	}
@@ -635,7 +691,7 @@ func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
 		return nil, models.NewAppError(400, models.ErrGitDirty, s.dirtyPullMessage(dirPath, cred))
 	}
 
-	previousCommit, err := s.gitCommandWithCreds(dirPath, cred, "rev-parse", "HEAD")
+	previousCommit, err := s.gitCommandUnredacted(dirPath, cred, "rev-parse", "HEAD")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get HEAD: %w", err)
 	}
@@ -715,7 +771,7 @@ func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
 	// The wrapped cause below names the real fault, and a re-run of an
 	// --ff-only pull is a no-op, so erring toward "failed" is the safe
 	// direction.
-	currentCommit, err := s.gitCommandWithCreds(dirPath, cred, "rev-parse", "HEAD")
+	currentCommit, err := s.gitCommandUnredacted(dirPath, cred, "rev-parse", "HEAD")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get HEAD after pull: %w", err)
 	}
@@ -737,7 +793,7 @@ func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
 		//                  is attempted, and fails loudly.
 		// gitRun, not gitCommandWithCreds: that TrimSpaces stdout, which would
 		// eat a leading space of the first name.
-		diffOutput, _, err := s.gitRun(dirPath, cred, nil, "diff", "--name-only", "-z", "--no-renames", "--no-relative", previousCommit, currentCommit)
+		diffOutput, _, err := s.gitRunUnredacted(dirPath, cred, nil, "diff", "--name-only", "-z", "--no-renames", "--no-relative", previousCommit, currentCommit)
 		switch {
 		case err != nil:
 			// This branch runs only because the ref MOVED, so "no files
@@ -948,6 +1004,45 @@ func gitExitCode(err error) int {
 	return -1
 }
 
+// redactPullResult is the display boundary of a pull (agent-os-9wwa): the
+// redeploy decided on the changed file names as git printed them, and the
+// names and every other text the result carries are masked here, where they
+// leave for the response and the action log.
+func redactPullResult(ar truth.ActionResult, res *models.PullResult, token string) (truth.ActionResult, *models.PullResult) {
+	if token == "" {
+		return ar, res
+	}
+	ar.Reason = redactToken(ar.Reason, token)
+	ar.Err = redactErr(ar.Err, token)
+	for k, v := range ar.Details {
+		switch v := v.(type) {
+		case string:
+			ar.Details[k] = redactToken(v, token)
+		case []string:
+			ar.Details[k] = redactAll(v, token)
+		}
+	}
+	if res != nil {
+		cp := *res
+		cp.ChangedFiles = redactAll(res.ChangedFiles, token)
+		cp.DiffError = redactToken(res.DiffError, token)
+		res = &cp
+	}
+	return ar, res
+}
+
+// redactAll is redactToken over each of vs, into a new slice.
+func redactAll(vs []string, token string) []string {
+	if vs == nil {
+		return nil
+	}
+	out := make([]string, len(vs))
+	for i, v := range vs {
+		out[i] = redactToken(v, token)
+	}
+	return out
+}
+
 // PullVerified performs a git pull and, if redeploy is requested, redeploys every
 // affected stack using the verified lifecycle (RestartVerified / StartVerified).
 // It returns a truth.ActionResult that never reports success when a redeploy failed:
@@ -973,7 +1068,11 @@ func gitExitCode(err error) int {
 // compose or env file changed, so the operator can redeploy them; one that
 // cannot be checked makes the outcome partial (details.siblingCheckFailures,
 // or details.siblingListError when none could be).
-func (s *GitService) PullVerified(dirPath string, redeploy bool, docker *DockerService) (truth.ActionResult, *models.PullResult) {
+func (s *GitService) PullVerified(dirPath string, redeploy bool, docker *DockerService) (ar truth.ActionResult, res *models.PullResult) {
+	cred := s.gitCredentials(dirPath)
+	// Every return below leaves through the display boundary (agent-os-9wwa).
+	defer func() { ar, res = redactPullResult(ar, res, cred.token) }()
+
 	var lockedStacks []models.Stack
 	locked := false
 	// Siblings placed before the pull, while every folder it may delete still
@@ -986,7 +1085,6 @@ func (s *GitService) PullVerified(dirPath string, redeploy bool, docker *DockerS
 	// it is needed before the pull too: a pull rewrites the whole work tree,
 	// so every stack inside the top is locked, not only dirPath's
 	// (agent-os-88xz).
-	cred := s.gitCredentials(dirPath)
 	var top string
 	var topErr error
 	topKnown := false
@@ -1027,7 +1125,7 @@ func (s *GitService) PullVerified(dirPath string, redeploy bool, docker *DockerS
 		preplaced = placeSiblings(top, dirPath, repoStacks)
 	}
 
-	pullResult, err := s.pullCLI(dirPath)
+	pullResult, err := s.pullCLI(dirPath, cred)
 	if err != nil {
 		return truth.Failed("git pull failed", err), nil
 	}
@@ -1525,7 +1623,7 @@ func (s *GitService) getLogCLI(dirPath string, limit, offset int) (*models.LogRe
 	// getStatusCLI for why.
 	cred := s.gitCredentials(dirPath)
 
-	totalStr, err := s.gitCommandWithCreds(dirPath, cred, "rev-list", "--count", "HEAD")
+	totalStr, err := s.gitCommandUnredacted(dirPath, cred, "rev-list", "--count", "HEAD")
 	if err != nil {
 		if repoErr := s.gitFailure(dirPath, err); repoErr != nil {
 			return nil, repoErr
@@ -1538,13 +1636,13 @@ func (s *GitService) getLogCLI(dirPath string, limit, offset int) (*models.LogRe
 		// git answered something we cannot read. Discarding it yields total=0
 		// — "this repository has no commits" — beside a log below that
 		// returns some (agent-os-qyg7.1).
-		return nil, fmt.Errorf("failed to parse commit count %q: %w", totalStr, err)
+		return nil, fmt.Errorf("failed to parse commit count %q: %w", redactToken(totalStr, cred.token), redactErr(err, cred.token))
 	}
 
 	skip := offset
 	fetchCount := limit
 	logFormat := "%H%n%h%n%an%n%ae%n%s%n%aI%n---COMMIT_SEP---"
-	output, err := s.gitCommandWithCreds(dirPath, cred, "log", fmt.Sprintf("--skip=%d", skip), fmt.Sprintf("--max-count=%d", fetchCount), fmt.Sprintf("--format=%s", logFormat))
+	output, err := s.gitCommandUnredacted(dirPath, cred, "log", fmt.Sprintf("--skip=%d", skip), fmt.Sprintf("--max-count=%d", fetchCount), fmt.Sprintf("--format=%s", logFormat))
 	if err != nil {
 		return nil, fmt.Errorf("failed to get log: %w", err)
 	}
@@ -1560,14 +1658,7 @@ func (s *GitService) getLogCLI(dirPath string, limit, offset int) (*models.LogRe
 		if len(lines) < 6 {
 			continue
 		}
-		commits = append(commits, models.GitCommit{
-			Hash:    strings.TrimSpace(lines[0]),
-			Short:   strings.TrimSpace(lines[1]),
-			Author:  strings.TrimSpace(lines[2]),
-			Email:   strings.TrimSpace(lines[3]),
-			Message: strings.TrimSpace(lines[4]),
-			Date:    strings.TrimSpace(lines[5]),
-		})
+		commits = append(commits, logCommit(lines, cred.token))
 	}
 
 	hasMore := offset+len(commits) < total
@@ -1604,7 +1695,7 @@ func (s *GitService) getDiffCLI(dirPath string, commitHash string, mask *diffMas
 	//
 	// Every later call names the full commit id this resolves to, so an
 	// annotated tag's id can't make `show` print the tag (agent-os-2omy).
-	oid, verr := s.gitCommandWithCreds(dirPath, cred, "rev-parse", "--verify", "--quiet", commitHash+"^{commit}")
+	oid, verr := s.gitCommandUnredacted(dirPath, cred, "rev-parse", "--verify", "--quiet", commitHash+"^{commit}")
 	if gitExitCode(verr) == 1 {
 		return nil, models.NewAppError(404, models.ErrNotFound, "Commit not found")
 	}
@@ -1616,7 +1707,7 @@ func (s *GitService) getDiffCLI(dirPath string, commitHash string, mask *diffMas
 	}
 
 	// No signature check: with log.showSignature set, it runs gpg.program.
-	logOutput, _, err := s.gitRun(dirPath, cred, noLazyFetchEnv, "-c", "log.showSignature=false",
+	logOutput, _, err := s.gitRunUnredacted(dirPath, cred, noLazyFetchEnv, "-c", "log.showSignature=false",
 		"log", "-1", "--no-show-signature", "--format=%H%n%h%n%an%n%ae%n%s%n%aI", oid)
 	logOutput = strings.TrimSpace(logOutput)
 	if err != nil {
@@ -1630,16 +1721,9 @@ func (s *GitService) getDiffCLI(dirPath string, commitHash string, mask *diffMas
 	if len(lines) < 6 {
 		return nil, fmt.Errorf("unexpected log format")
 	}
-	commit := models.GitCommit{
-		Hash:    strings.TrimSpace(lines[0]),
-		Short:   strings.TrimSpace(lines[1]),
-		Author:  strings.TrimSpace(lines[2]),
-		Email:   strings.TrimSpace(lines[3]),
-		Message: strings.TrimSpace(lines[4]),
-		Date:    strings.TrimSpace(lines[5]),
-	}
+	commit := logCommit(lines, cred.token)
 
-	parentsOut, err := s.gitCommandWithCreds(dirPath, cred, "rev-parse", oid+"^@")
+	parentsOut, err := s.gitCommandUnredacted(dirPath, cred, "rev-parse", oid+"^@")
 	if err != nil {
 		return nil, fmt.Errorf("failed to read the commit's parents: %w", err)
 	}
@@ -1648,7 +1732,7 @@ func (s *GitService) getDiffCLI(dirPath string, commitHash string, mask *diffMas
 	// hidden files too.
 	hd, err := s.historyDiff(dirPath, cred, oid, strings.Fields(parentsOut), mask)
 	if err != nil {
-		return nil, err
+		return nil, redactErr(err, cred.token)
 	}
 
 	return &models.DiffResult{
@@ -1668,7 +1752,8 @@ func (s *GitService) GetLogForFile(dirPath, filePath string, limit int) (*models
 	}
 
 	logFormat := "%H%n%h%n%an%n%ae%n%s%n%aI%n---COMMIT_SEP---"
-	output, err := s.gitCommand(dirPath, "log", fmt.Sprintf("--max-count=%d", limit), fmt.Sprintf("--format=%s", logFormat), "--", filePath)
+	cred := s.gitCredentials(dirPath)
+	output, err := s.gitCommandUnredacted(dirPath, cred, "log", fmt.Sprintf("--max-count=%d", limit), fmt.Sprintf("--format=%s", logFormat), "--", filePath)
 	if err != nil {
 		if repoErr := s.gitFailure(dirPath, err); repoErr != nil {
 			return nil, repoErr
@@ -1687,14 +1772,7 @@ func (s *GitService) GetLogForFile(dirPath, filePath string, limit int) (*models
 		if len(lines) < 6 {
 			continue
 		}
-		commits = append(commits, models.GitCommit{
-			Hash:    strings.TrimSpace(lines[0]),
-			Short:   strings.TrimSpace(lines[1]),
-			Author:  strings.TrimSpace(lines[2]),
-			Email:   strings.TrimSpace(lines[3]),
-			Message: strings.TrimSpace(lines[4]),
-			Date:    strings.TrimSpace(lines[5]),
-		})
+		commits = append(commits, logCommit(lines, cred.token))
 	}
 
 	return &models.LogResult{
@@ -1702,4 +1780,19 @@ func (s *GitService) GetLogForFile(dirPath, filePath string, limit int) (*models
 		Total:   len(commits),
 		HasMore: false,
 	}, nil
+}
+
+// logCommit builds a commit from the six lines of logFormat, read raw
+// (agent-os-9wwa): the hashes and the date are git's own and are served as
+// printed, and the author, email and subject are repository text, so they
+// are redacted here, the one place they become a response field.
+func logCommit(lines []string, token string) models.GitCommit {
+	return models.GitCommit{
+		Hash:    strings.TrimSpace(lines[0]),
+		Short:   strings.TrimSpace(lines[1]),
+		Author:  redactToken(strings.TrimSpace(lines[2]), token),
+		Email:   redactToken(strings.TrimSpace(lines[3]), token),
+		Message: redactToken(strings.TrimSpace(lines[4]), token),
+		Date:    strings.TrimSpace(lines[5]),
+	}
 }

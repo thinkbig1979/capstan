@@ -444,9 +444,9 @@ func TestHistoryDiff_ExcludeBudget(t *testing.T) {
 }
 
 func TestParseNameStatusZ(t *testing.T) {
-	got, err := parseNameStatusZ("M\x00a\x00R100\x00.env\x00notes.txt\x00A\x00b c\x00")
+	got, err := parseNameStatusZ("M\x00a\x00R100\x00.env\x00notes.txt\x00A\x00b c\x00", "")
 	require.NoError(t, err)
 	assert.Equal(t, [][]string{{"a"}, {".env", "notes.txt"}, {"b c"}}, got)
-	_, err = parseNameStatusZ("R100\x00only\x00")
+	_, err = parseNameStatusZ("R100\x00only\x00", "")
 	assert.Error(t, err)
 }
