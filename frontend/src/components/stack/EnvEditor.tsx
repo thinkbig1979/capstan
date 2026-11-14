@@ -66,6 +66,10 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   // locked view (agent-os-yt2f): saving would write rows that hold the locked
   // shapes, so both saves are refused until Reload.
   const [saveRefused, setSaveRefused] = useState(false)
+  // Rows whose key the locked payload blanked while a dirty lock kept the
+  // unlocked one: a body line that parsed as KEY= (agent-os-y6e8). A masked row
+  // in this set shows no key.
+  const [hiddenKeyIds, setHiddenKeyIds] = useState<ReadonlySet<number>>(NO_REDACTED_ROWS)
   // Rows the user edited or deleted while the locked view hid them (agent-os-yt2f
   // review S1, S2), with the unlocked rows they were lined up with. Save stays
   // refused while any of them does not hold its real content.
@@ -156,6 +160,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
       })
       setSaveRefused(false)
       setBlindGuard(null)
+      setHiddenKeyIds(NO_REDACTED_ROWS)
       // `raw` is absent while locked — the backend withholds it rather than
       // sending an empty file, so default it instead of writing `undefined` into
       // a textarea (agent-os-7o5s).
@@ -171,6 +176,50 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   }
 
 
+  /**
+   * A dirty lock keeps the unlocked rows, and the unlocked payload flags only
+   * what is secret by its own key or value: a multi-line secret's body line
+   * that parsed as KEY= arrives as a plain variable (agent-os-y6e8). The locked
+   * payload flags it, so line the two up by file line and comment flag (the
+   * key is not compared: the locked one is blank) and mask what it flags, and
+   * hide the key it blanked. When they do not line up, the file changed on
+   * disk: mask every variable row and hide its key (comments are masked by the
+   * lock already).
+   */
+  const maskRowsTheLockFlags = (locked: EnvEntryDraft[]) => {
+    const base = loadedEnv.rows
+    const lined =
+      base.length === locked.length &&
+      base.every((row, i) => row.line === locked[i].line && !!row.comment === !!locked[i].comment)
+    const flagged = new Set<number>()
+    const keys = new Set<number>()
+    if (lined) {
+      base.forEach((row, i) => {
+        if (!locked[i].sensitive) return
+        flagged.add(row._rowId)
+        if (locked[i].key === '' && row.key !== '') keys.add(row._rowId)
+      })
+    } else {
+      for (const row of [entries, ...snapshots.map((s) => s.entries)].flat()) {
+        if (row.comment) continue
+        flagged.add(row._rowId)
+        keys.add(row._rowId)
+      }
+    }
+    if (flagged.size === 0) return
+    const mask = (rows: EnvEntryRow[]) =>
+      rows.some((r) => flagged.has(r._rowId) && !r.sensitive)
+        ? rows.map((r) => (flagged.has(r._rowId) && !r.sensitive ? { ...r, sensitive: true } : r))
+        : rows
+    setEntries(mask)
+    rebaseHistory((snapshot) => {
+      const next = mask(snapshot.entries)
+      return next === snapshot.entries ? snapshot : { ...snapshot, entries: next }
+    })
+    rememberMasked([...flagged])
+    if (keys.size > 0) setHiddenKeyIds((prev) => new Set([...prev, ...keys]))
+  }
+
   // Unsaved edits survive a new payload (agent-os-umig), and a lock change
   // too (agent-os-vqf5): a lock keeps them on screen (Save stays disabled while
   // locked, EnvTableView.tsx), and an unlock puts the real content back into
@@ -184,8 +233,12 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
     rebaseWhileDirty: (next, prev) => {
       if (!next.hasEnvFile || !prev?.hasEnvFile) return false
       if (Boolean(next.locked) === Boolean(prev.locked)) return false
-      // Locked: the payload is redacted and carries nothing to rebase onto.
-      if (next.locked) return true
+      // Locked: the payload is redacted and carries nothing to rebase onto, but
+      // it says which kept rows are secret.
+      if (next.locked) {
+        maskRowsTheLockFlags(next.entries)
+        return true
+      }
       const aligned = alignRedactedRows(loadedEnv.rows, loadedEnv.redacted, next.entries)
       if (!aligned) {
         setSaveRefused(true)
@@ -384,6 +437,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
         hasUnsavedChanges={hasUnsavedChanges}
         locked={locked}
         saveRefused={refusal !== null}
+        hiddenKeyIds={hiddenKeyIds}
       />
 
       {view === 'raw' && !rawHidden && (

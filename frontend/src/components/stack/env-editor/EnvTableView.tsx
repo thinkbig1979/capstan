@@ -8,12 +8,16 @@ import { useTextFilter } from '@/hooks/useTextFilter'
 import { TableSearch } from '@/components/ui/table-search'
 import type { EnvEntryRow, IndexedEnvEntry } from './types'
 
-// A masked value is not searched: a match would tell a locked user what the
-// hidden value contains, one substring at a time (agent-os-kxag).
-const ENV_SEARCH_FIELDS = [
-  (e: IndexedEnvEntry) => e.key,
-  (e: IndexedEnvEntry) => (e.sensitive ? '' : e.value),
-]
+const NO_HIDDEN_KEYS: ReadonlySet<number> = new Set()
+
+/**
+ * A bare line read without "=" (a multi-line secret's body line) is a comment
+ * row whose key is its own text, so a masked one hides its key as well as its
+ * value; so does a row a dirty lock found to be such a line parsed as KEY=
+ * (agent-os-y6e8). A multi-line row keeps its key: that is the name.
+ */
+const keyHidden = (e: EnvEntryRow, hiddenKeyIds: ReadonlySet<number>) =>
+  e.sensitive && ((e.comment === true && e.key === e.value) || hiddenKeyIds.has(e._rowId))
 
 /**
  * A row the table shows but does not edit: a comment, a line compose reads
@@ -23,8 +27,9 @@ const ENV_SEARCH_FIELDS = [
  * it back unchanged. An unlocked session receives a secret in full, so a
  * sensitive read-only row stays masked until the eye toggle reveals it, the
  * same way a sensitive editable value does. Every keyed row (a variable) has
- * the toggle, one-line ones too (agent-os-hag4); a free-text comment has no
- * key, is never marked sensitive, and is shown as is.
+ * the toggle, one-line ones too (agent-os-hag4). A free-text comment has no
+ * key and is shown as is, unless it is masked: the server flags a commented-out
+ * secret, and a lock with unsaved edits masks every comment (agent-os-y6e8).
  */
 function ReadOnlyValue({
   value,
@@ -42,7 +47,7 @@ function ReadOnlyValue({
   toggleClassName?: string
 }) {
   const multiline = value.includes('\n')
-  if (!multiline && !keyed) {
+  if (!multiline && !keyed && !masked) {
     return <span className="italic text-muted-foreground">{value}</span>
   }
   return (
@@ -84,6 +89,8 @@ interface EnvTableViewProps {
   locked: boolean
   /** The rows kept from the locked view could not be filled (agent-os-yt2f). */
   saveRefused: boolean
+  /** Rows whose key a dirty lock found to be secret content (agent-os-y6e8). */
+  hiddenKeyIds?: ReadonlySet<number>
 }
 
 export function EnvTableView({
@@ -98,7 +105,17 @@ export function EnvTableView({
   hasUnsavedChanges,
   locked,
   saveRefused,
+  hiddenKeyIds = NO_HIDDEN_KEYS,
 }: EnvTableViewProps) {
+  // A masked value is not searched, nor a hidden key: a match would tell a
+  // locked user what it contains, one substring at a time (agent-os-kxag, y6e8).
+  const searchFields = useMemo(
+    () => [
+      (e: IndexedEnvEntry) => (keyHidden(e, hiddenKeyIds) ? '' : e.key),
+      (e: IndexedEnvEntry) => (e.sensitive ? '' : e.value),
+    ],
+    [hiddenKeyIds],
+  )
   // Entries are tagged with their original index so that all edit/delete/toggle
   // handlers still target `entries[originalIndex]` regardless of filter order.
   const indexedEntries = useMemo<IndexedEnvEntry[]>(
@@ -109,7 +126,7 @@ export function EnvTableView({
     query: envQuery,
     setQuery: setEnvQuery,
     filtered: filteredIndexed,
-  } = useTextFilter(indexedEntries, ENV_SEARCH_FIELDS)
+  } = useTextFilter(indexedEntries, searchFields)
 
   if (!visible) return null
 
@@ -143,10 +160,10 @@ export function EnvTableView({
               <TableRow key={entry._rowId}>
                 <TableCell>
                   <Input
-                    value={entry.key}
+                    value={keyHidden(entry, hiddenKeyIds) ? '' : entry.key}
                     onChange={(e) => onEntryChange(i, 'key', e.target.value)}
                     placeholder="KEY"
-                    disabled={entry.comment}
+                    disabled={entry.comment || keyHidden(entry, hiddenKeyIds)}
                     aria-label={`Environment variable key ${i + 1}`}
                   />
                 </TableCell>
@@ -223,10 +240,10 @@ export function EnvTableView({
           <div key={entry._rowId} className="rounded-lg border p-4 space-y-3">
             <div>
               <Input
-                value={entry.key}
+                value={keyHidden(entry, hiddenKeyIds) ? '' : entry.key}
                 onChange={(e) => onEntryChange(i, 'key', e.target.value)}
                 placeholder="KEY"
-                disabled={entry.comment}
+                disabled={entry.comment || keyHidden(entry, hiddenKeyIds)}
                 aria-label={`Environment variable key ${i + 1}`}
               />
             </div>
