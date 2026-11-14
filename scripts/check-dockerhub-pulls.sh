@@ -68,9 +68,14 @@
 #                           (agent-os-t6lp). A bare literal there counts only
 #                           with a `/`, a digest, or a tag that starts with a
 #                           digit or is `latest`: TypeScript is full of
-#                           name:word strings. BLIND SPOT: a bare
-#                           'nginx:alpine' in a .ts file is not seen
-#                           (`image: nginx:alpine` inside one is).
+#                           name:word strings. BLIND SPOTS (Go and .ts): a
+#                           bare literal with a word tag in .ts
+#                           ('nginx:alpine'); an untagged ref in a bare
+#                           literal ('busybox', 'grafana/grafana'); a ref
+#                           inside a `docker run ...` or `docker pull ...`
+#                           string (that arm reads workflow YAML only). An
+#                           `image:` or `FROM` key sees any of them, quoted
+#                           or not ({ image: 'nginx:alpine' }).
 # The CONSUMER is the runner's docker daemon or BuildKit, which pulls whatever
 # the ref names. Lines whose first non-blank characters are `#` or `//` are
 # comments and skipped.
@@ -206,8 +211,9 @@ FNR == 1 {
   # either language, so it is not worth telling apart).
   if (k == "go" || k == "ts") {
     r = line
-    while (match(r, /(image:|FROM)[[:space:]]+[A-Za-z0-9._\/:@$-]+/)) {
-      m = substr(r, RSTART, RLENGTH); sub(/^(image:|FROM)[[:space:]]+/, "", m)
+    # The ref may open a quote of its own: { image: 'nginx:alpine' } in .ts.
+    while (match(r, /(image:|FROM)[[:space:]]+["'`]?[A-Za-z0-9._\/:@$-]+/)) {
+      m = substr(r, RSTART, RLENGTH); sub(/^(image:|FROM)[[:space:]]+["'`]?/, "", m)
       emit(m, ln); r = substr(r, RSTART + RLENGTH)
     }
     r = line
@@ -220,7 +226,9 @@ FNR == 1 {
       # ('node:fs' imports, 'dash:stacks' labels, 'display:none'), so there a
       # bare literal counts only with a path, a digest, or a version-like tag.
       if (k == "ts" && m !~ /\// && m !~ /@/ && tag !~ /^([0-9]|latest$)/) continue
-      if (line ~ /(image:|FROM)[[:space:]]+/ && index(line, "image: " m) + index(line, "FROM " m) > 0) continue
+      # Already emitted by the image:/FROM arm above, quoted or not.
+      nq = line; gsub(/["'`]/, "", nq)
+      if (line ~ /(image:|FROM)[[:space:]]+/ && index(nq, "image: " m) + index(nq, "FROM " m) > 0) continue
       emit(m, ln)
     }
     next
@@ -531,6 +539,10 @@ selftest() {
   selftest_case "Playwright .ts image: in a template literal" 1 "fixture.ts:4: Docker Hub image nginx:alpine" "$d"
   d=$(fresh); printf 'const other = "alpine:3.21"\n' >> "$d/testing/tests/playwright/helpers/fixture.ts"
   selftest_case "Playwright .ts bare literal with a version tag" 1 "fixture.ts:6: Docker Hub image alpine:3.21" "$d"
+  d=$(fresh); printf "const svc = { image: 'nginx:alpine' }\n" >> "$d/testing/tests/playwright/helpers/fixture.ts"
+  selftest_case "Playwright .ts quoted image: value with a word tag" 1 "fixture.ts:6: Docker Hub image nginx:alpine" "$d"
+  d=$(fresh); printf "const svc = { image: 'nginx:1.25' }\n" >> "$d/testing/tests/playwright/helpers/fixture.ts"
+  selftest_case "Playwright .ts quoted image: value is reported once" 1 "^check-dockerhub-pulls: 1 violation" "$d"
   d=$(fresh); sed -i 's|^FROM build AS again|FROM ${BASE} AS again|' "$d/docker/Dockerfile"
   selftest_case "variable ref" 1 'Docker Hub image \$\{BASE\}' "$d"
 
