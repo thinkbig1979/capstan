@@ -463,6 +463,34 @@ describe('StackPage', () => {
       expect(toast.warning).not.toHaveBeenCalled()
       expect(toast.info).not.toHaveBeenCalled()
     })
+
+    // agent-os-x588: the route has no key, so moving to another stack keeps
+    // this page mounted with the finished run's state. Its outcome belongs to
+    // the first stack: no second toast, no refresh of the new stack, and the
+    // run's panel is cleared.
+    it('x588: moving to another stack after a finished run does not repeat its toast', async () => {
+      Object.assign(operationState, { status: 'success', action: 'restart', finished: true })
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
+      })
+      const invalidate = vi.spyOn(queryClient, 'invalidateQueries')
+      renderPage('/stacks/s1', queryClient)
+      const { toast } = await import('sonner')
+      await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Restart completed'))
+      expect(reset).not.toHaveBeenCalled()
+
+      getStack.mockResolvedValue(makeStack({ id: 's2' }))
+      act(() => {
+        window.history.pushState({}, '', '/stacks/s2')
+        window.dispatchEvent(new PopStateEvent('popstate'))
+      })
+      await waitFor(() => expect(getStack).toHaveBeenCalledWith('s2'))
+      await screen.findByTestId('stack-detail')
+
+      expect(toast.success).toHaveBeenCalledTimes(1)
+      expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ['stack', 's2'] })
+      expect(reset).toHaveBeenCalledTimes(1)
+    })
   })
 
   describe('loading state', () => {

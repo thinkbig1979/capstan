@@ -1434,6 +1434,7 @@ func (s *BackupService) backupStack(
 			}
 			stream(out, "info", fmt.Sprintf("[%s] restarting stack (defensive)", stackID))
 			ar, _ := s.dockerSvc().StartVerified(stack)
+			StoreLifecycleStatus(s.db, stackID, ar)
 			switch ar.Outcome {
 			case truth.OutcomeFailed:
 				startErr := ar.Err
@@ -1457,7 +1458,9 @@ func (s *BackupService) backupStack(
 	// Apply stop policy.
 	if stopPolicy == "stop" && !dryRun {
 		stream(out, "info", fmt.Sprintf("[%s] stopping stack", stackID))
-		if ar, _ := s.dockerSvc().StopVerified(stack); ar.Outcome == truth.OutcomeFailed {
+		ar, _ := s.dockerSvc().StopVerified(stack)
+		StoreLifecycleStatus(s.db, stackID, ar)
+		if ar.Outcome == truth.OutcomeFailed {
 			stopErr := ar.Err
 			if stopErr == nil {
 				stopErr = errors.New(ar.Reason)
@@ -2041,6 +2044,7 @@ func (s *BackupService) runRestore(
 		}
 		stream(out, "info", fmt.Sprintf("[%s] restarting stack after restore", stackID))
 		ar, _ := s.dockerSvc().StartVerified(stack)
+		StoreLifecycleStatus(s.db, stackID, ar)
 		switch ar.Outcome {
 		case truth.OutcomeFailed:
 			startErr := ar.Err
@@ -2058,10 +2062,12 @@ func (s *BackupService) runRestore(
 	}()
 
 	stream(out, "info", fmt.Sprintf("[%s] stopping stack before restore", stackID))
-	if ar, _ := s.dockerSvc().StopVerified(stack); ar.Outcome == truth.OutcomeFailed {
-		stopErr := ar.Err
+	stopAR, _ := s.dockerSvc().StopVerified(stack)
+	StoreLifecycleStatus(s.db, stackID, stopAR)
+	if stopAR.Outcome == truth.OutcomeFailed {
+		stopErr := stopAR.Err
 		if stopErr == nil {
-			stopErr = errors.New(ar.Reason)
+			stopErr = errors.New(stopAR.Reason)
 		}
 		return fmt.Errorf("stop stack: %w", stopErr)
 	}

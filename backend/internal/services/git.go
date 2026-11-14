@@ -1255,6 +1255,7 @@ func (s *GitService) PullVerified(dirPath string, redeploy bool, docker *DockerS
 		}
 		slog.Info("Redeploying stack after git pull", "stackID", stack.ID)
 		ar, _ := docker.RestartVerified(stack)
+		StoreLifecycleStatus(s.db, stack.ID, ar)
 		if ar.Outcome == truth.OutcomeSuccess || ar.Outcome == truth.OutcomeNoChange {
 			redeployed = append(redeployed, stack.ID)
 		} else {

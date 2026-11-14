@@ -366,10 +366,7 @@ func (h *StacksHandler) Create(c *gin.Context) {
 	h.logAction(c, stackID, "start", deployOutput)
 
 	// Update DB with the verified status regardless of outcome.
-	verifiedStatus := lifecycleStatus(deployAR)
-	if err := h.db.UpdateStackStatus(stackID, verifiedStatus); err != nil {
-		slog.Warn("failed to persist verified stack status", "id", stackID, "error", err)
-	}
+	verifiedStatus := services.StoreLifecycleStatus(h.db, stackID, deployAR)
 	stack.Status = verifiedStatus
 
 	details := map[string]any{
@@ -601,6 +598,11 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 	deleteAR, deleteOutput := h.dockerSvc().DeleteVerified(*stack)
 
 	h.logAction(c, id, "delete", deleteOutput)
+
+	// Every return below keeps this stack's row unless the delete completes,
+	// so the row carries what compose down left behind (agent-os-vush). A
+	// completed delete removes the row, and this write with it.
+	services.StoreLifecycleStatus(h.db, id, deleteAR)
 
 	if deleteAR.Outcome != truth.OutcomeSuccess && deleteAR.Outcome != truth.OutcomeNoChange {
 		renderDockerResult(c, deleteAR.Err, truth.ActionResult{

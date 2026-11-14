@@ -141,9 +141,16 @@ export function StackPage() {
   // Only a finished run: a mid-run error frame is followed by the done frame,
   // and toasting both would report one run twice (review R2).
   // 'disconnected' is not here: the hook already refetches on that close.
+  // A run is reported once: the route has no key, so moving to another stack
+  // keeps this page and the run's state, and re-runs this effect with the new
+  // id (agent-os-x588). The flag clears when the next run starts.
+  const reportedRunRef = useRef(false)
   useEffect(() => {
     const status = operation.status
+    if (status === 'idle' || status === 'running') reportedRunRef.current = false
     if (!id || !operation.finished || !['success', 'no_change', 'partial', 'error'].includes(status)) return
+    if (reportedRunRef.current) return
+    reportedRunRef.current = true
     queryClient.invalidateQueries({ queryKey: queryKeys.stack.detail(id) })
     queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
     const label = operation.action.charAt(0).toUpperCase() + operation.action.slice(1)
@@ -152,6 +159,16 @@ export function StackPage() {
     else if (status === 'partial') toast.warning(`${label} partly completed`)
     else presentFault(`${label} failed`, operation.error)
   }, [operation.finished, operation.status, operation.action, operation.error, id, queryClient])
+
+  // The run belongs to the stack it started on: another stack's page starts
+  // with no progress panel. The server run continues either way.
+  const { reset: resetOperation } = operation
+  const shownStackRef = useRef(id)
+  useEffect(() => {
+    if (shownStackRef.current === id) return
+    shownStackRef.current = id
+    resetOperation()
+  }, [id, resetOperation])
 
   // Available updates for this stack
   const { data: updateData } = useCheckUpdates()
