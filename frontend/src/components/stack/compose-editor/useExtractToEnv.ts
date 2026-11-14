@@ -8,6 +8,24 @@ import type { useCodeMirrorEditor } from '@/hooks/useCodeMirrorEditor'
 import { inferVarName } from './inferVarName'
 import { queryKeys } from '@/lib/query-keys'
 
+/** Characters that change what dotenv reads from an unquoted .env value. */
+const NEEDS_QUOTES = /[\s#"'\\]/
+
+/**
+ * The .env line for an extracted value (agent-os-jx88). The selection sits in
+ * the compose YAML, where compose substitutes $VAR, ${VAR} and $$; dotenv
+ * substitutes them the same way in an unquoted or double-quoted value, so "$"
+ * is left alone (single quotes would freeze ${DB_HOST} as text). Unquoted,
+ * dotenv cuts " #" as a comment, trims whitespace and reads a leading quote
+ * as quoting, so a value holding whitespace, #, ", ' or \ is double-quoted,
+ * with " and \ escaped (compose-go v2 dotenv/parser.go, extractVarValue).
+ * Each case is checked with compose-go in settings_globalenv_jx88_test.go.
+ */
+function envLineFor(varName: string, value: string): string {
+  if (!NEEDS_QUOTES.test(value)) return `${varName}=${value}`
+  return `${varName}="${value.replace(/[\\"]/g, (c) => `\\${c}`)}"`
+}
+
 interface UseExtractToEnvArgs {
   stackId: string
   viewRef: ReturnType<typeof useCodeMirrorEditor>['viewRef']
@@ -87,7 +105,7 @@ export function useExtractToEnv({
       const envData = await stacksApi.getEnv(stackId)
       const currentEnv = envData.hasEnvFile && envData.raw ? envData.raw : ''
 
-      const newEnvLine = `${varName}=${selectedText}`
+      const newEnvLine = envLineFor(varName, selectedText)
       const updatedEnv = currentEnv ? `${currentEnv.trimEnd()}\n${newEnvLine}` : newEnvLine
 
       // Atomic write — body: { composeContent, envRaw } per ComposeEnvRequest

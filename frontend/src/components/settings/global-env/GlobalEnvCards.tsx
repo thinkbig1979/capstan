@@ -3,6 +3,7 @@ import { Input } from '@/components/ui/input'
 import { Eye, EyeOff, Trash2 } from 'lucide-react'
 import { isSensitiveKey } from '@/components/stack/env-editor/sensitiveKey'
 import type { EnvVar, IndexedEnvVar } from './types'
+import { MultilineValue } from './MultilineValue'
 
 interface GlobalEnvCardsProps {
   hasVars: boolean
@@ -38,23 +39,29 @@ export function GlobalEnvCards({
           const index = entry._originalIndex
           const sensitive = isSensitiveKey(entry.key)
           const reveal = !!visible[index]
+          const multiline = entry.value.includes('\n')
           return (
             <div key={`mrow-${index}`} className="rounded-lg border p-4 space-y-3">
               <Input
                 value={entry.key}
                 onChange={(e) => onChange(index, 'key', e.target.value)}
                 placeholder="KEY"
+                disabled={multiline}
                 aria-label={`Global env key ${index + 1}`}
               />
               <div className="flex items-center gap-2">
-                <Input
-                  type={sensitive && !reveal ? 'password' : 'text'}
-                  value={entry.value}
-                  onChange={(e) => onChange(index, 'value', e.target.value)}
-                  placeholder="value"
-                  className="flex-1"
-                  aria-label={`Global env value ${index + 1}`}
-                />
+                {multiline ? (
+                  <MultilineValue value={entry.value} masked={sensitive && !reveal} />
+                ) : (
+                  <Input
+                    type={sensitive && !reveal ? 'password' : 'text'}
+                    value={entry.value}
+                    onChange={(e) => onChange(index, 'value', e.target.value)}
+                    placeholder="value"
+                    className="flex-1"
+                    aria-label={`Global env value ${index + 1}`}
+                  />
+                )}
                 {sensitive && (
                   <Button
                     type="button"

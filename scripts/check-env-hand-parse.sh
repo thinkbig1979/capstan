@@ -61,8 +61,7 @@ backend/internal/handlers/env.go|parseEnvFile
 backend/internal/handlers/env.go|composeLineKey
 backend/internal/handlers/env.go|opensMultilineValue
 backend/internal/handlers/env.go|commentedSecretEnd
-backend/internal/handlers/env.go|redactGlobalEnvVars
-backend/internal/handlers/settings.go|parseGlobalEnvText
+backend/internal/handlers/settings.go|globalEnvVarOf
 backend/internal/services/redact_compose.go|sensitiveEnvValues
 backend/internal/services/compose_env.go|resolveComposeEnv
 backend/internal/services/exec_env.go|stripCapstanSecrets
@@ -84,12 +83,12 @@ backend/internal/services/mask_secret_lines.go|maskItemAfterEquals
 #     the locked view's masking (agent-os-yt2f). They read only where the
 #     value starts, whether its quote closes, and (commentedSecretEnd) the URL
 #     check on a commented value; they never return the value.
-#   handlers/env.go redactGlobalEnvVars: mirrors settings.go
-#     parseGlobalEnvText's row rule (a line holding "=") to match its rows to
-#     lines for the locked view.
-#     agent-os-rd1l, which replaces that parser, removes it; delete with it.
-#   handlers/settings.go parseGlobalEnvText: the global env page's parser.
-#     agent-os-rd1l removes it; delete this entry with it.
+#   handlers/settings.go globalEnvVarOf: projects a row parseEnvFile already
+#     keyed to the global env page's {key, value}; for a read-only line
+#     (KEY: value) or a multi-line value it reads where the value starts, by
+#     composeLineKey's "=" or ":" rule (agent-os-rd1l). It parses no line of
+#     its own: the global page's own parser and redactGlobalEnvVars' line
+#     matcher, which were allowlisted here, are gone.
 #   services/redact_compose.go sensitiveEnvValues: redaction's fallback parser,
 #     kept on purpose so a file compose-go rejects is still masked
 #     (agent-os-tfef).
@@ -254,11 +253,6 @@ func commentedSecretEnd(value string) int {
 	return -1
 }
 
-func redactGlobalEnvVars(vars []map[string]string, raw string) {
-	if t == "" || !strings.Contains(t, "=") {
-	}
-}
-
 func serializeEnvFile(entries []EnvEntry) string {
 	buf.WriteString("=")
 	if a, b, _ := strings.Cut(x, ","); y == "a=b" {
@@ -291,9 +285,10 @@ EOF
   cat > "$d/backend/internal/handlers/settings.go" <<'EOF'
 package handlers
 
-func parseGlobalEnvText(text string) []map[string]string {
-	parts := strings.SplitN(line, "=", 2)
-	return nil
+func globalEnvVarOf(e EnvEntry) (map[string]string, bool) {
+	if sep := strings.IndexAny(e.Value, "=:"); sep != -1 {
+	}
+	return nil, false
 }
 EOF
   cat > "$d/backend/internal/services/redact_compose.go" <<'EOF'
@@ -374,7 +369,7 @@ self_test() {
 
   local d="$tmp/clean"
   write_base "$d"
-  selftest_case "clean tree" 0 '0 violations in 11 files [(]16 allowlisted splits[)]' "$d"
+  selftest_case "clean tree" 0 '0 violations in 11 files [(]15 allowlisted splits[)]' "$d"
 
   d="$tmp/planted"
   write_base "$d"
@@ -433,8 +428,8 @@ self_test() {
 
   d="$tmp/stale"
   write_base "$d"
-  printf 'package handlers\n\nfunc parseGlobalEnvText(text string) []map[string]string {\n\treturn nil\n}\n' > "$d/backend/internal/handlers/settings.go"
-  selftest_case "stale allowlist entry" 1 'backend/internal/handlers/settings.go[|]parseGlobalEnvText' "$d"
+  printf 'package handlers\n\nfunc globalEnvVarOf(e EnvEntry) (map[string]string, bool) {\n\treturn nil, false\n}\n' > "$d/backend/internal/handlers/settings.go"
+  selftest_case "stale allowlist entry" 1 'backend/internal/handlers/settings.go[|]globalEnvVarOf' "$d"
 
   d="$tmp/empty"
   mkdir -p "$d/backend/internal/x"

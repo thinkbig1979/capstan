@@ -4,6 +4,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Eye, EyeOff, Trash2 } from 'lucide-react'
 import { isSensitiveKey } from '@/components/stack/env-editor/sensitiveKey'
 import type { EnvVar, IndexedEnvVar } from './types'
+import { MultilineValue } from './MultilineValue'
 
 /** The single source of truth for this table's width: the header cells and the
  * spanning row's colSpan both derive from it, so adding a column cannot leave
@@ -61,6 +62,7 @@ export function GlobalEnvTable({
               const index = entry._originalIndex
               const sensitive = isSensitiveKey(entry.key)
               const reveal = !!visible[index]
+              const multiline = entry.value.includes('\n')
               return (
                 <TableRow key={`row-${index}`}>
                   <TableCell>
@@ -68,18 +70,23 @@ export function GlobalEnvTable({
                       value={entry.key}
                       onChange={(e) => onChange(index, 'key', e.target.value)}
                       placeholder="KEY"
+                      disabled={multiline}
                       aria-label={`Global env key ${index + 1}`}
                     />
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-2">
-                      <Input
-                        type={sensitive && !reveal ? 'password' : 'text'}
-                        value={entry.value}
-                        onChange={(e) => onChange(index, 'value', e.target.value)}
-                        placeholder="value"
-                        aria-label={`Global env value ${index + 1}`}
-                      />
+                      {multiline ? (
+                        <MultilineValue value={entry.value} masked={sensitive && !reveal} />
+                      ) : (
+                        <Input
+                          type={sensitive && !reveal ? 'password' : 'text'}
+                          value={entry.value}
+                          onChange={(e) => onChange(index, 'value', e.target.value)}
+                          placeholder="value"
+                          aria-label={`Global env value ${index + 1}`}
+                        />
+                      )}
                       {sensitive && (
                         <Button
                           type="button"

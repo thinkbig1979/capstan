@@ -14,6 +14,46 @@ const ENV_SEARCH_FIELDS = [
   (e: IndexedEnvEntry) => e.value,
 ]
 
+/**
+ * A row the table shows but does not edit: a comment, a line compose reads
+ * without "=" (agent-os-n43b), or a quoted value spanning several lines
+ * (agent-os-fw2q). The backend sends the multi-line value as one row holding
+ * every line; it is edited in the Raw view, and an unedited table save writes
+ * it back unchanged. An unlocked session receives a secret body in full, so a
+ * sensitive multi-line row stays masked until the eye toggle reveals it, the
+ * same way a sensitive one-line value does.
+ */
+function ReadOnlyValue({
+  value,
+  masked,
+  onToggle,
+  toggleLabel,
+  toggleClassName,
+}: {
+  value: string
+  masked: boolean
+  onToggle: () => void
+  toggleLabel: string
+  toggleClassName?: string
+}) {
+  if (!value.includes('\n')) {
+    return <span className="italic text-muted-foreground">{value}</span>
+  }
+  return (
+    <div className="flex items-start gap-2">
+      <div className="min-w-0 flex-1 space-y-1">
+        <span className="block whitespace-pre-wrap break-all italic text-muted-foreground">
+          {masked ? '••••••' : value}
+        </span>
+        <span className="text-xs text-muted-foreground">Multi-line value, edit in Raw</span>
+      </div>
+      <Button variant="ghost" size="icon" onClick={onToggle} className={toggleClassName} aria-label={toggleLabel}>
+        {masked ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+      </Button>
+    </div>
+  )
+}
+
 interface EnvTableViewProps {
   /**
    * Kept mounted regardless of the active tab — this component owns its own
@@ -106,7 +146,12 @@ export function EnvTableView({
                 </TableCell>
                 <TableCell>
                   {entry.comment ? (
-                    <span className="italic text-muted-foreground">{entry.value}</span>
+                    <ReadOnlyValue
+                      value={entry.value}
+                      masked={entry.sensitive}
+                      onToggle={() => onToggleVisibility(i)}
+                      toggleLabel={`Toggle visibility for entry ${i + 1}`}
+                    />
                   ) : entry.sensitive ? (
                     <div className="flex items-center gap-2">
                       <Input
@@ -181,7 +226,13 @@ export function EnvTableView({
             </div>
             <div>
               {entry.comment ? (
-                <span className="italic text-muted-foreground">{entry.value}</span>
+                <ReadOnlyValue
+                  value={entry.value}
+                  masked={entry.sensitive}
+                  onToggle={() => onToggleVisibility(i)}
+                  toggleLabel={`Toggle visibility for entry ${i + 1}`}
+                  toggleClassName="min-h-[44px] min-w-[44px]"
+                />
               ) : entry.sensitive ? (
                 <div className="flex items-center gap-2">
                   <Input

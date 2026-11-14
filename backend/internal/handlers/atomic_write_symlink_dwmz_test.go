@@ -77,7 +77,9 @@ func TestWriteEnvFileAtomic_SymlinkChainWritesFinalTarget_dwmz(t *testing.T) {
 	assert.Equal(t, "A=2\n", readString(t, target))
 	info, err := os.Stat(target)
 	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
+	// Through a link the target keeps its mode (agent-os-1ltz ruling); this
+	// asserted the old 0600 tightening.
+	assert.Equal(t, os.FileMode(0644), info.Mode().Perm())
 	assert.Empty(t, leftoverTemps(t, dir))
 	assert.Empty(t, leftoverTemps(t, sub))
 }

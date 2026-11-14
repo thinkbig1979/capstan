@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
@@ -114,6 +115,25 @@ func renderWriteFailure(c *gin.Context, err error, reason, note string) {
 // renameIntoPlace is writeFileAtomic for a path already resolved by
 // resolveWriteTarget.
 func renameIntoPlace(path string, content []byte, mode os.FileMode) error {
+	return renameIntoPlaceOwned(path, content, mode, nil)
+}
+
+// fileOwner is the uid and gid a written file must keep.
+type fileOwner struct{ uid, gid int }
+
+// processOwner and chownTempFile are seams for agent-os-1ltz's tests: an
+// unprivileged test cannot own a file as another user, so it makes a target
+// look foreign and records the chown instead. Production uses the real ones.
+var (
+	processOwner  = func() (uid, gid int) { return os.Geteuid(), os.Getegid() }
+	chownTempFile = func(f *os.File, uid, gid int) error { return f.Chown(uid, gid) }
+)
+
+// renameIntoPlaceOwned is renameIntoPlace that, with a non-nil owner, gives
+// the temp file that owner before the rename. A chown that fails refuses the
+// write (409, nothing written): the rename would otherwise hand the file to
+// the process user, the lock-out agent-os-1ltz is about.
+func renameIntoPlaceOwned(path string, content []byte, mode os.FileMode, owner *fileOwner) error {
 	dir := filepath.Dir(path)
 	base := filepath.Base(path)
 
@@ -124,6 +144,14 @@ func renameIntoPlace(path string, content []byte, mode os.FileMode) error {
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath) // no-op once the rename below succeeds
 
+	if owner != nil {
+		if err := chownTempFile(tmp, owner.uid, owner.gid); err != nil {
+			tmp.Close()
+			return &writeRefusal{msg: fmt.Sprintf("%s belongs to uid %d, gid %d, and Capstan cannot write it as that owner (%v); nothing written. Save it from the host, or give it to the user Capstan runs as",
+				base, owner.uid, owner.gid, errors.Unwrap(err))}
+		}
+	}
+	// After the chown: a chown can clear mode bits.
 	if err := tmp.Chmod(mode); err != nil {
 		tmp.Close()
 		return fmt.Errorf("chmod temp file: %w", err)
@@ -177,6 +205,30 @@ func writeComposeFileAtomic(path string, content []byte) error {
 // writeEnvFileAtomic writes an env file atomically at exactly 0600, whatever
 // mode an existing file had: env files hold secrets, so a looser mode left by
 // older code is tightened rather than kept.
+//
+// Through a symlink it keeps the target's mode and owner instead
+// (agent-os-1ltz, Edwin's ruling 2026-11-14): a link is how a stack shares an
+// env file with the host, and a save must not turn that file 0600 and
+// process-owned, locking its owner out. Containment is still the caller's
+// (validateStackPath resolves the link, so a link out of the stacks root is
+// refused before this runs). The owner is set only when it differs from the
+// process's, so a non-root install whose own files are linked is unaffected;
+// when it cannot be kept, the save is refused (fail closed).
 func writeEnvFileAtomic(envPath, content string) error {
-	return writeFileAtomic(envPath, []byte(content), 0600)
+	target, info, err := resolveWriteTarget(envPath)
+	if err != nil {
+		return err
+	}
+	mode := os.FileMode(0600)
+	var owner *fileOwner
+	if target != envPath && info != nil {
+		mode = info.Mode().Perm()
+		if st, ok := info.Sys().(*syscall.Stat_t); ok {
+			uid, gid := processOwner()
+			if int(st.Uid) != uid || int(st.Gid) != gid {
+				owner = &fileOwner{uid: int(st.Uid), gid: int(st.Gid)}
+			}
+		}
+	}
+	return renameIntoPlaceOwned(target, []byte(content), mode, owner)
 }

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/compose-spec/compose-go/v2/dotenv"
 	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
@@ -351,12 +353,24 @@ func (h *SettingsHandler) UpdateGlobalEnv(c *gin.Context) {
 		entries[i] = EnvEntry{Key: v.Key, Value: v.Value}
 	}
 
-	// Reuse the stack-env validation rules: reject an empty key paired with a
-	// non-empty value (would serialise as a corrupt "=value" line) and reject
-	// newlines/CRs in keys or values (finding #15 / B4). An entry with both an
-	// empty key and empty value is treated as a no-op blank line, matching
-	// serializeEnvFile below, rather than rejected outright.
-	if err := validateEnvEntries(entries); err != nil {
+	// The save is merged into the file on disk (agent-os-rd1l, agent-os-jx88):
+	// the page edits only variables, so the comments, blank lines and lines it
+	// shows but cannot write (a bare KEY, KEY: value) come from the file. A
+	// file that cannot be read is not replaced: readGlobalEnvFile answers an
+	// absent one as empty.
+	globalEnvPath := h.cfg.DataDir + "/global.env"
+	current, err := readGlobalEnvFile(globalEnvPath)
+	if err != nil {
+		handleError(c, models.NewAppErrorWithCause(
+			http.StatusInternalServerError,
+			"INTERNAL_ERROR",
+			"Failed to read global environment file",
+			err,
+		))
+		return
+	}
+	content, err := mergeGlobalEnv(string(current), entries)
+	if err != nil {
 		c.JSON(http.StatusBadRequest, models.NewAppError(
 			http.StatusBadRequest,
 			"VALIDATION_ERROR",
@@ -364,12 +378,6 @@ func (h *SettingsHandler) UpdateGlobalEnv(c *gin.Context) {
 		))
 		return
 	}
-
-	globalEnvPath := h.cfg.DataDir + "/global.env"
-	// serializeEnvFile only skips an entry when BOTH key and value are empty,
-	// so a deliberately empty value (KEY=) round-trips instead of being
-	// silently dropped.
-	content := serializeEnvFile(entries)
 
 	if err := writeEnvFileAtomic(globalEnvPath, content); err != nil {
 		slog.Error("Failed to write global environment file", "error", err)
@@ -410,31 +418,185 @@ func parseEnvFile(path string) ([]map[string]string, error) {
 	return parseGlobalEnvText(string(data)), nil
 }
 
-// parseGlobalEnvText is the global env page's parser over the file's text
-// (split out of parseEnvFile unchanged, so GetGlobalEnv can redact from the
-// same bytes it parsed). agent-os-rd1l replaces it.
+// parseGlobalEnvText is the global env page's rows over the file's text: the
+// stack env parser's variables (EnvHandler.parseEnvFile), projected to
+// {key, value} by globalEnvVars (agent-os-rd1l). One parser for both pages,
+// so a line the stack table reads as a variable is one here too.
 func parseGlobalEnvText(text string) []map[string]string {
-	lines := strings.Split(text, "\n")
-	vars := []map[string]string{}
+	vars, _ := globalEnvVars((&EnvHandler{}).parseEnvFile(text))
+	return vars
+}
 
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
+// globalEnvVars projects parsed env rows to the global env page's rows and
+// returns, for each, the index of the entry it came from. Comments, blank
+// lines and the hidden body rows of a locked view have no key and no row.
+func globalEnvVars(entries []EnvEntry) (vars []map[string]string, from []int) {
+	vars = []map[string]string{}
+	for i, e := range entries {
+		if v, ok := globalEnvVarOf(e); ok {
+			vars = append(vars, v)
+			from = append(from, i)
+		}
+	}
+	return vars, from
+}
+
+// globalEnvVarOf is one row's {key, value}. The value is the text compose
+// reads after the separator, quotes and an inline comment included, which is
+// what the global page has always shown and sends back: a KEY=value row gives
+// its raw right-hand side; a read-only line (bare KEY, KEY: value) gives the
+// text after its ":", or "".
+func globalEnvVarOf(e EnvEntry) (map[string]string, bool) {
+	if e.Key == "" {
+		return nil, false
+	}
+	value := e.Quote + e.Value + e.Quote + e.InlineComment
+	if e.Comment {
+		value = ""
+		if sep := strings.IndexAny(e.Value, "=:"); sep != -1 {
+			value = strings.TrimSpace(e.Value[sep+1:])
+		}
+	}
+	return map[string]string{"key": e.Key, "value": value}, true
+}
+
+// globalValueReadsAsOne reports whether the line key=value reads back as the
+// one variable key, with value as its text, both by EnvHandler.parseEnvFile
+// and by compose's own dotenv parser (review C4). Every variable reference
+// resolves to "x" so a ${X:?} form is not mistaken for a broken line.
+func globalValueReadsAsOne(key, value string) bool {
+	line := key + "=" + value
+	rows := (&EnvHandler{}).parseEnvFile(line)
+	if len(rows) != 1 || rows[0].Key != key {
+		return false
+	}
+	if v, ok := globalEnvVarOf(rows[0]); !ok || v["value"] != strings.TrimSpace(value) {
+		return false
+	}
+	vars, err := dotenv.UnmarshalWithLookup(line+"\n", func(string) (string, bool) { return "x", true })
+	if err != nil {
+		return false // compose cannot read the line: refuse the save
+	}
+	if len(vars) != 1 {
+		return false
+	}
+	// The parser keys "export A=1" as "export A"; compose reads it as A (review F1).
+	composeKey, ok := composeLineKey(line)
+	if !ok {
+		return false
+	}
+	_, ok = vars[composeKey]
+	return ok
+}
+
+// mergeGlobalEnv applies a save of the global env page's rows to the file's
+// current text (agent-os-rd1l, agent-os-jx88). The page sends variables only,
+// so the file is the source for everything else:
+//   - a request row is matched to the file's row with the same key, the n-th
+//     request row of a key to the n-th file row of it;
+//   - a matched row whose value is unchanged keeps its original line(s)
+//     byte for byte, so a read-only line (bare KEY, KEY: value) survives;
+//   - a changed row is written in place as KEY=value;
+//   - a file row no request row matches is removed, and a request row no file
+//     row matches is appended at the end (a renamed key therefore moves);
+//   - comments and blank lines stay where they are.
+//
+// Changed and new rows are validated as the stack table's are
+// (validateEnvEntries, by request index); an unchanged row is the file's own
+// text and is not.
+func mergeGlobalEnv(current string, req []EnvEntry) (string, error) {
+	entries := (&EnvHandler{}).parseEnvFile(current)
+	fileVars, from := globalEnvVars(entries)
+
+	pending := map[string][]int{}
+	for j, v := range fileVars {
+		pending[v["key"]] = append(pending[v["key"]], j)
+	}
+	matched := make([]int, len(fileVars)) // request index + 1, 0 = unmatched
+	added := []EnvEntry{}
+	toCheck := append([]EnvEntry(nil), req...)
+	for i, r := range req {
+		if r.Key == "" && r.Value == "" {
+			continue // a blank row, as serializeEnvFile has always treated it
+		}
+		if q := pending[r.Key]; r.Key != "" && len(q) > 0 {
+			pending[r.Key] = q[1:]
+			matched[q[0]] = i + 1
+			if r.Value == fileVars[q[0]]["value"] {
+				toCheck[i] = EnvEntry{}
+				continue
+			}
+			// The page edits a value in a one-line field, which drops the
+			// line breaks of a multi-line value (review C2): an edit of one
+			// would rewrite it as a different value, and add variables.
+			// Rows of one key match in order, so deleting the multi-line
+			// copy of a duplicated key (A="x\ny" then A=2) pairs the kept
+			// A=2 with the multi-line row and is refused too (review F2).
+			if strings.Contains(fileVars[q[0]]["value"], "\n") {
+				return "", fmt.Errorf("entry at index %d (key %q) is a multi-line value, which cannot be edited on this page; edit global.env directly", i, r.Key)
+			}
 			continue
 		}
-
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) == 2 {
-			key := strings.TrimSpace(parts[0])
-			value := strings.TrimSpace(parts[1])
-			vars = append(vars, map[string]string{
-				"key":   key,
-				"value": value,
-			})
+		added = append(added, r)
+	}
+	if err := validateEnvEntries(toCheck); err != nil {
+		return "", err
+	}
+	// A new or changed value is written as KEY=value, so it must read back as
+	// exactly that one variable, by this parser and by compose's (review C4):
+	// `"hello" world=1` gave compose a second variable, and `'it` left a quote
+	// open, so compose rejected the whole file.
+	for i, e := range toCheck {
+		if e.Key == "" {
+			continue
+		}
+		if !globalValueReadsAsOne(e.Key, e.Value) {
+			return "", fmt.Errorf("entry at index %d (key %q) has a value whose quotes or comment do not read back as that one variable; check its quotes", i, e.Key)
 		}
 	}
 
-	return vars
+	// Each entry's original text: its line, or for a value spanning lines,
+	// every line up to the next entry. The raw split keeps a "\r".
+	rawLines := strings.Split(current, "\n")
+	lineCount := len(envLines(current))
+	varOf := make(map[int]int, len(from))
+	for j, k := range from {
+		varOf[k] = j
+	}
+
+	var b strings.Builder
+	endsVerbatim := false
+	for k, e := range entries {
+		end := lineCount
+		if k+1 < len(entries) {
+			end = entries[k+1].Line - 1
+		}
+		j, isVar := varOf[k]
+		switch {
+		case isVar && matched[j] == 0:
+			continue // removed on the page
+		case isVar && req[matched[j]-1].Value != fileVars[j]["value"]:
+			b.WriteString(serializeEnvFile([]EnvEntry{{Key: e.Key, Value: req[matched[j]-1].Value}}))
+			endsVerbatim = false
+		default:
+			for _, l := range rawLines[e.Line-1 : end] {
+				b.WriteString(l)
+				b.WriteString("\n")
+			}
+			endsVerbatim = end == lineCount
+		}
+	}
+	added = slices.DeleteFunc(added, func(e EnvEntry) bool { return e.Key == "" && e.Value == "" })
+	if len(added) > 0 {
+		b.WriteString(serializeEnvFile(added))
+		endsVerbatim = false
+	}
+	out := b.String()
+	// An unchanged last line keeps the file's missing final newline too.
+	if endsVerbatim && !strings.HasSuffix(current, "\n") {
+		out = strings.TrimSuffix(out, "\n")
+	}
+	return out, nil
 }
 
 func (h *SettingsHandler) GetLogRetention(c *gin.Context) {
@@ -864,6 +1026,24 @@ func (h *SettingsHandler) UpdateUpdateSettings(c *gin.Context) {
 	h.GetUpdateSettings(c)
 }
 
+// gitHTTPSCredentialProblem refuses a git HTTPS username or token holding an
+// ASCII control character (agent-os-mwgg). git's credential helper prints both
+// in a line-oriented protocol, so a line break added lines such as host= to
+// what git read. It returns the message for a 400, naming the field and never
+// the value, or "". Both routes that store the credential call it
+// (UpdateGitSettings, DirectoriesHandler.UpdateCredentials); the helper itself
+// refuses again (services.gitCredentialRefused).
+func gitHTTPSCredentialProblem(user, token string) string {
+	const rule = " must not contain line breaks or other control characters"
+	if services.HasControlChar(user) {
+		return "httpsUser" + rule
+	}
+	if services.HasControlChar(token) {
+		return "httpsToken" + rule
+	}
+	return ""
+}
+
 // looksLikePrivateKey reports whether s appears to be private-key material
 // rather than a filesystem path. SSH key file paths are single-line and never
 // contain a PEM/OpenSSH key header.
@@ -1042,6 +1222,12 @@ func (h *SettingsHandler) UpdateGitSettings(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, models.NewAppError(http.StatusBadRequest, "VALIDATION_ERROR", msg))
 			return
 		}
+	}
+
+	// "" means no change for these two, so it is never refused.
+	if msg := gitHTTPSCredentialProblem(req.HTTPSUser, req.HTTPSToken); msg != "" {
+		c.JSON(http.StatusBadRequest, models.NewAppError(http.StatusBadRequest, models.ErrValidation, msg))
+		return
 	}
 
 	var values []database.SettingValue
