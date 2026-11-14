@@ -563,7 +563,7 @@ func (s *GitService) historyEnvRule(dirPath, top string, bare bool, cred gitCred
 	if s.db == nil {
 		return r, fmt.Errorf("cannot decide which files are env files: no database")
 	}
-	stacks, unplaced, err := s.repoStacks(top)
+	stacks, unplaced, err := s.repoStacks(top, cred.token)
 	if err != nil {
 		return r, err
 	}
@@ -828,7 +828,7 @@ type unplacedStack struct {
 // repoStacks is every registered stack whose folder lies inside top, plus the
 // stacks it could not place. It never keys on the folder a request names: a
 // file of one folder can be another stack's env file (agent-os-0zjs).
-func (s *GitService) repoStacks(top string) ([]repoStack, []unplacedStack, error) {
+func (s *GitService) repoStacks(top, token string) ([]repoStack, []unplacedStack, error) {
 	stacks, err := s.db.ListStacks()
 	if err != nil {
 		return nil, nil, fmt.Errorf("could not list the stacks to decide which files are env files: %w", err)
@@ -836,7 +836,7 @@ func (s *GitService) repoStacks(top string) ([]repoStack, []unplacedStack, error
 	var in []repoStack
 	var unplaced []unplacedStack
 	for _, st := range stacks {
-		rel, ok, err := repoRel(top, st.Directory)
+		rel, ok, err := repoRel(top, st.Directory, token)
 		switch {
 		case err != nil:
 			unplaced = append(unplaced, unplacedStack{stack: st, err: err})
@@ -883,16 +883,13 @@ func (s *GitService) lsTree(dirPath string, cred gitCreds, t string) (map[string
 // still maps (agent-os-odjs). A path it cannot check is an error, never
 // "outside": the caller would then show a file it meant to hide.
 //
-// tokens, for a path read from git's raw output (agent-os-9wwa), is the
-// credential to mask in an error: the path is masked BEFORE boundedPath
-// quotes and cuts it, since quoting escapes a token and the cut can split
-// one, and a finished message then no longer holds it whole. Optional, so the
-// callers with paths from disk or the database stay as they are.
-func repoRel(top, abs string, tokens ...string) (string, bool, error) {
-	token := ""
-	if len(tokens) > 0 {
-		token = tokens[0]
-	}
+// token is the credential to mask in an error (agent-os-9wwa): the path is
+// masked BEFORE boundedPath quotes and cuts it, since quoting escapes a token
+// and the cut can split one, and a finished message then no longer holds it
+// whole. It is required, so the compiler keeps every caller deciding: a stack
+// folder from the database can hold it as well as a path from git's raw
+// output (agent-os-r5b4). "" masks nothing.
+func repoRel(top, abs, token string) (string, bool, error) {
 	ok, err := pathutil.IsContained(top, abs)
 	if err != nil {
 		return "", false, redactErr(fmt.Errorf("could not tell whether %s is inside the repository: %w",
@@ -932,15 +929,10 @@ func boundedPath(p string) string {
 	return fmt.Sprintf("%q... (%d bytes)", p[:maxErrPathBytes], len(p))
 }
 
-// boundedPathErr is err with the path of an *fs.PathError in it bounded as
-// boundedPath does: the OS error (lstat <path>: file name too long) repeats
-// the path whole. The cause stays in the chain.
-func boundedPathErr(err error) error {
-	return boundedPathErrShown(err, "")
-}
-
-// boundedPathErrShown is boundedPathErr with token masked in the path before
-// it is bounded (agent-os-9wwa).
+// boundedPathErrShown is err with the path of an *fs.PathError in it bounded
+// as boundedPath does, token masked in the path before it is bounded
+// (agent-os-9wwa): the OS error (lstat <path>: file name too long) repeats the
+// path whole. The cause stays in the chain.
 func boundedPathErrShown(err error, token string) error {
 	var pe *fs.PathError
 	if !errors.As(err, &pe) {

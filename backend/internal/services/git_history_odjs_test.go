@@ -54,7 +54,7 @@ func TestOdjsRepoRelThroughSymlinkedRoot(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, ok, err := repoRel(top, tc.abs)
+			got, ok, err := repoRel(top, tc.abs, "")
 			require.NoError(t, err)
 			assert.Equal(t, tc.ok, ok)
 			assert.Equal(t, tc.want, got)

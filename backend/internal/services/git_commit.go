@@ -762,7 +762,7 @@ var globPathspecEnv = []string{
 // its own folder: a file in the requested folder can be named by a stack
 // registered above it, below it or beside it (agent-os-0zjs).
 func (s *GitService) envRule(dirPath, top string, cred gitCreds) (envRule, error) {
-	stacks, unplaced, err := s.repoStacks(top)
+	stacks, unplaced, err := s.repoStacks(top, cred.token)
 	if err != nil {
 		return envRule{}, err
 	}

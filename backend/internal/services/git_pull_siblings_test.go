@@ -443,7 +443,7 @@ func TestPullVerified_SiblingsUncheckablePlacementFails(t *testing.T) {
 		{Stack: models.Stack{ID: "M", Directory: filepath.Join(top, "file", "m"), ComposeFile: "compose.yaml", ProjectName: "m"}, rel: "file/m"},
 	}}
 
-	changed, failures := p.changed(top, []string{"file/m/compose.yaml"})
+	changed, failures := p.changed(top, []string{"file/m/compose.yaml"}, "")
 
 	if len(changed) != 1 || changed[0].StackID != "M" {
 		t.Fatalf("changed = %v, want [M]", changed)
