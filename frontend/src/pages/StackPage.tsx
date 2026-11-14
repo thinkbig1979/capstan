@@ -138,10 +138,12 @@ export function StackPage() {
 
   // Every terminal outcome refreshes the stack and says what happened; a
   // failed Start/Stop also changes what the page should show (agent-os-ljm0).
+  // Only a finished run: a mid-run error frame is followed by the done frame,
+  // and toasting both would report one run twice (review R2).
   // 'disconnected' is not here: the hook already refetches on that close.
   useEffect(() => {
     const status = operation.status
-    if (!id || !['success', 'no_change', 'partial', 'error'].includes(status)) return
+    if (!id || !operation.finished || !['success', 'no_change', 'partial', 'error'].includes(status)) return
     queryClient.invalidateQueries({ queryKey: queryKeys.stack.detail(id) })
     queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
     const label = operation.action.charAt(0).toUpperCase() + operation.action.slice(1)
@@ -149,7 +151,7 @@ export function StackPage() {
     else if (status === 'no_change') toast.info(`${label}: no change`)
     else if (status === 'partial') toast.warning(`${label} partly completed`)
     else presentFault(`${label} failed`, operation.error)
-  }, [operation.status, operation.action, operation.error, id, queryClient])
+  }, [operation.finished, operation.status, operation.action, operation.error, id, queryClient])
 
   // Available updates for this stack
   const { data: updateData } = useCheckUpdates()

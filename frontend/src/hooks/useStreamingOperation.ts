@@ -54,6 +54,12 @@ export interface StreamingOperation {
   lines: string[]
   action: string
   error: string | null
+  /**
+   * True once the run's outcome is final: a done frame arrived, or the socket
+   * ended. An error frame alone is not final (a scanner error mid-run is
+   * followed by the run's done frame), so act on `status` only when this is set.
+   */
+  finished: boolean
   execute: (stackId: string, action: 'pull' | 'start' | 'stop' | 'restart') => void
   cancel: () => void
   reset: () => void
@@ -83,6 +89,7 @@ export function useStreamingOperation(): StreamingOperation {
   const [lines, setLines] = useState<string[]>([])
   const [action, setAction] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [finished, setFinished] = useState(false)
   const queryClient = useQueryClient()
   const clientRef = useRef<WSClient | null>(null)
   const completedRef = useRef(false)
@@ -107,6 +114,7 @@ export function useStreamingOperation(): StreamingOperation {
     setLines([])
     setAction('')
     setError(null)
+    setFinished(false)
     clientRef.current?.close()
     clientRef.current = null
   }, [])
@@ -118,6 +126,7 @@ export function useStreamingOperation(): StreamingOperation {
     setLines([])
     setError(null)
     setStatus('running')
+    setFinished(false)
     completedRef.current = false
     // An error frame is the server saying the command failed; a close after
     // it is not a lost connection.
@@ -156,6 +165,7 @@ export function useStreamingOperation(): StreamingOperation {
             // the onClose handler never overwrites a real terminal outcome with
             // 'error' due to a race between the close and the onClose callback.
             completedRef.current = true
+            setFinished(true)
 
             if (finalStatus === 'success') {
               setStatus('success')
@@ -196,6 +206,7 @@ export function useStreamingOperation(): StreamingOperation {
         // close decides. A drop is not a failure (finding #18), and the
         // browser cannot tell a refused upgrade from a lost one.
         onClose: () => {
+          setFinished(true)
           // Finding #18 / ws-reconcile: after a done frame the real outcome
           // stands. Without one, the server state is the truth: refetch it.
           reconcileOnClose({
@@ -216,5 +227,5 @@ export function useStreamingOperation(): StreamingOperation {
     )
   }, [queryClient])
 
-  return { status, lines, action, error, execute, cancel, reset }
+  return { status, lines, action, error, finished, execute, cancel, reset }
 }
