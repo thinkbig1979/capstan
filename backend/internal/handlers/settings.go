@@ -599,6 +599,12 @@ func mergeGlobalEnv(current string, req []EnvEntry) (string, error) {
 		if e.Key == "" {
 			continue
 		}
+		// A key is one word after an optional "export " (review F5):
+		// "export export FOO" or "MY KEY" otherwise reached the quotes
+		// message below.
+		if strings.ContainsAny(e.Key, " \t") {
+			return "", fmt.Errorf("entry at index %d (key %q) has a space in its key; a key is one word, optionally after \"export \"", i, e.Key)
+		}
 		if !globalValueReadsAsOne(e.Key, e.Value) {
 			return "", fmt.Errorf("entry at index %d (key %q) has a value whose quotes or comment do not read back as that one variable; check its quotes", i, e.Key)
 		}

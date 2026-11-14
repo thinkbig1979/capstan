@@ -36,6 +36,16 @@ func TestGlobalEnvAle2_CRLFKeptOnChangedAndAddedRows(t *testing.T) {
 	}
 }
 
+// Review F3: a change that leaves the file's last line as it was keeps the
+// missing final newline, in the file's line ending.
+func TestGlobalEnvAle2_CRLFNoFinalNewlineKept(t *testing.T) {
+	dataDir, router := globalEnvTestRouter(t)
+	p := writeGlobalEnvFile(t, dataDir, "A=1\r\nB=2")
+	w := putGlobalVars(t, router, []map[string]string{{"key": "A", "value": "9"}, {"key": "B", "value": "2"}})
+	require.Equal(t, http.StatusNoContent, w.Code, w.Body.String())
+	assert.Equal(t, "A=9\r\nB=2", readGlobalEnvTestFile(t, p))
+}
+
 // An LF file stays LF (the control for the CRLF arm).
 func TestGlobalEnvAle2_LFFileStaysLF(t *testing.T) {
 	dataDir, router := globalEnvTestRouter(t)
@@ -62,4 +72,27 @@ func TestGlobalEnvAle2_TypedExportKey(t *testing.T) {
 	w = putGlobalVars(t, router, []map[string]string{{"key": "A", "value": "1"}, {"key": "FOO", "value": "1"}, {"key": "export BAR", "value": `"open`}})
 	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
 	assert.Equal(t, "A=1\nexport FOO=1\n", readGlobalEnvTestFile(t, p), "nothing written")
+}
+
+// Review F2: a key typed as "export FOO" over an existing plain FOO row, with
+// a changed value, writes the row with its prefix.
+func TestGlobalEnvAle2_TypedExportKeyOverPlainRow(t *testing.T) {
+	dataDir, router := globalEnvTestRouter(t)
+	p := writeGlobalEnvFile(t, dataDir, "FOO=1\n")
+	w := putGlobalVars(t, router, []map[string]string{{"key": "export FOO", "value": "2"}})
+	require.Equal(t, http.StatusNoContent, w.Code, w.Body.String())
+	assert.Equal(t, "export FOO=2\n", readGlobalEnvTestFile(t, p))
+}
+
+// Review F5: a key that is not one word after "export " is refused with a
+// message about the key, not its quotes.
+func TestGlobalEnvAle2_KeyWithSpaceNamesTheKey(t *testing.T) {
+	for _, key := range []string{"export export FOO", "MY KEY"} {
+		dataDir, router := globalEnvTestRouter(t)
+		p := writeGlobalEnvFile(t, dataDir, "A=1\n")
+		w := putGlobalVars(t, router, []map[string]string{{"key": "A", "value": "1"}, {"key": key, "value": "1"}})
+		require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+		assert.Contains(t, w.Body.String(), "space in its key", key)
+		assert.Equal(t, "A=1\n", readGlobalEnvTestFile(t, p), "nothing written")
+	}
 }
