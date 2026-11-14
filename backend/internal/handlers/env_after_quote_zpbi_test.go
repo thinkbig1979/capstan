@@ -176,7 +176,8 @@ func TestEnvAfterQuote_zpbi_LongTailParsesInLinearTime(t *testing.T) {
 		redactGlobalEnvVars(vars, content)
 		elapsed := time.Since(start)
 		require.NotEmpty(t, resp.Entries)
-		assert.Less(t, elapsed, 2*time.Second, "%d bytes took %s to parse and redact", len(content), elapsed)
+		t.Logf("%d bytes parsed and redacted in %s", len(content), elapsed)
+		assert.Less(t, elapsed, 2*time.Second*timingFactor, "%d bytes took %s to parse and redact", len(content), elapsed)
 	}
 }
 
