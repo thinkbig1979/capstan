@@ -46,6 +46,8 @@ func envCorpus() []envCorpusFixture {
 			composeDiffers: "pre-existing: the table keys an export line with its prefix (\"export EXP_TOKEN\"); compose reads EXP_TOKEN. Not in this cluster's beads."},
 		{name: "multiline-quote", content: "A=1\nCERT_KEY=\"-----BEGIN\nabc: def\nTOP_SECRET_PASSWORD: corpusmultiinner\n-----END\" # pem\nPEM='l1\nl2=corpusmultisingle'\nB=2\n",
 			secrets: []string{"corpusmultiinner"}, tableExact: true},
+		{name: "duplicate-key", content: "A=1\n# between\nA=2\nB=3\nA=4\n", tableExact: true},
+		{name: "empty", content: "", tableExact: true},
 		{name: "indent-crlf-no-final-newline", content: "  A=1\r\n# c\r\nB=2"},
 	}
 }
@@ -59,7 +61,8 @@ func tableKeys(content string) []string {
 		}
 	}
 	slices.Sort(keys)
-	return keys
+	// compose keeps one value per key; a repeated key is one variable.
+	return slices.Compact(keys)
 }
 
 func TestEnvCorpus_StackTableUneditedSaveIsByteIdentical(t *testing.T) {

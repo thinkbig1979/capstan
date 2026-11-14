@@ -151,3 +151,61 @@ func TestGlobalEnvColon_UnreadableFileRefusesSave(t *testing.T) {
 	w := putGlobalVars(t, router, []map[string]string{{"key": "A", "value": "1"}})
 	assert.GreaterOrEqual(t, w.Code, 400, "refused: %s", w.Body.String())
 }
+
+// Review C4: a new or changed value is written as KEY=value, so it must read
+// back as that one variable. `"hello" world=1` gave compose a second
+// variable; `'it` left a quote open, and compose rejected all of global.env.
+func TestGlobalEnvColon_ChangedValueQuoteShapeRefused(t *testing.T) {
+	for _, bad := range []string{`"hello" world=1`, `'it`, `"open`} {
+		t.Run(bad, func(t *testing.T) {
+			dataDir, router := globalEnvTestRouter(t)
+			p := writeGlobalEnvFile(t, dataDir, "A=x\n")
+			for _, vars := range [][]map[string]string{
+				{{"key": "A", "value": bad}},                               // changed
+				{{"key": "A", "value": "x"}, {"key": "NEW", "value": bad}}, // new
+			} {
+				w := putGlobalVars(t, router, vars)
+				require.Equal(t, http.StatusBadRequest, w.Code, "value %q: %s", bad, w.Body.String())
+				assert.Equal(t, "A=x\n", readGlobalEnvTestFile(t, p), "nothing written")
+			}
+		})
+	}
+	// The other side: well-formed quoting is accepted.
+	dataDir, router := globalEnvTestRouter(t)
+	p := writeGlobalEnvFile(t, dataDir, "A=x\n")
+	w := putGlobalVars(t, router, []map[string]string{{"key": "A", "value": `"hello world" # c`}, {"key": "B", "value": "it's"}})
+	require.Equal(t, http.StatusNoContent, w.Code, w.Body.String())
+	assert.Equal(t, "A=\"hello world\" # c\nB=it's\n", readGlobalEnvTestFile(t, p))
+}
+
+// Review C3: duplicate keys match in order, so an unchanged save keeps them
+// where they are (TestEnvCorpus fixture "duplicate-key" covers the unchanged
+// save); an edit of the second A changes the second A.
+func TestGlobalEnvColon_DuplicateKeysMatchInOrder(t *testing.T) {
+	dataDir, router := globalEnvTestRouter(t)
+	p := writeGlobalEnvFile(t, dataDir, "A=1\nA=2\n")
+	w := putGlobalVars(t, router, []map[string]string{{"key": "A", "value": "1"}, {"key": "A", "value": "9"}})
+	require.Equal(t, http.StatusNoContent, w.Code, w.Body.String())
+	assert.Equal(t, "A=1\nA=9\n", readGlobalEnvTestFile(t, p))
+}
+
+// Review C2 (server half): a change to a multi-line value is refused, the
+// page's one-line field having dropped its line breaks; an unchanged save
+// and a delete still work.
+func TestGlobalEnvColon_MultilineValueChangeRefused(t *testing.T) {
+	const content = "CERT=\"-----BEGIN\nabc\n-----END\"\nB=1\n"
+	dataDir, router := globalEnvTestRouter(t)
+	p := writeGlobalEnvFile(t, dataDir, content)
+
+	w := putGlobalVars(t, router, []map[string]string{{"key": "CERT", "value": `"-----BEGINabc-----END"X`}, {"key": "B", "value": "1"}})
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "multi-line")
+	assert.Equal(t, content, readGlobalEnvTestFile(t, p), "nothing written")
+
+	vars, _ := getGlobalVars(t, router, "/unlocked")
+	require.Equal(t, http.StatusNoContent, putGlobalVars(t, router, vars).Code, "an unchanged save still works")
+	assert.Equal(t, content, readGlobalEnvTestFile(t, p))
+
+	require.Equal(t, http.StatusNoContent, putGlobalVars(t, router, []map[string]string{{"key": "B", "value": "1"}}).Code, "a delete still works")
+	assert.Equal(t, "B=1\n", readGlobalEnvTestFile(t, p))
+}

@@ -17,6 +17,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/compose-spec/compose-go/v2/dotenv"
 	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
@@ -459,6 +460,27 @@ func globalEnvVarOf(e EnvEntry) (map[string]string, bool) {
 	return map[string]string{"key": e.Key, "value": value}, true
 }
 
+// globalValueReadsAsOne reports whether the line key=value reads back as the
+// one variable key, with value as its text, both by EnvHandler.parseEnvFile
+// and by compose's own dotenv parser (review C4). Every variable reference
+// resolves to "x" so a ${X:?} form is not mistaken for a broken line.
+func globalValueReadsAsOne(key, value string) bool {
+	line := key + "=" + value
+	rows := (&EnvHandler{}).parseEnvFile(line)
+	if len(rows) != 1 || rows[0].Key != key {
+		return false
+	}
+	if v, ok := globalEnvVarOf(rows[0]); !ok || v["value"] != strings.TrimSpace(value) {
+		return false
+	}
+	vars, err := dotenv.UnmarshalWithLookup(line+"\n", func(string) (string, bool) { return "x", true })
+	if err != nil || len(vars) != 1 {
+		return false
+	}
+	_, ok := vars[key]
+	return ok
+}
+
 // mergeGlobalEnv applies a save of the global env page's rows to the file's
 // current text (agent-os-rd1l, agent-os-jx88). The page sends variables only,
 // so the file is the source for everything else:
@@ -494,6 +516,13 @@ func mergeGlobalEnv(current string, req []EnvEntry) (string, error) {
 			matched[q[0]] = i + 1
 			if r.Value == fileVars[q[0]]["value"] {
 				toCheck[i] = EnvEntry{}
+				continue
+			}
+			// The page edits a value in a one-line field, which drops the
+			// line breaks of a multi-line value (review C2): an edit of one
+			// would rewrite it as a different value, and add variables.
+			if strings.Contains(fileVars[q[0]]["value"], "\n") {
+				return "", fmt.Errorf("entry at index %d (key %q) is a multi-line value, which cannot be edited on this page; edit global.env directly", i, r.Key)
 			}
 			continue
 		}
@@ -501,6 +530,18 @@ func mergeGlobalEnv(current string, req []EnvEntry) (string, error) {
 	}
 	if err := validateEnvEntries(toCheck); err != nil {
 		return "", err
+	}
+	// A new or changed value is written as KEY=value, so it must read back as
+	// exactly that one variable, by this parser and by compose's (review C4):
+	// `"hello" world=1` gave compose a second variable, and `'it` left a quote
+	// open, so compose rejected the whole file.
+	for i, e := range toCheck {
+		if e.Key == "" {
+			continue
+		}
+		if !globalValueReadsAsOne(e.Key, e.Value) {
+			return "", fmt.Errorf("entry at index %d (key %q) has a value whose quotes or comment do not read back as that one variable; check its quotes", i, e.Key)
+		}
 	}
 
 	// Each entry's original text: its line, or for a value spanning lines,
