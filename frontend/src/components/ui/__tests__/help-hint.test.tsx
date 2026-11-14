@@ -130,10 +130,9 @@ describe('HelpHint', () => {
       await user.click(trigger)
       await user.click(await screen.findByTestId('help-hint-learn-more-button'))
 
-      // Straight after the click, before the lazy doc has rendered its heading:
-      // Radix would have restored focus to the (i) here, and the heading only
-      // takes it back later, which is a race in a browser (the exit animation
-      // delays the restore past a cached doc's heading focus).
+      // Pins onCloseAutoFocus's preventDefault: without it Radix hands focus back
+      // to the (i) as the popover closes, and in a browser the exit animation can
+      // delay that restore past the heading's focus, so the (i) keeps it.
       expect(trigger).not.toHaveFocus()
       // Wait on the anchor, a cheap selector: a findByRole with a name re-walks the whole
       // rendered doc on every poll, about 0.5 s a poll on a loaded machine, and ran out of
