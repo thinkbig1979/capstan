@@ -223,30 +223,51 @@ func hideMultilineBodies(entries []EnvEntry, raw string) {
 			entries[k] = EnvEntry{Line: entries[k].Line, Comment: entries[k].Comment, Sensitive: true}
 		}
 	}
+	walks := newBodyWalks(entries, lineText)
 
-	// The body of a sensitive or commented-secret opener is the secret.
-	for i := 0; i < len(entries); i++ {
+	// The body of a sensitive or commented-secret opener is the secret. Every
+	// opener is followed, also one inside another's body (agent-os-olcn): a
+	// commented-out opener's body is not one compose reads, so a real secret
+	// can open inside it, and a body whose closing quote sits inside a folded
+	// row ends late, over the next secret's opener. Rows only ever get hidden
+	// here, never shown. The ends come from a table and a row already blanked
+	// is not blanked again, so this stays linear in the file.
+	blankedTo := -1
+	for i := range entries {
 		if !opener[i] {
 			continue
 		}
-		q, open := opensMultilineTail(lineText(entries[i]))
-		if raw == "" {
-			open = true
+		end := len(entries) - 1
+		if raw != "" {
+			q, open := opensMultilineTail(lineText(entries[i]))
+			if !open {
+				continue
+			}
+			end, _ = walks.bodyEnd(i, q)
 		}
-		if !open {
-			continue
-		}
-		end := bodyEnd(entries, i, q, lineText)
-		blank(i+1, end)
-		i = end
+		blank(max(i+1, blankedTo+1), end)
+		blankedTo = max(blankedTo, end)
 	}
 
 	// The body a plain row opens is hidden when its lines look secret, as a
-	// one-row multi-line value is (bodyLooksSensitive, review P2). Each row is
-	// scanned at most once: the walk resumes after the body, which keeps this
-	// linear in the file (a chain of re-opened values made a per-row scan
-	// quadratic).
-	for i := 0; i < len(entries); i++ {
+	// one-row multi-line value is (bodyLooksSensitive, review P2), or when a
+	// statement compose reads after one of its closing quotes does
+	// (agent-os-olcn: `b" API_TOKEN: 'c`, whose key the line parser rejects).
+	// Every row is judged, none jumped over (review of agent-os-olcn: a jump
+	// past one body skipped the next opener, so a PEM body base hid was
+	// shown), and the rows are judged as pass 1 left them, all blanking done
+	// after. Rows only ever get hidden. Linear in the file: whether a body
+	// has a line that looks secret is a difference of prefix counts, and the
+	// bodies to hide are summed in one difference array.
+	looksBefore := make([]int, len(entries)+1)
+	for k, e := range entries {
+		looksBefore[k+1] = looksBefore[k]
+		if bodyLooksSensitive([]string{lineText(e)}) {
+			looksBefore[k+1]++
+		}
+	}
+	hide := make([]int, len(entries)+1)
+	for i := range entries {
 		if opener[i] || strings.Contains(entries[i].Value, "\n") {
 			continue
 		}
@@ -254,42 +275,83 @@ func hideMultilineBodies(entries []EnvEntry, raw string) {
 		if !open {
 			continue
 		}
-		end := bodyEnd(entries, i, q, lineText)
-		body := make([]string, 0, end-i)
-		for k := i + 1; k <= end; k++ {
-			body = append(body, lineText(entries[k]))
+		end, tailSensitive := walks.bodyEnd(i, q)
+		if tailSensitive || looksBefore[end+1]-looksBefore[i+1] > 0 {
+			hide[i+1]++
+			hide[end+1]--
 		}
-		if bodyLooksSensitive(body) {
-			blank(i+1, end)
+	}
+	for k, n := 0, 0; k < len(entries); k++ {
+		if n += hide[k]; n > 0 {
+			blank(k, k)
 		}
-		i = end
 	}
 }
 
-// bodyEnd returns the index of the row that closes the quote q opened by
-// entries[open], or the last row when none does. A closing line can open
-// another quoted value after its closing quote (review R2:
-// `b" API_TOKEN="c`), and that body is followed too.
-func bodyEnd(entries []EnvEntry, open int, q byte, lineText func(EnvEntry) string) int {
-	end := open
-	for end+1 < len(entries) {
-		end++
-		text := lineText(entries[end])
-		closes, _ := closingQuote(text, q)
-		if closes == -1 {
-			continue
-		}
-		rest := strings.TrimLeftFunc(text[closes+1:], unicode.IsSpace)
-		if rest == "" || rest[0] == '#' {
-			break
-		}
-		next, again := opensMultilineTail(rest)
-		if !again {
-			break
-		}
-		q = next
+// bodyWalks holds, for every row and each quote kind, where a quoted value
+// whose body starts at that row ends, and whether a statement compose reads
+// after a closing quote on the way is sensitive. It is filled from the last
+// row back, so a lookup costs nothing and the table costs one pass.
+type bodyWalks struct {
+	end       [2][]int
+	sensitive [2][]bool
+}
+
+// quoteKind indexes bodyWalks by quote: 0 for a double quote, 1 for a single.
+func quoteKind(q byte) int {
+	if q == '\'' {
+		return 1
 	}
-	return end
+	return 0
+}
+
+func newBodyWalks(entries []EnvEntry, lineText func(EnvEntry) string) *bodyWalks {
+	n := len(entries)
+	w := &bodyWalks{}
+	for qi := range w.end {
+		w.end[qi] = make([]int, n)
+		w.sensitive[qi] = make([]bool, n)
+	}
+	for k := n - 1; k >= 0; k-- {
+		text := lineText(entries[k])
+		for qi, q := range []byte{'"', '\''} {
+			closes, _ := closingQuote(text, q)
+			if closes == -1 {
+				// The body goes on through this row.
+				w.end[qi][k] = k
+				if k+1 < n {
+					w.end[qi][k], w.sensitive[qi][k] = w.end[qi][k+1], w.sensitive[qi][k+1]
+				}
+				continue
+			}
+			w.end[qi][k] = k
+			rest := strings.TrimLeftFunc(text[closes+1:], unicode.IsSpace)
+			if rest == "" || rest[0] == '#' {
+				continue
+			}
+			// A closing line can open another quoted value after its closing
+			// quote (review R2: `b" API_TOKEN="c`), and that body is followed
+			// too.
+			w.sensitive[qi][k] = statementsLookSensitive(rest)
+			if next, again := opensMultilineTail(rest); again && k+1 < n {
+				ni := quoteKind(next)
+				w.end[qi][k] = w.end[ni][k+1]
+				w.sensitive[qi][k] = w.sensitive[qi][k] || w.sensitive[ni][k+1]
+			}
+		}
+	}
+	return w
+}
+
+// bodyEnd returns the index of the row that closes the quote q opened by row
+// open, or the last row when none does, and whether a statement read after a
+// closing quote on the way is sensitive.
+func (w *bodyWalks) bodyEnd(open int, q byte) (end int, sensitive bool) {
+	qi := quoteKind(q)
+	if open+1 >= len(w.end[qi]) {
+		return open, false
+	}
+	return w.end[qi][open+1], w.sensitive[qi][open+1]
 }
 
 // opensMultilineValue reports whether a variable line's value starts with a
@@ -332,14 +394,16 @@ func opensMultilineTail(line string) (quote byte, open bool) {
 // commentedSecretEnd reports whether a comment row is a commented-out
 // assignment whose key or value is sensitive. If so it returns the index in
 // value just past the separator ("#OLD_SECRET=" has 12), else -1. The key is
-// read as compose would read it uncommented (composeLineKey).
+// read as compose would read it uncommented (composeLineKey), and so is every
+// statement after a closing quote (agent-os-olcn: `# NOTES="a"
+// DB_PASSWORD=x`); the separator kept is the first statement's either way.
 func commentedSecretEnd(value string) int {
 	body := strings.TrimLeftFunc(value, func(r rune) bool { return r == '#' || unicode.IsSpace(r) })
 	sep := strings.IndexAny(body, "=:")
 	if sep == -1 {
 		return -1
 	}
-	if key, ok := composeLineKey(body); ok && services.IsSensitiveEnvVar(key, body[sep+1:]) {
+	if key, ok := composeLineKey(body); ok && (services.IsSensitiveEnvVar(key, body[sep+1:]) || statementsLookSensitive(body)) {
 		return len(value) - len(body) + sep + 1
 	}
 	return -1

@@ -161,7 +161,13 @@ func TestEnvAfterQuote_zpbi_LongTailParsesInLinearTime(t *testing.T) {
 	// (review R2, P2). Scanned again from every row it was quadratic: 34 s
 	// at 4000 lines.
 	chain := "NOTES=\"a\" X=\"x\n" + strings.Repeat("b\" Y=\"c\n", 10300) + "end\"\n"
-	for _, content := range []string{"A=\"\"" + tail, "DB_PASSWORD=\"\"" + tail, chain} {
+	// agent-os-olcn: every sensitive opener is followed, also one inside
+	// another's body, so in a chain whose every row is a sensitive opener the
+	// body is walked from every row: each walk must be a table lookup and each
+	// row blanked once. Per row, a rescan took 61 s here and blanking the
+	// body again 5 s.
+	sensitiveChain := "NOTES=\"a\" X_TOKEN=\"x\n" + strings.Repeat("b\" Y_TOKEN=\"c\n", 40000) + "end\"\n"
+	for _, content := range []string{"A=\"\"" + tail, "DB_PASSWORD=\"\"" + tail, chain, sensitiveChain} {
 		require.Greater(t, len(content), 80*1024)
 		start := time.Now()
 		resp := EnvResponse{Raw: content, Entries: (&EnvHandler{}).parseEnvFile(content)}
@@ -170,7 +176,8 @@ func TestEnvAfterQuote_zpbi_LongTailParsesInLinearTime(t *testing.T) {
 		redactGlobalEnvVars(vars, content)
 		elapsed := time.Since(start)
 		require.NotEmpty(t, resp.Entries)
-		assert.Less(t, elapsed, 2*time.Second, "%d bytes took %s to parse and redact", len(content), elapsed)
+		t.Logf("%d bytes parsed and redacted in %s", len(content), elapsed)
+		assert.Less(t, elapsed, 2*time.Second*timingFactor, "%d bytes took %s to parse and redact", len(content), elapsed)
 	}
 }
 

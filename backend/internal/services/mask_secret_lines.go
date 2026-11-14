@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"gopkg.in/yaml.v3"
 )
@@ -88,6 +89,13 @@ func MaskSecrets(text, filePath string, secrets []string) (string, int) {
 				m.lines[i] = strings.ReplaceAll(line, v, secretMask)
 				m.count++
 			}
+		}
+	}
+	// Last, so it only masks more of what the passes above leave: a span it
+	// masked earlier could stop a longer secret value from matching.
+	for i := range m.lines {
+		if !m.masked[i] {
+			m.maskEnvTail(i)
 		}
 	}
 	return strings.Join(m.lines, "\n"), m.count
@@ -467,6 +475,122 @@ func (m *lineMasker) maskLeadKey(i int) {
 		m.count++
 		m.maskDeeper(i, indentOf(line))
 	}
+}
+
+// maskEnvTail masks each sensitive statement compose reads on an env line
+// after the first value's closing quote (agent-os-n30e): `NOTES="a"
+// DB_PASSWORD="x"` and `NOTES="a" API_TOKEN: x` are two variables to
+// compose, and maskLeadKey reads only the first. A value whose quote does
+// not close on the line is masked to the line's end. A reference or an
+// already masked value stays as it is.
+func (m *lineMasker) maskEnvTail(i int) {
+	line := m.lines[i]
+	// The line is built once, left to right: a splice per statement made a
+	// long line of statements quadratic.
+	var b strings.Builder
+	last, masked, openAt := 0, 0, -1
+	for _, st := range envTailStatements(line) {
+		v := line[st.start:st.end]
+		if v == "" || v == secretMask || isSecretReference(v) || (!IsSensitiveEnvKey(st.key) && !HasURLUserinfo(v)) {
+			continue
+		}
+		b.WriteString(line[last:st.start])
+		if st.open {
+			// Always the last statement on the line.
+			openAt, last = b.Len(), st.start
+			break
+		}
+		b.WriteString(secretMask)
+		last = st.end
+		masked++
+	}
+	if masked == 0 && openAt == -1 {
+		return
+	}
+	b.WriteString(line[last:])
+	m.lines[i] = b.String()
+	m.count += masked
+	if openAt != -1 {
+		m.maskFrom(i, openAt)
+	}
+}
+
+// envStatement is a statement compose reads on an env line: its key, and
+// where its value sits in the line, quotes excluded.
+type envStatement struct {
+	key        string
+	start, end int
+	// quote is the value's quote, 0 when it is unquoted.
+	quote byte
+	// open is a quote that does not close on the line; end is then the
+	// line's end.
+	open bool
+}
+
+// envTailStatements returns the statements compose reads on a line after
+// the first value's closing quote (compose-go v2 dotenv/parser.go:
+// extractVarValue returns the text after the closing quote and parse reads
+// on from there, agent-os-n30e). The first statement is not returned. A
+// line whose first value is unquoted, never closes, or is followed only by
+// a "#" comment has none. An unquoted value runs to the line's end or to
+// " #", as compose reads it. One pass along the line.
+func envTailStatements(line string) []envStatement {
+	var out []envStatement
+	pos := 0
+	for first := true; ; first = false {
+		sep := strings.IndexAny(line[pos:], "=:")
+		if sep == -1 {
+			return out
+		}
+		sep += pos
+		st := envStatement{key: strings.TrimSpace(line[pos:sep])}
+		vs := sep + 1
+		for vs < len(line) && (line[vs] == ' ' || line[vs] == '\t') {
+			vs++
+		}
+		if vs == len(line) || (line[vs] != '"' && line[vs] != '\'') {
+			if !first {
+				end := len(line)
+				if c := strings.Index(line[vs:], " #"); c != -1 {
+					end = vs + c
+				}
+				st.start, st.end = vs, vs+len(strings.TrimRightFunc(line[vs:end], unicode.IsSpace))
+				out = append(out, st)
+			}
+			return out
+		}
+		st.quote, st.start = line[vs], vs+1
+		st.end = envClosingQuote(line, st.start, st.quote)
+		if st.end == -1 {
+			if !first {
+				st.end, st.open = len(line), true
+				out = append(out, st)
+			}
+			return out
+		}
+		if !first {
+			out = append(out, st)
+		}
+		pos = st.end + 1
+		if rest := strings.TrimLeftFunc(line[pos:], unicode.IsSpace); rest == "" || rest[0] == '#' {
+			return out
+		}
+	}
+}
+
+// envClosingQuote is the index in s of the quote q that closes a value
+// opened just before from, or -1. A backslash escapes the next byte inside
+// either quote, as compose-go's extractVarValue reads a quoted value.
+func envClosingQuote(s string, from int, q byte) int {
+	for i := from; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			i++
+		case q:
+			return i
+		}
+	}
+	return -1
 }
 
 // maskFlowTokens masks the values of sensitive KEY=value / KEY: value tokens

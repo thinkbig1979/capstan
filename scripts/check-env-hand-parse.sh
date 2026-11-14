@@ -74,6 +74,7 @@ backend/internal/services/linter.go|processComposeEnv
 backend/internal/handlers/resources.go|maskContainerEnv
 backend/internal/services/mask_secret_lines.go|walk
 backend/internal/services/mask_secret_lines.go|maskItemAfterEquals
+backend/internal/services/mask_secret_lines.go|envTailStatements
 "
 # Why each entry is allowed:
 #   handlers/env.go parseEnvFile: the env table's own line parser; it keys rows
@@ -114,6 +115,11 @@ backend/internal/services/mask_secret_lines.go|maskItemAfterEquals
 #   services/mask_secret_lines.go walk, maskItemAfterEquals: find where a
 #     KEY=value list item's value starts so it can be masked for a locked
 #     view (agent-os-w6wx); they never resolve or return a value.
+#   services/mask_secret_lines.go envTailStatements: finds the statements
+#     compose reads after a closing quote on an env line, by compose's "=" or
+#     ":" rule, so maskEnvTail can mask a sensitive one in a diff or compose
+#     file (agent-os-n30e). It returns where each value sits, to be masked;
+#     no value is resolved or used.
 
 # The awk program receives the pattern through -v, so no regex escapes are
 # needed: bracket expressions only, which gawk and mawk read alike.
@@ -374,6 +380,10 @@ func (m *lineMasker) walk(n *yaml.Node) {
 func (m *lineMasker) maskItemAfterEquals(n *yaml.Node) {
 	eq := strings.IndexByte(line[col:], '=')
 }
+
+func envTailStatements(line string) []envStatement {
+	sep := strings.IndexAny(line[pos:], "=:")
+}
 EOF
   printf 'package main\n\nfunc main() {}\n' > "$d/backend/cmd/server/main.go"
 }
@@ -386,7 +396,7 @@ self_test() {
 
   local d="$tmp/clean"
   write_base "$d"
-  selftest_case "clean tree" 0 '0 violations in 11 files [(]17 allowlisted splits[)]' "$d"
+  selftest_case "clean tree" 0 '0 violations in 11 files [(]18 allowlisted splits[)]' "$d"
 
   d="$tmp/planted"
   write_base "$d"
