@@ -81,8 +81,9 @@ func (l *LinterService) LintCompose(content, workingDir string, env LintEnv, unl
 			l.sortResults(results)
 		}
 	}
+	lines := secretLineNeedles(secrets)
 	for i := range results {
-		results[i].Message = redactComposeOutput(results[i].Message, secrets)
+		results[i].Message = redactComposeOutput(redactComposeOutput(results[i].Message, secrets), lines)
 	}
 	if lockedNote {
 		// After the redaction: the note's fixed text is the same for every
@@ -492,6 +493,29 @@ func (e LintEnv) secretValues() []string {
 	}
 	sort.Slice(secrets, func(i, j int) bool { return len(secrets[i]) > len(secrets[j]) })
 	return secrets
+}
+
+// secretLineNeedles is each line of the multi-line values in secrets
+// (secretLines), longest first. A sensitive value known only resolved, in
+// Vars, can be multi-line where its env text was one line with \n escapes,
+// and a lint message can echo one of its lines (agent-os-vbkt). LintCompose
+// masks these in a second pass, after the whole values: a pass that only
+// replaces can hide more but never shows what the first pass hid, whereas
+// mixing them into one longest-first list can let a line break an
+// overlapping secret's match (agent-os-buwq).
+func secretLineNeedles(secrets []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, v := range secrets {
+		for _, l := range secretLines(v) {
+			if !seen[l] {
+				seen[l] = true
+				out = append(out, l)
+			}
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return len(out[i]) > len(out[j]) })
+	return out
 }
 
 // processComposeEnv is the compose child's own environment, which
