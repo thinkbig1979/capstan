@@ -1500,6 +1500,7 @@ func (s *SchedulerService) runAutoUpdates(ctx context.Context, updates []models.
 				r.failedUpdate = &failedUpdate
 			}
 		}
+		s.storeStackStatusAfterUpdate(update.StackID, ar)
 		releaseLock()
 	}
 
@@ -1589,4 +1590,24 @@ func (s *SchedulerService) runAutoUpdates(ctx context.Context, updates []models.
 			s.broadcastFn(models.StackEvent{Type: "resource_changed", Event: "container_update", Timestamp: time.Now()})
 		}
 	}
+}
+
+// storeStackStatusAfterUpdate stores the status of the stack an auto-update
+// touched, re-read from Docker, under the update's lock (agent-os-txqx). A
+// container in no stack, or a checker that cannot read a stack's status (the
+// test fakes), stores nothing.
+func (s *SchedulerService) storeStackStatusAfterUpdate(stackID string, ar truth.ActionResult) {
+	if stackID == "" {
+		return
+	}
+	reader, ok := s.docker.(StackStatusReader)
+	if !ok {
+		return
+	}
+	stack, err := s.db.GetStack(stackID)
+	if err != nil {
+		s.logger.Warn("Could not load the stack an auto-update touched; its stored status is unchanged", "stackID", stackID, "error", err)
+		return
+	}
+	StoreObservedStackStatus(s.db, reader, *stack, ar)
 }

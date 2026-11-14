@@ -184,6 +184,14 @@ func resolveUpdateStrategy(db DashboardDB, projectName, serviceName string) (com
 // unexported and no caller matches on it, so it is a shared literal, not an API.
 const refusedUpdateReason = "cannot determine update strategy: the stacks table could not be read"
 
+// updateRefusedError marks an update refused before anything ran because its
+// strategy could not be decided: the stack's stored status must not change
+// (StoreObservedStackStatus, agent-os-txqx). It reads and unwraps as its
+// cause, so errors.Is on the stacks-table error still holds.
+type updateRefusedError struct{ error }
+
+func (e updateRefusedError) Unwrap() error { return e.error }
+
 // logRefusedUpdate emits the single ERROR line that accompanies an
 // updateRefused. It is shared by UpdateContainer and UpdateContainerStreaming so
 // the two write paths cannot drift, and — the reason it is a function at all —
@@ -434,7 +442,7 @@ func (s *DockerService) UpdateContainer(ctx context.Context, containerID string,
 		// project is not.
 		logRefusedUpdate(containerID, projectName, serviceName, stackErr)
 		return models.UpdateResult{DurationMs: time.Since(start).Milliseconds()},
-			truth.Failed(refusedUpdateReason, stackErr)
+			truth.Failed(refusedUpdateReason, updateRefusedError{stackErr})
 	case updateViaCompose:
 		applyErr = s.updateComposeContainer(ctx, *stack, serviceName, wasRunning)
 	default:
@@ -1218,7 +1226,7 @@ func (s *DockerService) UpdateContainerStreaming(
 		// was sErr, not err, which is why the family's usual sweep missed it.
 		logRefusedUpdate(containerID, projectName, serviceName, stackErr)
 		return models.UpdateResult{OldDigest: oldImageID, DurationMs: time.Since(start).Milliseconds()},
-			truth.Failed(refusedUpdateReason, stackErr)
+			truth.Failed(refusedUpdateReason, updateRefusedError{stackErr})
 	case updateViaCompose:
 		applyErr = s.updateComposeContainerStreaming(ctx, *stack, serviceName, wasRunning, emit, setStatus)
 	default:
