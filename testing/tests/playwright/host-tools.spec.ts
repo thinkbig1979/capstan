@@ -6,7 +6,7 @@
  * Prerequisites (same backend as a11y.spec.ts):
  *   - App on CAPSTAN_BASE_URL (default http://localhost:3001), backend on
  *     CAPSTAN_API_URL (default http://localhost:5001), AUTH_DISABLED=true in both.
- *   - A running stack named CAPSTAN_TEST_STACK (default test-app).
+ *   - A stack named CAPSTAN_TEST_STACK (default test-app); it may be stopped.
  *   - The `docker` CLI, talking to the backend's daemon.
  *
  * FIXTURES are named (helpers/docker-fixture.ts) and removed by name in
@@ -32,15 +32,19 @@ import { test, expect, type APIRequestContext, type Page } from 'playwright/test
 import { waitForInvalidationSettle } from './helpers/network-settle'
 import {
   destructiveSkipReason,
+  LABELLED_CONTAINER,
   LEFTOVER_CONTAINER,
   LEFTOVER_VOLUME,
-  createLeftoverContainer,
+  containerId,
+  createLabelledStoppedContainer,
+  createListedLeftoverContainer,
   createLeftoverVolume,
   exists,
+  freshHostCandidates,
+  removeLabelledStoppedContainer,
   removeLeftoverContainer,
   removeLeftoverVolume,
 } from './helpers/docker-fixture'
-import { execFileSync } from 'node:child_process'
 
 const API_URL = process.env.CAPSTAN_API_URL ?? 'http://localhost:5001'
 const AUTH_DISABLED = (process.env.AUTH_DISABLED ?? 'false') === 'true'
@@ -48,6 +52,8 @@ const TEST_STACK_NAME = process.env.CAPSTAN_TEST_STACK ?? 'test-app'
 
 const HOST_CARDS = ['containers', 'images', 'volumes', 'networks', 'build-cache']
 const FREE_SPACE_PATH = '**/api/v1/resources/host/free-space'
+/** Everything under the host routes: the fail-closed guard in HOST-FREE-002. */
+const HOST_ROUTES = '**/api/v1/resources/host/**'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -162,9 +168,6 @@ async function fakeCoveringPolicy(page: Page): Promise<void> {
   })
 }
 
-function containerId(name: string): string {
-  return execFileSync('docker', ['container', 'inspect', '--format', '{{.Id}}', name], { encoding: 'utf8' }).trim()
-}
 
 // ─── Specs ───────────────────────────────────────────────────────────────────
 
@@ -179,6 +182,7 @@ test.describe('Host tab', () => {
 
   test.afterEach(() => {
     removeLeftoverContainer()
+    removeLabelledStoppedContainer()
     removeLeftoverVolume()
   })
 
@@ -227,11 +231,12 @@ test.describe('Host tab', () => {
   })
 
   test('HOST-NAV-005: the Free up dialog\'s "Change timing" scrolls to the panel', async ({ page }) => {
-    createLeftoverContainer() // reclaimable > 0, so the Free up button is enabled
+    await createListedLeftoverContainer(API_URL) // reclaimable > 0, so the Free up button is enabled
     await fakeCoveringPolicy(page)
 
     const dialog = await openFreeUpDialog(page)
-    await expect(cleanupPanelPlace(page)).resolves.not.toBe('in view')
+    // Below the fold before the click, so the scroll is what brings it in.
+    await expect(cleanupPanelPlace(page)).resolves.toMatch(/^top /)
     await dialog.getByTestId('free-space-auto-covered').getByRole('link', { name: 'Change timing' }).click()
     await expect(dialog).toHaveCount(0)
     await expect(page).toHaveURL(/\/\?tab=host#automatic-cleanup$/)
@@ -241,7 +246,7 @@ test.describe('Host tab', () => {
   test('HOST-NAV-006: "Change timing" from an already scrolled page lands on the panel, not past it', async ({
     page,
   }) => {
-    createLeftoverContainer()
+    await createListedLeftoverContainer(API_URL)
     await fakeCoveringPolicy(page)
     await openAndSettle(page, '/?tab=host')
     // A window short enough that the page end does not absorb an overshoot:
@@ -277,7 +282,7 @@ test.describe('Host tab', () => {
     let priorThreshold: number | undefined
 
     test.beforeEach(async ({ request }) => {
-      createLeftoverContainer()
+      await createListedLeftoverContainer(API_URL)
       const resp = await request.get(`${API_URL}/api/v1/resources/cleanup/policy`)
       expect(resp.status(), 'GET cleanup policy').toBe(200)
       priorThreshold = (await resp.json()).alertThresholdBytes
@@ -311,9 +316,13 @@ test.describe('Host tab', () => {
       await alert.getByRole('button', { name: 'Dismiss for 7 days' }).click()
       await expect(alert).toHaveCount(0)
 
+      // The alert needs both the host summary (the badge shows it has loaded)
+      // and the cleanup policy, so its absence is read only after both.
+      const policyRead = page.waitForResponse(
+        (r) => r.url().includes('/api/v1/resources/cleanup/policy') && r.request().method() === 'GET' && r.ok(),
+      )
       await page.reload()
-      // The badge shows once the host summary has loaded, which is what the
-      // alert waits on too; then nothing may bring it back.
+      await policyRead
       await expect(hostTabTrigger(page).getByTestId('host-tab-badge')).toBeVisible()
       await waitForInvalidationSettle(page)
       await expect(alert).toHaveCount(0)
@@ -324,13 +333,24 @@ test.describe('Host tab', () => {
     page,
   }) => {
     createLeftoverVolume()
-    createLeftoverContainer() // reclaimable > 0, so the Free up button is enabled
-    const leftoverId = containerId(LEFTOVER_CONTAINER)
+    // reclaimable > 0, so the Free up button is enabled; the same fresh read
+    // lists the volume.
+    const leftoverId = await createListedLeftoverContainer(API_URL)
 
-    // Intercepted and answered here: the request never reaches the server, so
-    // this test removes nothing.
+    // FAIL CLOSED: this test runs on developer machines, so its safety cannot
+    // rest on one glob. The guard (registered first, so tried last) aborts any
+    // non-GET host request the free-space handler did not take; a typo in
+    // FREE_SPACE_PATH then fails the test with nothing removed.
+    const blocked: string[] = []
+    await page.route(HOST_ROUTES, async (route) => {
+      if (route.request().method() === 'GET') return route.fallback()
+      blocked.push(`${route.request().method()} ${route.request().url()}`)
+      await route.abort()
+    })
+    // Answered here: the request never reaches the server.
     let sent: Record<string, unknown> | undefined
     await page.route(FREE_SPACE_PATH, async (route) => {
+      if (route.request().method() !== 'POST') return route.fallback()
       sent = route.request().postDataJSON()
       await route.fulfill({ status: 200, json: { outcome: 'success', reason: 'intercepted by HOST-FREE-002', details: {} } })
     })
@@ -342,7 +362,10 @@ test.describe('Host tab', () => {
     await expect(volumes.getByRole('listitem').filter({ hasText: LEFTOVER_VOLUME })).toBeVisible()
 
     await dialog.getByRole('button', { name: 'Remove selected' }).click()
-    await expect.poll(() => sent, { message: 'the free-space request was never sent' }).toBeDefined()
+    await expect
+      .poll(() => sent, { message: `the free-space handler was never hit; the guard blocked: ${blocked.join(', ') || 'nothing'}` })
+      .toBeDefined()
+    expect(blocked, 'no other host request may have been attempted').toEqual([])
     expect(sent!.volumes, 'a default Remove selected must not send volumes').toBeUndefined()
     expect(sent!.containers, 'the ticked containers row is sent').toContain(leftoverId)
     await expect(dialog).toHaveCount(0)
@@ -352,13 +375,21 @@ test.describe('Host tab', () => {
     expect(exists('container', LEFTOVER_CONTAINER)).toBe(true)
   })
 
-  test('HOST-FREE-001 (destructive): Containers only removes the leftover and leaves the test stack alone', async ({
+  test('HOST-FREE-001 (destructive): Containers only removes the leftover, not a stopped compose-labelled container', async ({
     page,
-    request,
   }) => {
     const skipReason = destructiveSkipReason()
     test.skip(skipReason !== undefined, skipReason)
-    createLeftoverContainer()
+    // The rule under test: a stopped container with a compose project label is
+    // never a candidate (a stopped stack's container looks like this). A
+    // fixture of our own, not test-app, whose state depends on which specs ran
+    // before this one; a running container is never a candidate anyway.
+    createLabelledStoppedContainer()
+    const leftoverId = await createListedLeftoverContainer(API_URL)
+    const labelledId = containerId(LABELLED_CONTAINER)
+    const listed = (await freshHostCandidates(API_URL)).containers.map((c) => c.id)
+    expect(listed, 'the leftover is a candidate').toContain(leftoverId)
+    expect(listed, 'the compose-labelled container is not').not.toContain(labelledId)
 
     const dialog = await openFreeUpDialog(page)
     for (const row of ['images', 'buildCache', 'volumes', 'networks']) {
@@ -370,14 +401,14 @@ test.describe('Host tab', () => {
     await expect(dialog).toHaveCount(0)
 
     await expect.poll(() => exists('container', LEFTOVER_CONTAINER), { timeout: 30_000 }).toBe(false)
-    expect((await testStack(request)).status).toBe('running')
+    expect(exists('container', LABELLED_CONTAINER), 'the compose-labelled container survives').toBe(true)
   })
 
   test('HOST-FREE-003 (destructive): an unlabelled volume survives a real default Remove selected', async ({ page }) => {
     const skipReason = destructiveSkipReason()
     test.skip(skipReason !== undefined, skipReason)
     createLeftoverVolume()
-    createLeftoverContainer()
+    await createListedLeftoverContainer(API_URL)
 
     const dialog = await openFreeUpDialog(page)
     await expect(dialog.getByTestId('free-space-row-volumes').getByRole('checkbox')).not.toBeChecked()

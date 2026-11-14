@@ -12,6 +12,9 @@ export const FIXTURE_IMAGE =
   process.env.CAPSTAN_E2E_FIXTURE_IMAGE ?? 'public.ecr.aws/docker/library/nginx:1.25-alpine'
 export const LEFTOVER_CONTAINER = 'capstan-e2e-leftover'
 export const LEFTOVER_VOLUME = 'capstan-e2e-leftover-vol'
+/** A stopped container carrying a compose project label: never a Free up candidate. */
+export const LABELLED_CONTAINER = 'capstan-e2e-labelled'
+const COMPOSE_PROJECT_LABEL = 'com.docker.compose.project'
 
 const DESTRUCTIVE_WHAT =
   'Removes EVERY unlabelled stopped container (and, with defaults, unused images and build cache) on this ' +
@@ -22,6 +25,8 @@ const DESTRUCTIVE_WHAT =
  * undefined when it may run. The opt-in alone is not enough: it also needs a
  * GitHub-hosted runner (an ephemeral VM), so a stray export on a developer
  * machine or the self-hosted runner removes nothing.
+ * A local `act` run can set both GitHub variables too, so never run the
+ * backup-flow job under act with CAPSTAN_E2E_DESTRUCTIVE=1 on your own machine.
  */
 export function destructiveSkipReason(env: NodeJS.ProcessEnv = process.env): string | undefined {
   if (env.CAPSTAN_E2E_DESTRUCTIVE !== '1') return `${DESTRUCTIVE_WHAT} CAPSTAN_E2E_DESTRUCTIVE is not 1.`
@@ -46,18 +51,45 @@ export function exists(kind: 'container' | 'volume', name: string): boolean {
   }
 }
 
+export function containerId(name: string): string {
+  return docker(['container', 'inspect', '--format', '{{.Id}}', name]).trim()
+}
+
 /**
- * An exited container with no compose label, so the Host tab counts it as a
- * leftover. It writes 1 MiB, because a container that writes nothing has a
- * SizeRw of 0 and frees nothing (host_space.go).
+ * Creates the exited, 1 MiB container named `name`. It writes 1 MiB because a
+ * container that writes nothing has a SizeRw of 0 and frees nothing
+ * (host_space.go).
  */
+function createExitedContainer(name: string, labels: string[]): void {
+  removeContainer(name)
+  const labelArgs = labels.flatMap((l) => ['--label', l])
+  docker(['run', '--name', name, ...labelArgs, FIXTURE_IMAGE, 'sh', '-c', 'head -c 1048576 /dev/zero > /leftover'])
+}
+
+function removeContainer(name: string): void {
+  if (exists('container', name)) docker(['rm', '-f', name])
+}
+
+/** An exited container with no compose label, so the Host tab counts it as a leftover. */
 export function createLeftoverContainer(): void {
-  removeLeftoverContainer()
-  docker(['run', '--name', LEFTOVER_CONTAINER, FIXTURE_IMAGE, 'sh', '-c', 'head -c 1048576 /dev/zero > /leftover'])
+  createExitedContainer(LEFTOVER_CONTAINER, [])
 }
 
 export function removeLeftoverContainer(): void {
-  if (exists('container', LEFTOVER_CONTAINER)) docker(['rm', '-f', LEFTOVER_CONTAINER])
+  removeContainer(LEFTOVER_CONTAINER)
+}
+
+/**
+ * The same exited container, but labelled with a compose project, as a
+ * stopped stack's container is. The candidate rule never lists it
+ * (containerIsCandidate in host_space.go), so Remove selected must leave it.
+ */
+export function createLabelledStoppedContainer(): void {
+  createExitedContainer(LABELLED_CONTAINER, [`${COMPOSE_PROJECT_LABEL}=${LABELLED_CONTAINER}`])
+}
+
+export function removeLabelledStoppedContainer(): void {
+  removeContainer(LABELLED_CONTAINER)
 }
 
 /** A volume no container mounts and no stack owns: an "Unattached volume". */
@@ -67,4 +99,32 @@ export function createLeftoverVolume(): void {
 
 export function removeLeftoverVolume(): void {
   if (exists('volume', LEFTOVER_VOLUME)) docker(['volume', 'rm', LEFTOVER_VOLUME])
+}
+
+interface HostCandidatesBody {
+  containers: { id: string }[]
+  volumes: { id: string }[]
+}
+
+/**
+ * The server's candidate lists from a fresh Docker read. This also refreshes
+ * the snapshot the host summary serves (Candidates in host_space.go), which is
+ * otherwise up to 30 s old, so a page loaded after this sees the fixtures.
+ */
+export async function freshHostCandidates(apiUrl: string): Promise<HostCandidatesBody> {
+  const resp = await fetch(`${apiUrl}/api/v1/resources/host/candidates`)
+  if (!resp.ok) throw new Error(`GET /api/v1/resources/host/candidates returned ${resp.status}`)
+  return (await resp.json()) as HostCandidatesBody
+}
+
+/**
+ * Creates the leftover container and waits until the server lists it, so the
+ * Free up button is enabled on the next page load whatever the snapshot held.
+ */
+export async function createListedLeftoverContainer(apiUrl: string): Promise<string> {
+  createLeftoverContainer()
+  const id = containerId(LEFTOVER_CONTAINER)
+  const listed = (await freshHostCandidates(apiUrl)).containers.some((c) => c.id === id)
+  if (!listed) throw new Error(`${LEFTOVER_CONTAINER} (${id}) is not among the server's container candidates`)
+  return id
 }
