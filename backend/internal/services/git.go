@@ -1329,7 +1329,7 @@ func placeSiblings(top, dirPath string, stacks []models.Stack, token string) *si
 		in, err := pathutil.IsContained(top, st.Directory)
 		switch {
 		case err != nil:
-			p.stacks = append(p.stacks, placedSibling{Stack: st, err: fmt.Errorf("could not tell whether %s is inside the repository: %w", st.Directory, err)})
+			p.stacks = append(p.stacks, placedSibling{Stack: st, err: fmt.Errorf("could not tell whether %s is inside the repository: %w", boundedPath(redactToken(st.Directory, token)), err)})
 			continue
 		case !in:
 			continue
@@ -1339,7 +1339,7 @@ func placeSiblings(top, dirPath string, stacks []models.Stack, token string) *si
 		case err != nil:
 			p.stacks = append(p.stacks, placedSibling{Stack: st, err: err})
 		case !ok:
-			p.stacks = append(p.stacks, placedSibling{Stack: st, err: fmt.Errorf("the stack folder %s cannot be placed in the repository at %s", st.Directory, top)})
+			p.stacks = append(p.stacks, placedSibling{Stack: st, err: fmt.Errorf("the stack folder %s cannot be placed in the repository at %s", boundedPath(redactToken(st.Directory, token)), boundedPath(redactToken(top, token)))})
 		default:
 			p.stacks = append(p.stacks, placedSibling{Stack: st, rel: rel, links: snapshotLinks(top, st, token)})
 		}
@@ -1369,7 +1369,7 @@ func (p *siblingPlacement) changed(top string, changedFiles []string, token stri
 		hit := false
 		var fileErr error
 		for _, rel := range rels {
-			ok, err := relFilesChanged(rel, st.Stack, changedFiles)
+			ok, err := relFilesChanged(rel, st.Stack, changedFiles, token)
 			if err != nil {
 				fileErr = err
 				break
@@ -1423,9 +1423,9 @@ func stackFilesChangedSince(top string, stack models.Stack, changedFiles []strin
 		return false, err
 	}
 	if !ok {
-		return false, fmt.Errorf("the stack folder %s is outside the repository at %s", stack.Directory, top)
+		return false, fmt.Errorf("the stack folder %s is outside the repository at %s", boundedPath(redactToken(stack.Directory, token)), boundedPath(redactToken(top, token)))
 	}
-	hit, err := relFilesChanged(rel, stack, changedFiles)
+	hit, err := relFilesChanged(rel, stack, changedFiles, token)
 	if err != nil {
 		return false, err
 	}
@@ -1436,8 +1436,10 @@ func stackFilesChangedSince(top string, stack models.Stack, changedFiles []strin
 }
 
 // relFilesChanged is stackFilesChanged for a stack whose folder is already
-// placed at rel, repository-relative.
-func relFilesChanged(rel string, stack models.Stack, changedFiles []string) (bool, error) {
+// placed at rel, repository-relative. token is masked in a path before it is
+// quoted into an error: quoting escapes a token holding `"` or `\`, which the
+// pull's display boundary then misses (agent-os-ncdg).
+func relFilesChanged(rel string, stack models.Stack, changedFiles []string, token string) (bool, error) {
 	want := map[string]bool{}
 	for _, name := range []string{stack.ComposeFile, stack.EnvFile} {
 		if name == "" {
@@ -1447,7 +1449,8 @@ func relFilesChanged(rel string, stack models.Stack, changedFiles []string) (boo
 		if !ok {
 			// Fail closed like an unplaceable folder: skipping it would report
 			// "nothing to redeploy" for a file that was never compared.
-			return false, fmt.Errorf("the stack file %q cannot be placed under %s in the repository", name, stack.Directory)
+			return false, fmt.Errorf("the stack file %s cannot be placed under %s in the repository",
+				boundedPath(redactToken(name, token)), boundedPath(redactToken(stack.Directory, token)))
 		}
 		want[p] = true
 	}
