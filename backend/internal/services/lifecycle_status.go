@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 
+	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
 
@@ -53,9 +54,54 @@ func StoreLifecycleStatus(store StackStatusStore, stackID string, ar truth.Actio
 	return status
 }
 
-// startedNothing reports a lifecycle result refused before Docker was asked
-// to do anything.
+// StackStatusReader reads a stack's status as Docker reports it now.
+// *DockerService satisfies it.
+type StackStatusReader interface {
+	Status(stack models.Stack) (string, []models.Container, error)
+}
+
+// The handlers' update seam and the scheduler's updateChecker both require
+// it of *DockerService.
+var _ StackStatusReader = (*DockerService)(nil)
+
+// StoreObservedStackStatus stores the stack's status as Docker reports it
+// after an update changed some of its containers (agent-os-txqx). An update
+// is not a whole-stack verb, so its result cannot be mapped the way
+// StoreLifecycleStatus maps one: a stopped service updated and stopped again,
+// or one failed service of several, would store "running" or "error" for the
+// whole stack. The stack is re-read instead. Every update entry point calls
+// it (kept that way by TestUpdateCallsStoreObservedStatus_Txqx).
+//
+// When every result started nothing (a refused update, no Docker service),
+// nothing is stored. A failed read stores nothing and is logged: an unknown
+// state must not overwrite the last known one. The read bounds itself:
+// Status runs compose ps under commandWithDeadline on its own background
+// context and composeTimeout, so a cancelled job cannot cut it short and a
+// hung compose ps cannot hold the caller past that deadline.
+func StoreObservedStackStatus(store StackStatusStore, reader StackStatusReader, stack models.Stack, results ...truth.ActionResult) {
+	started := false
+	for _, ar := range results {
+		if !startedNothing(ar) {
+			started = true
+		}
+	}
+	if !started {
+		return
+	}
+	status, _, err := reader.Status(stack)
+	if err != nil {
+		slog.Warn("Could not read the stack's status after an update; its stored status is unchanged", "stackID", stack.ID, "error", err)
+		return
+	}
+	if err := store.UpdateStackStatus(stack.ID, status); err != nil {
+		slog.Warn("Failed to persist stack status after an update", "stackID", stack.ID, "status", status, "error", err)
+	}
+}
+
+// startedNothing reports a lifecycle or update result refused before Docker
+// was asked to do anything.
 func startedNothing(ar truth.ActionResult) bool {
 	var refused composeRefusedError
-	return errors.As(ar.Err, &refused) || errors.Is(ar.Err, ErrDockerUnavailable)
+	var updateRefused updateRefusedError
+	return errors.As(ar.Err, &refused) || errors.As(ar.Err, &updateRefused) || errors.Is(ar.Err, ErrDockerUnavailable)
 }

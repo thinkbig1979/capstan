@@ -111,7 +111,9 @@ type ResourcesHandler struct {
 	// struct literals) means use docker.
 	pruner resourcePruner
 	// deleter is docker, seen through resourceDeleter; nil means use docker.
-	deleter    resourceDeleter
+	deleter resourceDeleter
+	// updater is docker, seen through updateDocker; nil means use docker.
+	updater    updateDocker
 	db         *database.DB
 	scheduler  updateScanner
 	jobManager *services.UpdateJobManager

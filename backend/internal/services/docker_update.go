@@ -184,6 +184,14 @@ func resolveUpdateStrategy(db DashboardDB, projectName, serviceName string) (com
 // unexported and no caller matches on it, so it is a shared literal, not an API.
 const refusedUpdateReason = "cannot determine update strategy: the stacks table could not be read"
 
+// updateRefusedError marks an update refused before anything ran because its
+// strategy could not be decided: the stack's stored status must not change
+// (StoreObservedStackStatus, agent-os-txqx). It reads and unwraps as its
+// cause, so errors.Is on the stacks-table error still holds.
+type updateRefusedError struct{ error }
+
+func (e updateRefusedError) Unwrap() error { return e.error }
+
 // logRefusedUpdate emits the single ERROR line that accompanies an
 // updateRefused. It is shared by UpdateContainer and UpdateContainerStreaming so
 // the two write paths cannot drift, and — the reason it is a function at all —
@@ -434,7 +442,7 @@ func (s *DockerService) UpdateContainer(ctx context.Context, containerID string,
 		// project is not.
 		logRefusedUpdate(containerID, projectName, serviceName, stackErr)
 		return models.UpdateResult{DurationMs: time.Since(start).Milliseconds()},
-			truth.Failed(refusedUpdateReason, stackErr)
+			truth.Failed(refusedUpdateReason, updateRefusedError{stackErr})
 	case updateViaCompose:
 		applyErr = s.updateComposeContainer(ctx, *stack, serviceName, wasRunning)
 	default:
@@ -506,10 +514,7 @@ func (s *DockerService) UpdateContainer(ctx context.Context, containerID string,
 // compose project+service labels and returns its ID. Falls back to
 // originalID if not found.
 func (s *DockerService) findComposeContainer(ctx context.Context, projectName, serviceName, fallbackID string) string {
-	fa := filters.NewArgs()
-	fa.Add("label", "com.docker.compose.project="+projectName)
-	fa.Add("label", "com.docker.compose.service="+serviceName)
-	containers, err := s.updateAPI().ContainerList(ctx, container.ListOptions{All: true, Filters: fa})
+	containers, err := s.updateAPI().ContainerList(ctx, container.ListOptions{All: true, Filters: serviceContainers(projectName, serviceName)})
 	if err != nil {
 		// A list fault is NOT "no such container": both used to return
 		// fallbackID silently, and fallbackID is the PRE-update id, which
@@ -576,19 +581,28 @@ func (s *DockerService) updateComposeContainer(ctx context.Context, stack models
 	return nil
 }
 
-// runningServiceContainers filters for the running containers of a compose
-// service that a not-running service's update stops again after `compose up`.
-// It excludes one-off containers (`docker compose run`), which carry the same
-// project and service labels: stopping a `run --rm` one-off makes Docker remove
-// it with its anonymous volumes (agent-os-e04r). Compose labels its service
-// containers oneoff=False.
-func runningServiceContainers(projectName, serviceName string) filters.Args {
+// serviceContainers filters for the containers of a compose service. It
+// excludes one-off containers (`docker compose run`), which carry the same
+// project and service labels: the daemon lists newest first, so a one-off
+// started after the service container was taken for it (agent-os-fjd6), and
+// stopping a `run --rm` one-off makes Docker remove it with its anonymous
+// volumes (agent-os-e04r). Compose labels its service containers oneoff=False.
+// Every service-label filter goes through here
+// (TestServiceLabelFilterOnlyInHelper_fjd6).
+func serviceContainers(projectName, serviceName string) filters.Args {
 	return filters.NewArgs(
 		filters.Arg("label", "com.docker.compose.project="+projectName),
 		filters.Arg("label", "com.docker.compose.service="+serviceName),
 		filters.Arg("label", "com.docker.compose.oneoff=False"),
-		filters.Arg("status", "running"),
 	)
+}
+
+// runningServiceContainers filters for the running containers of a compose
+// service that a not-running service's update stops again after `compose up`.
+func runningServiceContainers(projectName, serviceName string) filters.Args {
+	fa := serviceContainers(projectName, serviceName)
+	fa.Add("status", "running")
+	return fa
 }
 
 // standaloneRollbackTimeout bounds each cleanup step after the new container's
@@ -1217,7 +1231,7 @@ func (s *DockerService) UpdateContainerStreaming(
 		// was sErr, not err, which is why the family's usual sweep missed it.
 		logRefusedUpdate(containerID, projectName, serviceName, stackErr)
 		return models.UpdateResult{OldDigest: oldImageID, DurationMs: time.Since(start).Milliseconds()},
-			truth.Failed(refusedUpdateReason, stackErr)
+			truth.Failed(refusedUpdateReason, updateRefusedError{stackErr})
 	case updateViaCompose:
 		applyErr = s.updateComposeContainerStreaming(ctx, *stack, serviceName, wasRunning, emit, setStatus)
 	default:
@@ -1344,10 +1358,7 @@ func (s *DockerService) UpdateComposeServiceStreaming(
 	start := time.Now()
 
 	// Find the pre-update container.
-	filterArgs := filters.NewArgs()
-	filterArgs.Add("label", "com.docker.compose.project="+stack.ProjectName)
-	filterArgs.Add("label", "com.docker.compose.service="+serviceName)
-	containers, listErr := s.updateAPI().ContainerList(ctx, container.ListOptions{All: true, Filters: filterArgs})
+	containers, listErr := s.updateAPI().ContainerList(ctx, container.ListOptions{All: true, Filters: serviceContainers(stack.ProjectName, serviceName)})
 	// Split rather than merged (agent-os-qyg7.2). A docker daemon that could
 	// not be reached and a service that has no container are different facts,
 	// and only one of them is about the service. The caller shows ar.Reason to

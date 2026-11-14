@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/docker/docker/api/types/container"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
@@ -199,6 +200,27 @@ func (h *ResourcesHandler) lockStackForUpdate(c *gin.Context, key string) (relea
 	return acquireStackLock(c, h.opLock, key, services.OpKindUpdate)
 }
 
+// updateDocker is what the update jobs need from docker. *services.DockerService
+// satisfies it; tests replace it through ResourcesHandler.updater.
+type updateDocker interface {
+	InspectContainer(ctx context.Context, containerID string) (container.InspectResponse, error)
+	UpdateContainerStreaming(ctx context.Context, containerID string, db services.DashboardDB,
+		emit func(services.LogLine), setStatus func(services.Status)) (models.UpdateResult, truth.ActionResult)
+	UpdateComposeServiceStreaming(ctx context.Context, stack models.Stack, serviceName string,
+		emit func(services.LogLine), setStatus func(services.Status)) (oldImageID, newImageID string, durationMs int64, ar truth.ActionResult)
+	services.StackStatusReader
+}
+
+// updaterSeam is prunerSeam for the update jobs: the injected fake in tests,
+// else docker. A nil *DockerService boxed here is fine: each method answers
+// ErrDockerUnavailable on a nil receiver.
+func (h *ResourcesHandler) updaterSeam() updateDocker {
+	if h.updater != nil {
+		return h.updater
+	}
+	return h.docker
+}
+
 func (h *ResourcesHandler) updateContainer(c *gin.Context) {
 	id := c.Param("id")
 	// Audit who initiated the update.
@@ -211,7 +233,7 @@ func (h *ResourcesHandler) updateContainer(c *gin.Context) {
 		return
 	}
 
-	inspect, err := h.docker.InspectContainer(c.Request.Context(), id)
+	inspect, err := h.updaterSeam().InspectContainer(c.Request.Context(), id)
 	if err != nil {
 		slog.Error("Failed to inspect container before update", "id", id, "error", err)
 		respondDockerErr(c, err, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to inspect container")
@@ -229,6 +251,7 @@ func (h *ResourcesHandler) updateContainer(c *gin.Context) {
 	}
 	stackID := ""
 	stackName := ""
+	var ownerStack models.Stack
 	projectName := ""
 	if inspect.Config != nil && inspect.Config.Labels != nil {
 		projectName = inspect.Config.Labels["com.docker.compose.project"]
@@ -246,6 +269,7 @@ func (h *ResourcesHandler) updateContainer(c *gin.Context) {
 		case err == nil:
 			stackID = stack.ID
 			stackName = stack.ProjectName
+			ownerStack = *stack
 		case errors.Is(err, errdefs.ErrNotFound):
 			// Not managed here; the history row carries empty stack fields.
 		case errors.Is(err, errdefs.ErrAmbiguous):
@@ -299,7 +323,7 @@ func (h *ResourcesHandler) updateContainer(c *gin.Context) {
 	}
 
 	// Capture locals for the closure.
-	docker := h.docker
+	docker := h.updaterSeam()
 	db := h.db
 	jobManager := h.jobManager
 	containerIDCopy := id
@@ -309,6 +333,11 @@ func (h *ResourcesHandler) updateContainer(c *gin.Context) {
 	run := func(ctx context.Context, jobID string, emit func(services.LogLine), setStatus func(services.Status)) error {
 		defer releaseLock()
 		result, ar := docker.UpdateContainerStreaming(ctx, containerIDCopy, db, emit, setStatus)
+		// Before anything below can return: the update changed the stack's
+		// containers whatever its outcome (agent-os-txqx).
+		if stackIDCopy != "" {
+			services.StoreObservedStackStatus(db, docker, ownerStack, ar)
+		}
 
 		// Persist outcome on the job (findable via GET /updates/jobs/:id).
 		jobManager.SetOutcome(jobID, string(ar.Outcome), ar.Reason)
@@ -504,7 +533,7 @@ func (h *ResourcesHandler) updateStack(c *gin.Context) {
 		StackID:    stack.ID,
 	}
 
-	docker := h.docker
+	docker := h.updaterSeam()
 	db := h.db
 	jobManager := h.jobManager
 	stackCopy := *stack
@@ -526,6 +555,12 @@ func (h *ResourcesHandler) updateStack(c *gin.Context) {
 		// ever observed — declare rather than assign dead initial values.
 		var overallOutcome, overallReason string
 		anyAdvanced := false
+
+		// Stored on every exit, the failed service's early return included,
+		// and before the deferred lock release: the update changed the stack's
+		// containers whatever its outcome (agent-os-txqx).
+		var results []truth.ActionResult
+		defer func() { services.StoreObservedStackStatus(db, docker, stackCopy, results...) }()
 
 		for i, svc := range outdatedCopy {
 			emit(services.LogLine{Ts: time.Now().UTC(), Stream: services.StreamStatus,
@@ -553,6 +588,7 @@ func (h *ResourcesHandler) updateStack(c *gin.Context) {
 			}
 
 			_, newD, durMs, ar := docker.UpdateComposeServiceStreaming(ctx, stackCopy, svc.ServiceName, emit, setStatus)
+			results = append(results, ar)
 
 			if ar.Outcome == truth.OutcomeFailed {
 				histUpdates := map[string]interface{}{

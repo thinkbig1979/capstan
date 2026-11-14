@@ -37,6 +37,11 @@ func newHungUpdateChecker(t *testing.T, finding models.ContainerUpdateInfo) *hun
 	return c
 }
 
+// Status answers no Docker, so an auto-update stores no stack status (agent-os-txqx).
+func (c *hungUpdateChecker) Status(models.Stack) (string, []models.Container, error) {
+	return "", nil, ErrDockerUnavailable
+}
+
 func (c *hungUpdateChecker) CheckForUpdates(context.Context, DashboardDB) ([]models.ContainerUpdateInfo, error) {
 	return []models.ContainerUpdateInfo{c.finding}, nil
 }

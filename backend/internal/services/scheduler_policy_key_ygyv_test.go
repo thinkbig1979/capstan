@@ -43,6 +43,11 @@ type ygyvDocker struct {
 	updated    []string
 }
 
+// Status answers no Docker, so an auto-update stores no stack status (agent-os-txqx).
+func (d *ygyvDocker) Status(models.Stack) (string, []models.Container, error) {
+	return "", nil, ErrDockerUnavailable
+}
+
 func (d *ygyvDocker) CheckForUpdates(context.Context, DashboardDB) ([]models.ContainerUpdateInfo, error) {
 	return nil, nil
 }

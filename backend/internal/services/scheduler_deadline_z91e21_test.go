@@ -25,6 +25,11 @@ type firstHangsChecker struct {
 	calls []string
 }
 
+// Status answers no Docker, so an auto-update stores no stack status (agent-os-txqx).
+func (c *firstHangsChecker) Status(models.Stack) (string, []models.Container, error) {
+	return "", nil, ErrDockerUnavailable
+}
+
 func (c *firstHangsChecker) CheckForUpdates(context.Context, DashboardDB) ([]models.ContainerUpdateInfo, error) {
 	return nil, nil
 }

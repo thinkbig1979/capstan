@@ -67,6 +67,11 @@ func (f *fakeUpdateChecker) updatedIDs() []string {
 	return append([]string(nil), f.updated...)
 }
 
+// Status answers no Docker, so an auto-update stores no stack status (agent-os-txqx).
+func (f *fakeUpdateChecker) Status(models.Stack) (string, []models.Container, error) {
+	return "", nil, ErrDockerUnavailable
+}
+
 func (f *fakeUpdateChecker) CheckForUpdates(ctx context.Context, db DashboardDB) ([]models.ContainerUpdateInfo, error) {
 	if f.checkFn != nil {
 		return f.checkFn(ctx)

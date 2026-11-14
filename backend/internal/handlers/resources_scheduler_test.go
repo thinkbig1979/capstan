@@ -23,6 +23,11 @@ type handlerTestChecker struct {
 	block chan struct{} // close to let CheckForUpdates return
 }
 
+// Status answers no Docker, so an auto-update stores no stack status (agent-os-txqx).
+func (h *handlerTestChecker) Status(models.Stack) (string, []models.Container, error) {
+	return "", nil, services.ErrDockerUnavailable
+}
+
 func (h *handlerTestChecker) CheckForUpdates(_ context.Context, _ services.DashboardDB) ([]models.ContainerUpdateInfo, error) {
 	<-h.block
 	return nil, nil
