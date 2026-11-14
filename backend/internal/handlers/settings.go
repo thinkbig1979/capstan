@@ -864,6 +864,24 @@ func (h *SettingsHandler) UpdateUpdateSettings(c *gin.Context) {
 	h.GetUpdateSettings(c)
 }
 
+// gitHTTPSCredentialProblem refuses a git HTTPS username or token holding an
+// ASCII control character (agent-os-mwgg). git's credential helper prints both
+// in a line-oriented protocol, so a line break added lines such as host= to
+// what git read. It returns the message for a 400, naming the field and never
+// the value, or "". Both routes that store the credential call it
+// (UpdateGitSettings, DirectoriesHandler.UpdateCredentials); the helper itself
+// refuses again (services.gitCredentialRefused).
+func gitHTTPSCredentialProblem(user, token string) string {
+	const rule = " must not contain line breaks or other control characters"
+	if services.HasControlChar(user) {
+		return "httpsUser" + rule
+	}
+	if services.HasControlChar(token) {
+		return "httpsToken" + rule
+	}
+	return ""
+}
+
 // looksLikePrivateKey reports whether s appears to be private-key material
 // rather than a filesystem path. SSH key file paths are single-line and never
 // contain a PEM/OpenSSH key header.
@@ -1042,6 +1060,12 @@ func (h *SettingsHandler) UpdateGitSettings(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, models.NewAppError(http.StatusBadRequest, "VALIDATION_ERROR", msg))
 			return
 		}
+	}
+
+	// "" means no change for these two, so it is never refused.
+	if msg := gitHTTPSCredentialProblem(req.HTTPSUser, req.HTTPSToken); msg != "" {
+		c.JSON(http.StatusBadRequest, models.NewAppError(http.StatusBadRequest, models.ErrValidation, msg))
+		return
 	}
 
 	var values []database.SettingValue

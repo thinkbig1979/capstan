@@ -43,6 +43,31 @@ const (
 const gitCredentialHelper = `!f() { test "$1" = get && printf 'username=%s\npassword=%s\n' ` +
 	`"$` + credentialEnvUser + `" "$` + credentialEnvToken + `"; }; f`
 
+// gitCredentialRefused is the credential helper installed instead of
+// gitCredentialHelper when the stored username or token holds a control
+// character (agent-os-mwgg). git's credential protocol is line-oriented, so a
+// line break in either value would add lines, such as host=, to what git reads.
+// It answers "get" with a message naming the field, never the value, and git
+// then fails with no credential. field is a fixed word, never input.
+func gitCredentialRefused(field string) string {
+	return `!f() { test "$1" = get || exit 0; echo "capstan: the stored git HTTPS ` + field +
+		` contains a line break or another control character, so it was not used; re-enter it in Settings" >&2; exit 1; }; f`
+}
+
+// HasControlChar reports whether s holds an ASCII control character
+// (0x00-0x1F or 0x7F). None is valid in a git HTTPS username or token, and a
+// line break in one breaks git's line-oriented credential protocol
+// (agent-os-mwgg). The settings routes refuse such a value at save; the
+// credential helper refuses it again for values that reached it another way.
+func HasControlChar(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
 // Environment variable names GIT_SSH_COMMAND reads, set only on the git child.
 const (
 	sshEnvKey        = "CAPSTAN_GIT_SSH_KEY"
@@ -474,14 +499,21 @@ func (s *GitService) gitCmdWithCreds(ctx context.Context, dirPath string, c gitC
 	if token := c.token; token != "" {
 		// The empty assignment first clears any helper inherited from system or
 		// global config, so ours is the only one consulted.
-		gitArgs = append(gitArgs,
-			"-c", "credential.helper=",
-			"-c", "credential.helper="+gitCredentialHelper,
-		)
-		env = append(env,
-			credentialEnvUser+"="+c.user,
-			credentialEnvToken+"="+token,
-		)
+		gitArgs = append(gitArgs, "-c", "credential.helper=")
+		switch {
+		case HasControlChar(token):
+			// Fail closed: no secret in the environment, and a helper that
+			// refuses by name (agent-os-mwgg).
+			gitArgs = append(gitArgs, "-c", "credential.helper="+gitCredentialRefused("token"))
+		case HasControlChar(c.user):
+			gitArgs = append(gitArgs, "-c", "credential.helper="+gitCredentialRefused("username"))
+		default:
+			gitArgs = append(gitArgs, "-c", "credential.helper="+gitCredentialHelper)
+			env = append(env,
+				credentialEnvUser+"="+c.user,
+				credentialEnvToken+"="+token,
+			)
+		}
 	}
 
 	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"

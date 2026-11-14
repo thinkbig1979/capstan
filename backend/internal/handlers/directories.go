@@ -172,6 +172,11 @@ func (h *DirectoriesHandler) UpdateCredentials(c *gin.Context) {
 		return
 	}
 
+	if msg := gitHTTPSCredentialProblem(req.HTTPSUser, req.HTTPSToken); msg != "" {
+		c.JSON(http.StatusBadRequest, models.NewAppError(http.StatusBadRequest, models.ErrValidation, msg))
+		return
+	}
+
 	if err := h.db.UpdateDirectoryCredentials(directory.Path, authType, req.SSHKeyPath, req.HTTPSUser, req.HTTPSToken); err != nil {
 		if respondIfEncryptionUnavailable(c, err) {
 			return
