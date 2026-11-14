@@ -6,10 +6,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
+	"github.com/thinkbig1979/capstan/backend/internal/pathutil"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
 
@@ -35,10 +37,11 @@ const composeFileMode os.FileMode = 0644
 // A path that is a symlink is written through: the rename lands on the file
 // the link resolves to and the link stays a link (agent-os-dwmz). Renaming
 // onto the link itself replaced it with a plain file and left its target,
-// often in a git checkout, unwritten. Containment is the caller's job
-// (validateStackPath resolves links too); this helper has no roots to check.
-func writeFileAtomic(path string, content []byte, mode os.FileMode) error {
-	target, _, err := resolveWriteTarget(path)
+// often in a git checkout, unwritten. The file written must lie inside one of
+// roots (the stacks directories, or DataDir for global.env), checked after the
+// link is resolved; the caller's own check came earlier (agent-os-3b2d).
+func writeFileAtomic(path string, content []byte, mode os.FileMode, roots []string) error {
+	target, _, err := resolveWriteTarget(path, roots)
 	if err != nil {
 		return err
 	}
@@ -50,11 +53,15 @@ func writeFileAtomic(path string, content []byte, mode os.FileMode) error {
 // does not exist yet. A link that dangles or loops, and a target that is not a
 // regular file, are refused: a dangling link passes validateStackPath even
 // when it points outside every stacks root (pathutil.ResolveExisting appends
-// the link's own name to its parent), so creating its target is not safe.
-func resolveWriteTarget(path string) (string, os.FileInfo, error) {
+// the link's own name to its parent), so creating its target is not safe. So
+// is a target outside every one of roots (checkWriteContained).
+func resolveWriteTarget(path string, roots []string) (string, os.FileInfo, error) {
 	name := filepath.Base(path)
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
+		if err := checkWriteContained(path, path, roots); err != nil {
+			return "", nil, err
+		}
 		return path, nil, nil
 	}
 	if err != nil {
@@ -78,7 +85,39 @@ func resolveWriteTarget(path string) (string, os.FileInfo, error) {
 	if !info.Mode().IsRegular() {
 		return "", nil, &writeRefusal{msg: fmt.Sprintf("%s is not a regular file (%s); nothing written", name, info.Mode().Type())}
 	}
+	if err := checkWriteContained(path, target, roots); err != nil {
+		return "", nil, err
+	}
 	return target, info, nil
+}
+
+// checkWriteContained refuses a write whose target is not inside any of roots
+// (agent-os-3b2d, safe-defaults rule 6). The handlers check the path before
+// they write (validateStackPath), but a link swapped after that check was
+// followed here and written through, and global.env had no check at all. This
+// narrows the window to the rename below; it does not close it. A root that
+// cannot be checked counts as not containing the target, and with no root
+// left the write is refused: fail closed.
+func checkWriteContained(path, target string, roots []string) error {
+	var checkErr error
+	for _, root := range roots {
+		ok, err := pathutil.IsContained(root, target)
+		if err != nil {
+			checkErr = errors.Join(checkErr, err)
+			continue
+		}
+		if ok {
+			return nil
+		}
+	}
+	if checkErr != nil {
+		return fmt.Errorf("check where %s leads: %w", filepath.Base(path), checkErr)
+	}
+	where := strings.Join(roots, ", ")
+	if target != path {
+		return &writeRefusal{msg: fmt.Sprintf("%s links to a file outside %s (%s); nothing written. Point the link inside it, or replace the link with the file", filepath.Base(path), where, target)}
+	}
+	return &writeRefusal{msg: fmt.Sprintf("%s is outside %s; nothing written", path, where)}
 }
 
 // writeRefusal is resolveWriteTarget refusing a path because of the user's
@@ -182,8 +221,8 @@ func renameIntoPlaceOwned(path string, content []byte, mode os.FileMode, owner *
 //
 // Through a symlink, the mode and the write check are the target's: a link's
 // own mode is always 0777.
-func writeComposeFileAtomic(path string, content []byte) error {
-	target, info, err := resolveWriteTarget(path)
+func writeComposeFileAtomic(path string, content []byte, roots []string) error {
+	target, info, err := resolveWriteTarget(path, roots)
 	if err != nil {
 		return err
 	}
@@ -209,13 +248,12 @@ func writeComposeFileAtomic(path string, content []byte) error {
 // Through a symlink it keeps the target's mode and owner instead
 // (agent-os-1ltz, Edwin's ruling 2026-11-14): a link is how a stack shares an
 // env file with the host, and a save must not turn that file 0600 and
-// process-owned, locking its owner out. Containment is still the caller's
-// (validateStackPath resolves the link, so a link out of the stacks root is
-// refused before this runs). The owner is set only when it differs from the
+// process-owned, locking its owner out. The target must still lie inside one
+// of roots (checkWriteContained), so a link out of them is refused. The owner is set only when it differs from the
 // process's, so a non-root install whose own files are linked is unaffected;
 // when it cannot be kept, the save is refused (fail closed).
-func writeEnvFileAtomic(envPath, content string) error {
-	target, info, err := resolveWriteTarget(envPath)
+func writeEnvFileAtomic(envPath, content string, roots []string) error {
+	target, info, err := resolveWriteTarget(envPath, roots)
 	if err != nil {
 		return err
 	}

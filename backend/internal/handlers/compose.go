@@ -141,7 +141,7 @@ func (h *ComposeHandler) refuseMaskedSave(c *gin.Context, stack *models.Stack, c
 	if unlocked && !strings.Contains(content, services.SecretMask) {
 		return false // nothing masked can be in it
 	}
-	target, info, err := resolveWriteTarget(composePath)
+	target, info, err := resolveWriteTarget(composePath, h.config.GetAllStacksDirs())
 	if err != nil {
 		handleError(c, writeFailureError(err, "READ_ERROR", "Failed to read the compose file on disk"))
 		return true
@@ -237,6 +237,18 @@ func (h *ComposeHandler) Put(c *gin.Context) {
 	}
 	defer releaseLock()
 
+	// Before refuseMaskedSave, which reads the file: a path out of the stacks
+	// roots is answered 400 here, not refused later by the write helper's own
+	// containment check (agent-os-3b2d).
+	if err := validateStackPath(composePath, h.config); err != nil {
+		c.JSON(http.StatusBadRequest, models.NewAppError(
+			http.StatusBadRequest,
+			models.ErrPathTraversal,
+			"Invalid compose file path",
+		))
+		return
+	}
+
 	// Before the lint: a refused save answers 403 or 409, whatever the lint
 	// would say.
 	if h.refuseMaskedSave(c, stack, composePath, req.Content) {
@@ -262,16 +274,7 @@ func (h *ComposeHandler) Put(c *gin.Context) {
 		return
 	}
 
-	if err := validateStackPath(composePath, h.config); err != nil {
-		c.JSON(http.StatusBadRequest, models.NewAppError(
-			http.StatusBadRequest,
-			models.ErrPathTraversal,
-			"Invalid compose file path",
-		))
-		return
-	}
-
-	if err := writeComposeFileAtomic(composePath, []byte(req.Content)); err != nil {
+	if err := writeComposeFileAtomic(composePath, []byte(req.Content), h.config.GetAllStacksDirs()); err != nil {
 		handleError(c, writeFailureError(err, "WRITE_ERROR", "Failed to write compose file"))
 		return
 	}
@@ -359,7 +362,7 @@ func (h *ComposeHandler) logAction(c *gin.Context, stackID, action, detail strin
 // the file did not exist before the update, so it is removed. If originalBytes
 // is non-nil, the file is overwritten with those bytes. Errors are logged but
 // not propagated — the caller has already decided what outcome to return.
-func restoreEnv(envPath string, originalBytes []byte) {
+func restoreEnv(envPath string, originalBytes []byte, roots []string) {
 	if originalBytes == nil {
 		// File did not exist before — remove the newly written copy.
 		os.Remove(envPath)
@@ -370,7 +373,7 @@ func restoreEnv(envPath string, originalBytes []byte) {
 	// implementation that must stay in sync with the 0600 mode requirement
 	// instead of two that can drift apart (agent-os-i94).
 	//nolint:errcheck // best-effort restore; nothing further to do on failure
-	_ = writeEnvFileAtomic(envPath, string(originalBytes)) //writerefusal:ignore best-effort restore, nothing is rendered
+	_ = writeEnvFileAtomic(envPath, string(originalBytes), roots) //writerefusal:ignore best-effort restore, nothing is rendered
 }
 
 // ComposeEnvRequest is the body for the atomic PUT /api/v1/stacks/:id/compose-env
@@ -474,6 +477,18 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 	}
 	defer releaseLock()
 
+	// Before refuseMaskedSave, which reads the file: a path out of the stacks
+	// roots is answered 400 here, not refused later by the write helper's own
+	// containment check (agent-os-3b2d).
+	if err := validateStackPath(composePath, h.config); err != nil {
+		c.JSON(http.StatusBadRequest, models.NewAppError(
+			http.StatusBadRequest,
+			models.ErrPathTraversal,
+			"Invalid compose file path",
+		))
+		return
+	}
+
 	// Before the lint: a refused save answers 403 or 409, whatever the lint
 	// would say.
 	if h.refuseMaskedSave(c, stack, composePath, req.ComposeContent) {
@@ -498,15 +513,6 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 			models.ErrComposeValidation,
 			"Compose file validation failed",
 			gin.H{"lintResults": lintResults},
-		))
-		return
-	}
-
-	if err := validateStackPath(composePath, h.config); err != nil {
-		c.JSON(http.StatusBadRequest, models.NewAppError(
-			http.StatusBadRequest,
-			models.ErrPathTraversal,
-			"Invalid compose file path",
 		))
 		return
 	}
@@ -570,7 +576,7 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 		// instead of a hand-rolled WriteFile+Rename at 0644 — the previous
 		// version here downgraded the file's mode on every save because
 		// os.Rename replaces the destination inode wholesale.
-		if err := writeEnvFileAtomic(envPath, envContent); err != nil {
+		if err := writeEnvFileAtomic(envPath, envContent, h.config.GetAllStacksDirs()); err != nil {
 			renderWriteFailure(c, err, "failed to write env file", "; compose unchanged")
 			return
 		}
@@ -578,18 +584,18 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 		// Verify round-trip for env.
 		if ar := verifyEnvRoundTrip(envPath, envContent); ar != nil {
 			// .env written but verification failed — restore original bytes.
-			restoreEnv(envPath, originalEnv)
+			restoreEnv(envPath, originalEnv, h.config.GetAllStacksDirs())
 			renderResult(c, *ar)
 			return
 		}
 	}
 
 	// ── Write compose.yaml ──────────────────────────────────────────────────
-	if err := writeComposeFileAtomic(composePath, []byte(req.ComposeContent)); err != nil {
+	if err := writeComposeFileAtomic(composePath, []byte(req.ComposeContent), h.config.GetAllStacksDirs()); err != nil {
 		// Compose write failed after .env was already replaced — restore .env.
 		note := ""
 		if hasEnvUpdate && envPath != "" {
-			restoreEnv(envPath, originalEnv)
+			restoreEnv(envPath, originalEnv, h.config.GetAllStacksDirs())
 			note = "; env rolled back"
 		}
 		renderWriteFailure(c, err, "failed to write compose file", note)
@@ -603,12 +609,12 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 		rollbackErr := ""
 		if originalCompose != nil {
 			//nolint:gosec // composePath was validated against the configured stacks directories above (validateStackPath, symlink-aware) — see README.md "Command execution and file access"
-			if rErr := writeComposeFileAtomic(composePath, originalCompose); rErr != nil { //writerefusal:ignore rollback; its text already goes to details.rollbackError
+			if rErr := writeComposeFileAtomic(composePath, originalCompose, h.config.GetAllStacksDirs()); rErr != nil { //writerefusal:ignore rollback; its text already goes to details.rollbackError
 				rollbackErr = rErr.Error()
 			}
 		}
 		if hasEnvUpdate && envPath != "" {
-			restoreEnv(envPath, originalEnv)
+			restoreEnv(envPath, originalEnv, h.config.GetAllStacksDirs())
 		}
 		if rollbackErr != "" {
 			renderResult(c, truth.Partial("compose write verification failed; rollback also failed",

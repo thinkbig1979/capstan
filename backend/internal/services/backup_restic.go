@@ -1,7 +1,6 @@
 package services
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -20,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/thinkbig1979/capstan/backend/internal/lineio"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
@@ -91,9 +91,9 @@ func (r *execRunner) Run(ctx context.Context, name string, args []string, env []
 		return fmt.Errorf("start %s: %w", name, err)
 	}
 
-	scanDone := make(chan struct{}, 2)
+	scanDone := make(chan error, 2)
 	scan := func(r io.Reader) {
-		sc := bufio.NewScanner(r)
+		sc := lineio.NewScanner(r)
 		for sc.Scan() {
 			line := sc.Text()
 			if line != "" {
@@ -103,7 +103,7 @@ func (r *execRunner) Run(ctx context.Context, name string, args []string, env []
 		// Keep draining after a scan error (a line over the scanner's limit):
 		// exec's copy goroutine blocks on a writer nobody reads.
 		_, _ = io.Copy(io.Discard, r) //nolint:errcheck // Drain only: the pipe reader's only error is the writer closing, which is the end of the stream.
-		scanDone <- struct{}{}
+		scanDone <- sc.Err()
 	}
 	go scan(stdoutR)
 	go scan(stderrR)
@@ -113,11 +113,16 @@ func (r *execRunner) Run(ctx context.Context, name string, args []string, env []
 	// the writers is what ends the scanners.
 	_ = stdoutW.Close()
 	_ = stderrW.Close()
-	<-scanDone
-	<-scanDone
+	scanErr := errors.Join(<-scanDone, <-scanDone)
 
 	if waitErr != nil {
 		return fmt.Errorf("%s exited: %w", name, waitErr)
+	}
+	// Fail closed (agent-os-0h4p): the callers count and parse these lines
+	// (verify's entry count, the backup summary), so a dropped one would be
+	// a wrong answer, not a cosmetic gap.
+	if scanErr != nil {
+		return fmt.Errorf("%s printed an output line over 1 MiB, so Capstan could not read its output in full: %w", name, scanErr)
 	}
 	return nil
 }
@@ -195,6 +200,13 @@ func newResticManagerWithRunner(cfg BackupConfig, runner commandRunner, logger *
 // withPasswordFile creates a temporary 0600 file containing the restic
 // password and returns its path plus a cleanup function. The caller must defer
 // cleanup(). The password is never logged.
+//
+// The password is written as stored. restic trims leading and trailing
+// whitespace (spaces, "\r", "\n") from a password file, but not from
+// RESTIC_PASSWORD, so the trimmed password is the repository's key: Capstan,
+// which only uses the file, always opens what it made, and a manual restore
+// needs the password without that whitespace (agent-os-1zpq, OBSERVED with
+// restic 0.18.0; pinned by TestRealRestic_PasswordFileIsTrimmed_1zpq).
 func (m *ResticManager) withPasswordFile() (path string, cleanup func(), err error) {
 	if m.cfg.ResticPassword == "" {
 		return "", func() {}, fmt.Errorf("restic password is not configured")

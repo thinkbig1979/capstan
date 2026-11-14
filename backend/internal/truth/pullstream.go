@@ -1,12 +1,13 @@
 package truth
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/thinkbig1979/capstan/backend/internal/lineio"
 )
 
 // pullMessage is a minimal representation of the JSON message objects that the
@@ -46,7 +47,7 @@ type pullErrorDetail struct {
 func DrainPullStream(reader io.Reader, emit func(line string)) error {
 	var firstErr error
 
-	scanner := bufio.NewScanner(reader)
+	scanner := lineio.NewScanner(reader)
 	for scanner.Scan() {
 		raw := scanner.Bytes()
 		if len(raw) == 0 {
@@ -85,6 +86,9 @@ func DrainPullStream(reader io.Reader, emit func(line string)) error {
 	}
 
 	if scanErr := scanner.Err(); scanErr != nil {
+		// Drain what is left, as the doc above promises: the scanner stops at
+		// a line over lineio.MaxLine (agent-os-0h4p).
+		_, _ = io.Copy(io.Discard, reader) //nolint:errcheck // drain only; the scan error is what is reported
 		return errors.Join(firstErr, fmt.Errorf("reading pull stream: %w", scanErr))
 	}
 

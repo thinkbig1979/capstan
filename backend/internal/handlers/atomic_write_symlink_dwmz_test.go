@@ -47,7 +47,7 @@ func TestWriteComposeFileAtomic_SymlinkWritesTargetKeepsLink_dwmz(t *testing.T) 
 	link := filepath.Join(dir, "compose.yaml")
 	require.NoError(t, os.Symlink("real.yaml", link))
 
-	require.NoError(t, writeComposeFileAtomic(link, []byte("B")))
+	require.NoError(t, writeComposeFileAtomic(link, []byte("B"), []string{dir}))
 
 	requireLinkTo(t, link, "real.yaml")
 	assert.Equal(t, "B", readString(t, target), "the link's target was not written")
@@ -70,7 +70,7 @@ func TestWriteEnvFileAtomic_SymlinkChainWritesFinalTarget_dwmz(t *testing.T) {
 	link := filepath.Join(dir, ".env")
 	require.NoError(t, os.Symlink("mid.env", link))
 
-	require.NoError(t, writeEnvFileAtomic(link, "A=2\n"))
+	require.NoError(t, writeEnvFileAtomic(link, "A=2\n", []string{dir}))
 
 	requireLinkTo(t, link, "mid.env")
 	requireLinkTo(t, mid, "shared/real.env")
@@ -118,7 +118,7 @@ func TestWriteFileAtomic_RefusesUnwritableLinkShapes_dwmz(t *testing.T) {
 			before, err := os.Readlink(link)
 			require.NoError(t, err)
 
-			err = writeComposeFileAtomic(link, []byte("SECRET-dwmz"))
+			err = writeComposeFileAtomic(link, []byte("SECRET-dwmz"), []string{dir})
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.wantErr)
 			assert.NotContains(t, err.Error(), "SECRET-dwmz", "the error must not carry file contents")
@@ -135,7 +135,7 @@ func TestWriteFileAtomic_RefusesNonRegularPlainPath_dwmz(t *testing.T) {
 	path := filepath.Join(dir, "compose.yaml")
 	require.NoError(t, os.MkdirAll(path, 0755))
 
-	err := writeFileAtomic(path, []byte("new"), 0644)
+	err := writeFileAtomic(path, []byte("new"), 0644, []string{dir})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not a regular file")
 	info, statErr := os.Stat(path)

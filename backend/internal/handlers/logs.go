@@ -1,9 +1,9 @@
 package handlers
 
 import (
-	"bufio"
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -17,6 +17,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/execx"
+	"github.com/thinkbig1979/capstan/backend/internal/lineio"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
 
@@ -173,6 +174,8 @@ func (h *LogsHandler) StreamLogs(c *gin.Context) {
 	}
 
 	logChan := make(chan string, 100)
+	// Set before logChan closes, so read only after the close is seen.
+	var scanErr error
 
 	// The send selects on ctx: once the read loop below stops draining, a
 	// full logChan would otherwise park this goroutine forever, and closing
@@ -180,14 +183,7 @@ func (h *LogsHandler) StreamLogs(c *gin.Context) {
 	// exit from the read loop goes through cleanup's cancel() (agent-os-z91e.1).
 	go func() {
 		defer close(logChan)
-		scanner := bufio.NewScanner(stdout)
-		for scanner.Scan() {
-			select {
-			case logChan <- scanner.Text():
-			case <-ctx.Done():
-				return
-			}
-		}
+		scanErr = pumpLogLines(ctx, stdout, logChan)
 	}()
 
 	// Through wsConn.WriteMutex via safePingLoop, not the private mutex this
@@ -232,6 +228,13 @@ func (h *LogsHandler) StreamLogs(c *gin.Context) {
 			goto cleanup
 		case line, ok := <-logChan:
 			if !ok {
+				if scanErr != nil {
+					// A line over lineio.MaxLine stopped the reader
+					// (agent-os-0h4p). Say so in the stream rather than just
+					// ending it; cleanup then kills the child.
+					slog.Warn("Log stream stopped by a long line", "stackID", id, "error", scanErr)
+					_ = safeWriteJSON(wsConn, LogLine{Container: "capstan", Message: "A log line over 1 MiB could not be shown; the stream stopped here."}) //nolint:errcheck // best effort: the stream is ending either way
+				}
 				goto cleanup
 			}
 
@@ -412,4 +415,19 @@ func parseLogLine(line string) *LogLine {
 
 func writeJSONError(c *gin.Context, status int, code, message string) {
 	c.JSON(status, models.NewAppError(status, code, message))
+}
+
+// pumpLogLines sends each line of r to out until r ends or ctx is done. A
+// line over lineio.MaxLine stops it with the scanner's error (agent-os-0h4p);
+// the caller then kills the child, which is what unblocks its writes.
+func pumpLogLines(ctx context.Context, r io.Reader, out chan<- string) error {
+	scanner := lineio.NewScanner(r)
+	for scanner.Scan() {
+		select {
+		case out <- scanner.Text():
+		case <-ctx.Done():
+			return nil
+		}
+	}
+	return scanner.Err()
 }
