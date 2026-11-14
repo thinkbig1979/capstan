@@ -169,28 +169,100 @@ func (s *GitService) historyDiff(dirPath string, cred gitCreds, oid string, pare
 // left whole for MaskFullContextDiff; a last redactToken covers the
 // unmasked view.
 //
-// While the masker runs, the token's spans hold tokenSpanSentinel rather than
+// While the masker runs, the token's spans hold a placeholder rather than
 // "***": "***" starts a YAML alias, so a compose line such as `NOTE: ***`
 // failed the masker's YAML pass and a secret only that pass finds (the item
-// after --password) was shown. The sentinel is a plain scalar.
+// after --password) was shown. The placeholder is a plain scalar, picked per
+// patch by tokenSpanSentinel so that no secret occurrence covers part of it
+// (agent-os-30iu); with none found, the patch fails closed to its file names.
 func maskPatch(diff, token string, mask *diffMasking) string {
 	if mask != nil {
-		diff = MaskFullContextDiff(maskTokenSpans(diff, token, mask.secrets), mask.secrets)
-		diff = strings.ReplaceAll(diff, tokenSpanSentinel, "***")
+		sentinel, spanned := "", diff
+		if token != "" && strings.Contains(diff, token) {
+			var ok bool
+			if sentinel, spanned, ok = tokenSpanSentinel(diff, token, mask.secrets); !ok {
+				return redactToken(failClosedDiff(strings.Split(diff, "\n")), token)
+			}
+		}
+		diff = MaskFullContextDiff(spanned, mask.secrets)
+		if sentinel != "" {
+			diff = strings.ReplaceAll(diff, sentinel, "***")
+		}
 	}
 	return redactToken(diff, token)
 }
 
-// tokenSpanSentinel stands in for a masked token span while the secret masker
-// reads the patch: letters and digits only, so YAML reads it as a plain
-// scalar, and long enough that no secret is expected to equal or hold it.
-const tokenSpanSentinel = "CapstanMaskedTokenSpan9wwa"
+// maxTokenSpanSentinels bounds how many placeholders tokenSpanSentinel tries.
+const maxTokenSpanSentinels = 256
 
-// maskTokenSpans replaces with tokenSpanSentinel each union of overlapping occurrences of
+// tokenSpanCandidate is the i-th placeholder tokenSpanSentinel tries: a fixed
+// letter prefix and a base-36 number spread over the uint64 range, so letters
+// and digits only (a plain YAML scalar) and every candidate differs from the
+// next in most positions.
+func tokenSpanCandidate(i uint64) string {
+	return "Zq" + strconv.FormatUint((i+1)*0x9E3779B97F4A7C15, 36)
+}
+
+// tokenSpanSentinel picks the placeholder for diff's token spans and returns
+// diff with the spans replaced (maskTokenSpans). A candidate is taken when
+// the diff does not already hold it, so the restore cannot rewrite the
+// diff's own text, and when no occurrence of a secret, as MaskSecrets looks
+// for it (secretNeedles), covers part of a placeholder in the replaced text:
+// the masker would rewrite that part and the restore would miss it, showing
+// a fragment (agent-os-30iu). An occurrence covering a placeholder whole is
+// fine: the masker then hides it with the secret. false when none of
+// maxTokenSpanSentinels candidates is safe.
+func tokenSpanSentinel(diff, token string, secrets []string) (string, string, bool) {
+	needles := secretNeedles(secrets)
+	for i := range uint64(maxTokenSpanSentinels) {
+		c := tokenSpanCandidate(i)
+		if strings.Contains(diff, c) {
+			continue
+		}
+		spanned := maskTokenSpans(diff, token, c, secrets)
+		if !partlyCovered(spanned, c, needles) {
+			return c, spanned, true
+		}
+	}
+	return "", "", false
+}
+
+// partlyCovered reports whether an occurrence of any of needles in s overlaps
+// an occurrence of sentinel without covering it whole.
+func partlyCovered(s, sentinel string, needles []string) bool {
+	var spans [][2]int
+	for i := 0; ; {
+		j := strings.Index(s[i:], sentinel)
+		if j < 0 {
+			break
+		}
+		spans = append(spans, [2]int{i + j, i + j + len(sentinel)})
+		i += j + len(sentinel)
+	}
+	for _, v := range needles {
+		for i := 0; ; {
+			j := strings.Index(s[i:], v)
+			if j < 0 {
+				break
+			}
+			a, b := i+j, i+j+len(v)
+			for _, sp := range spans {
+				if a < sp[1] && b > sp[0] && (a > sp[0] || b < sp[1]) {
+					return true
+				}
+			}
+			i = a + 1
+		}
+	}
+	return false
+}
+
+// maskTokenSpans replaces with sentinel each union of overlapping occurrences of
 // token and of secrets that contains at least one occurrence of token.
-// Secrets MaskSecrets would skip (too short, or multi-line) do not grow a
-// span, so this masks nothing the masker itself would leave.
-func maskTokenSpans(s, token string, secrets []string) string {
+// The secrets are read as MaskSecrets reads them (secretNeedles: too short
+// skipped, a multi-line one by its lines), so this masks nothing the masker
+// itself would leave.
+func maskTokenSpans(s, token, sentinel string, secrets []string) string {
 	if token == "" || !strings.Contains(s, token) {
 		return s
 	}
@@ -210,10 +282,8 @@ func maskTokenSpans(s, token string, secrets []string) string {
 		}
 	}
 	find(token, true)
-	for _, v := range secrets {
-		if len(v) >= composeSecretMinLen && !strings.Contains(v, "\n") {
-			find(v, false)
-		}
+	for _, v := range secretNeedles(secrets) {
+		find(v, false)
 	}
 	sort.Slice(spans, func(i, j int) bool { return spans[i].a < spans[j].a })
 	var b strings.Builder
@@ -226,7 +296,7 @@ func maskTokenSpans(s, token string, secrets []string) string {
 		}
 		if cur.tok {
 			b.WriteString(s[at:cur.a])
-			b.WriteString(tokenSpanSentinel)
+			b.WriteString(sentinel)
 			at = cur.b
 		}
 	}
@@ -493,7 +563,7 @@ func (s *GitService) historyEnvRule(dirPath, top string, bare bool, cred gitCred
 	if s.db == nil {
 		return r, fmt.Errorf("cannot decide which files are env files: no database")
 	}
-	stacks, unplaced, err := s.repoStacks(top)
+	stacks, unplaced, err := s.repoStacks(top, cred.token)
 	if err != nil {
 		return r, err
 	}
@@ -758,7 +828,7 @@ type unplacedStack struct {
 // repoStacks is every registered stack whose folder lies inside top, plus the
 // stacks it could not place. It never keys on the folder a request names: a
 // file of one folder can be another stack's env file (agent-os-0zjs).
-func (s *GitService) repoStacks(top string) ([]repoStack, []unplacedStack, error) {
+func (s *GitService) repoStacks(top, token string) ([]repoStack, []unplacedStack, error) {
 	stacks, err := s.db.ListStacks()
 	if err != nil {
 		return nil, nil, fmt.Errorf("could not list the stacks to decide which files are env files: %w", err)
@@ -766,7 +836,7 @@ func (s *GitService) repoStacks(top string) ([]repoStack, []unplacedStack, error
 	var in []repoStack
 	var unplaced []unplacedStack
 	for _, st := range stacks {
-		rel, ok, err := repoRel(top, st.Directory)
+		rel, ok, err := repoRel(top, st.Directory, token)
 		switch {
 		case err != nil:
 			unplaced = append(unplaced, unplacedStack{stack: st, err: err})
@@ -813,16 +883,13 @@ func (s *GitService) lsTree(dirPath string, cred gitCreds, t string) (map[string
 // still maps (agent-os-odjs). A path it cannot check is an error, never
 // "outside": the caller would then show a file it meant to hide.
 //
-// tokens, for a path read from git's raw output (agent-os-9wwa), is the
-// credential to mask in an error: the path is masked BEFORE boundedPath
-// quotes and cuts it, since quoting escapes a token and the cut can split
-// one, and a finished message then no longer holds it whole. Optional, so the
-// callers with paths from disk or the database stay as they are.
-func repoRel(top, abs string, tokens ...string) (string, bool, error) {
-	token := ""
-	if len(tokens) > 0 {
-		token = tokens[0]
-	}
+// token is the credential to mask in an error (agent-os-9wwa): the path is
+// masked BEFORE boundedPath quotes and cuts it, since quoting escapes a token
+// and the cut can split one, and a finished message then no longer holds it
+// whole. It is required, so the compiler keeps every caller deciding: a stack
+// folder from the database can hold it as well as a path from git's raw
+// output (agent-os-r5b4). "" masks nothing.
+func repoRel(top, abs, token string) (string, bool, error) {
 	ok, err := pathutil.IsContained(top, abs)
 	if err != nil {
 		return "", false, redactErr(fmt.Errorf("could not tell whether %s is inside the repository: %w",
@@ -862,15 +929,10 @@ func boundedPath(p string) string {
 	return fmt.Sprintf("%q... (%d bytes)", p[:maxErrPathBytes], len(p))
 }
 
-// boundedPathErr is err with the path of an *fs.PathError in it bounded as
-// boundedPath does: the OS error (lstat <path>: file name too long) repeats
-// the path whole. The cause stays in the chain.
-func boundedPathErr(err error) error {
-	return boundedPathErrShown(err, "")
-}
-
-// boundedPathErrShown is boundedPathErr with token masked in the path before
-// it is bounded (agent-os-9wwa).
+// boundedPathErrShown is err with the path of an *fs.PathError in it bounded
+// as boundedPath does, token masked in the path before it is bounded
+// (agent-os-9wwa): the OS error (lstat <path>: file name too long) repeats the
+// path whole. The cause stays in the chain.
 func boundedPathErrShown(err error, token string) error {
 	var pe *fs.PathError
 	if !errors.As(err, &pe) {

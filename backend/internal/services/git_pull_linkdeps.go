@@ -23,13 +23,13 @@ import (
 // because of the pull, and the link itself, which is inside, still shows in
 // the diff when it is retargeted. Treating the outside target as "unknown"
 // would make every pull on that stack partial.
-func stackLinkDeps(top string, stack models.Stack) ([]string, error) {
+func stackLinkDeps(top string, stack models.Stack, token string) ([]string, error) {
 	var deps []string
 	for _, name := range []string{"", stack.ComposeFile, stack.EnvFile} {
 		if name == "" && len(deps) > 0 {
 			continue
 		}
-		d, err := linkDeps(top, filepath.Join(stack.Directory, name))
+		d, err := linkDeps(top, filepath.Join(stack.Directory, name), token)
 		if err != nil {
 			return nil, err
 		}
@@ -46,7 +46,12 @@ func stackLinkDeps(top string, stack models.Stack) ([]string, error) {
 // about, is an error: the caller reports the stack, it is not skipped.
 // The first missing component is returned too, so deleting a folder link on
 // the way is a change even though git names only that link.
-func linkDeps(top, abs string) ([]string, error) {
+//
+// token is the pull's credential. A path in an error is masked with it BEFORE
+// boundedPath quotes and cuts it, as repoRel does (agent-os-9wwa): link
+// targets come from the pulled tree, and a quoted or cut token is no longer
+// found by the pull's display boundary (agent-os-r5b4).
+func linkDeps(top, abs, token string) ([]string, error) {
 	var deps []string
 	rest := splitPath(abs)
 	resolved := string(filepath.Separator)
@@ -67,7 +72,7 @@ func linkDeps(top, abs string) ([]string, error) {
 			// The component git lists when the pull deletes a link or a folder
 			// on the way here: recorded as well as the path below it, which
 			// git never names (agent-os-juq9 review S1).
-			if parent, ok, err := repoRel(top, resolved); err != nil {
+			if parent, ok, err := repoRel(top, resolved, token); err != nil {
 				return nil, err
 			} else if ok {
 				deps = append(deps, path.Join(parent, c))
@@ -76,7 +81,8 @@ func linkDeps(top, abs string) ([]string, error) {
 			break
 		}
 		if err != nil {
-			return nil, fmt.Errorf("could not read %s: %w", boundedPath(next), boundedPathErr(err))
+			return nil, redactErr(fmt.Errorf("could not read %s: %w",
+				boundedPath(redactToken(next, token)), boundedPathErrShown(err, token)), token)
 		}
 		if fi.Mode()&os.ModeSymlink == 0 {
 			resolved = next
@@ -84,25 +90,27 @@ func linkDeps(top, abs string) ([]string, error) {
 		}
 		hops++
 		if hops > maxLinkHops {
-			return nil, fmt.Errorf("too many levels of symbolic links following %s", boundedPath(abs))
+			return nil, redactErr(fmt.Errorf("too many levels of symbolic links following %s",
+				boundedPath(redactToken(abs, token))), token)
 		}
 		// resolved holds no links, so the link's own location is the placed
 		// parent plus its name.
-		if parent, ok, err := repoRel(top, resolved); err != nil {
+		if parent, ok, err := repoRel(top, resolved, token); err != nil {
 			return nil, err
 		} else if ok {
 			deps = append(deps, path.Join(parent, c))
 		}
 		target, err := os.Readlink(next)
 		if err != nil {
-			return nil, fmt.Errorf("could not read the link %s: %w", boundedPath(next), boundedPathErr(err))
+			return nil, redactErr(fmt.Errorf("could not read the link %s: %w",
+				boundedPath(redactToken(next, token)), boundedPathErrShown(err, token)), token)
 		}
 		if filepath.IsAbs(target) {
 			resolved = string(filepath.Separator)
 		}
 		rest = append(splitPath(target), rest...)
 	}
-	if rel, ok, err := repoRel(top, resolved); err != nil {
+	if rel, ok, err := repoRel(top, resolved, token); err != nil {
 		return nil, err
 	} else if ok {
 		deps = append(deps, rel)
@@ -121,8 +129,8 @@ type linkSnapshot struct {
 	err  error
 }
 
-func snapshotLinks(top string, stack models.Stack) linkSnapshot {
-	deps, err := stackLinkDeps(top, stack)
+func snapshotLinks(top string, stack models.Stack, token string) linkSnapshot {
+	deps, err := stackLinkDeps(top, stack, token)
 	return linkSnapshot{deps: deps, err: err}
 }
 
@@ -131,12 +139,12 @@ func snapshotLinks(top string, stack models.Stack) linkSnapshot {
 // leaves the later walk out when the caller reports its own failure. A walk
 // that failed is an error, never "unchanged"; a later walk that finds a
 // change wins over an earlier failure, since the pull may have fixed it.
-func linkDepsChanged(top string, stack models.Stack, pre linkSnapshot, walkAfter bool, changedFiles []string) (bool, error) {
+func linkDepsChanged(top string, stack models.Stack, pre linkSnapshot, walkAfter bool, changedFiles []string, token string) (bool, error) {
 	if anyChanged(pre.deps, changedFiles) {
 		return true, nil
 	}
 	if walkAfter {
-		deps, err := stackLinkDeps(top, stack)
+		deps, err := stackLinkDeps(top, stack, token)
 		if err != nil {
 			return false, err
 		}

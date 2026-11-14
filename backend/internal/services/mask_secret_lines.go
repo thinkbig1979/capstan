@@ -3,6 +3,7 @@ package services
 import (
 	"path"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -38,7 +39,8 @@ const SecretMask = secretMask
 //     the line. This is what covers a YAML file that does not parse and every
 //     other file.
 //   - URL credentials anywhere (RedactURLUserinfoInText), whatever the key.
-//   - Any of secrets (values from the stack's env files) found verbatim.
+//   - Any of secrets (values from the stack's env files) found verbatim, a
+//     multi-line one line by line (secretNeedles).
 //
 // What it leaves visible: a value that is only a reference, ${X}, $X, ${X?msg}
 // or ${X:?msg}, because it holds no secret and hiding it would make every
@@ -80,10 +82,7 @@ func MaskSecrets(text, filePath string, secrets []string) (string, int) {
 			m.count++
 		}
 	}
-	for _, v := range secrets {
-		if len(v) < composeSecretMinLen || strings.Contains(v, "\n") {
-			continue
-		}
+	for _, v := range secretNeedles(secrets) {
 		for i, line := range m.lines {
 			if strings.Contains(line, v) {
 				m.lines[i] = strings.ReplaceAll(line, v, secretMask)
@@ -92,6 +91,25 @@ func MaskSecrets(text, filePath string, secrets []string) (string, int) {
 		}
 	}
 	return strings.Join(m.lines, "\n"), m.count
+}
+
+// secretNeedles is what MaskSecrets looks for, line by line: each one-line
+// secret, and each line of a multi-line one (secretLines) in its place, since
+// a line can never hold the whole value (agent-os-0c9k). Longest first, so a
+// needle that holds another is replaced whole.
+func secretNeedles(secrets []string) []string {
+	var out []string
+	for _, v := range secrets {
+		if !strings.Contains(v, "\n") {
+			if len(v) >= composeSecretMinLen {
+				out = append(out, v)
+			}
+			continue
+		}
+		out = append(out, secretLines(v)...)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return len(out[i]) > len(out[j]) })
+	return out
 }
 
 type lineMasker struct {
