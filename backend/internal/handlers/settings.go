@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -351,12 +352,24 @@ func (h *SettingsHandler) UpdateGlobalEnv(c *gin.Context) {
 		entries[i] = EnvEntry{Key: v.Key, Value: v.Value}
 	}
 
-	// Reuse the stack-env validation rules: reject an empty key paired with a
-	// non-empty value (would serialise as a corrupt "=value" line) and reject
-	// newlines/CRs in keys or values (finding #15 / B4). An entry with both an
-	// empty key and empty value is treated as a no-op blank line, matching
-	// serializeEnvFile below, rather than rejected outright.
-	if err := validateEnvEntries(entries); err != nil {
+	// The save is merged into the file on disk (agent-os-rd1l, agent-os-jx88):
+	// the page edits only variables, so the comments, blank lines and lines it
+	// shows but cannot write (a bare KEY, KEY: value) come from the file. A
+	// file that cannot be read is not replaced: readGlobalEnvFile answers an
+	// absent one as empty.
+	globalEnvPath := h.cfg.DataDir + "/global.env"
+	current, err := readGlobalEnvFile(globalEnvPath)
+	if err != nil {
+		handleError(c, models.NewAppErrorWithCause(
+			http.StatusInternalServerError,
+			"INTERNAL_ERROR",
+			"Failed to read global environment file",
+			err,
+		))
+		return
+	}
+	content, err := mergeGlobalEnv(string(current), entries)
+	if err != nil {
 		c.JSON(http.StatusBadRequest, models.NewAppError(
 			http.StatusBadRequest,
 			"VALIDATION_ERROR",
@@ -364,12 +377,6 @@ func (h *SettingsHandler) UpdateGlobalEnv(c *gin.Context) {
 		))
 		return
 	}
-
-	globalEnvPath := h.cfg.DataDir + "/global.env"
-	// serializeEnvFile only skips an entry when BOTH key and value are empty,
-	// so a deliberately empty value (KEY=) round-trips instead of being
-	// silently dropped.
-	content := serializeEnvFile(entries)
 
 	if err := writeEnvFileAtomic(globalEnvPath, content); err != nil {
 		slog.Error("Failed to write global environment file", "error", err)
@@ -410,31 +417,134 @@ func parseEnvFile(path string) ([]map[string]string, error) {
 	return parseGlobalEnvText(string(data)), nil
 }
 
-// parseGlobalEnvText is the global env page's parser over the file's text
-// (split out of parseEnvFile unchanged, so GetGlobalEnv can redact from the
-// same bytes it parsed). agent-os-rd1l replaces it.
+// parseGlobalEnvText is the global env page's rows over the file's text: the
+// stack env parser's variables (EnvHandler.parseEnvFile), projected to
+// {key, value} by globalEnvVars (agent-os-rd1l). One parser for both pages,
+// so a line the stack table reads as a variable is one here too.
 func parseGlobalEnvText(text string) []map[string]string {
-	lines := strings.Split(text, "\n")
-	vars := []map[string]string{}
+	vars, _ := globalEnvVars((&EnvHandler{}).parseEnvFile(text))
+	return vars
+}
 
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) == 2 {
-			key := strings.TrimSpace(parts[0])
-			value := strings.TrimSpace(parts[1])
-			vars = append(vars, map[string]string{
-				"key":   key,
-				"value": value,
-			})
+// globalEnvVars projects parsed env rows to the global env page's rows and
+// returns, for each, the index of the entry it came from. Comments, blank
+// lines and the hidden body rows of a locked view have no key and no row.
+func globalEnvVars(entries []EnvEntry) (vars []map[string]string, from []int) {
+	vars = []map[string]string{}
+	for i, e := range entries {
+		if v, ok := globalEnvVarOf(e); ok {
+			vars = append(vars, v)
+			from = append(from, i)
 		}
 	}
+	return vars, from
+}
 
-	return vars
+// globalEnvVarOf is one row's {key, value}. The value is the text compose
+// reads after the separator, quotes and an inline comment included, which is
+// what the global page has always shown and sends back: a KEY=value row gives
+// its raw right-hand side; a read-only line (bare KEY, KEY: value) gives the
+// text after its ":", or "".
+func globalEnvVarOf(e EnvEntry) (map[string]string, bool) {
+	if e.Key == "" {
+		return nil, false
+	}
+	value := e.Quote + e.Value + e.Quote + e.InlineComment
+	if e.Comment {
+		value = ""
+		if sep := strings.IndexAny(e.Value, "=:"); sep != -1 {
+			value = strings.TrimSpace(e.Value[sep+1:])
+		}
+	}
+	return map[string]string{"key": e.Key, "value": value}, true
+}
+
+// mergeGlobalEnv applies a save of the global env page's rows to the file's
+// current text (agent-os-rd1l, agent-os-jx88). The page sends variables only,
+// so the file is the source for everything else:
+//   - a request row is matched to the file's row with the same key, the n-th
+//     request row of a key to the n-th file row of it;
+//   - a matched row whose value is unchanged keeps its original line(s)
+//     byte for byte, so a read-only line (bare KEY, KEY: value) survives;
+//   - a changed row is written in place as KEY=value;
+//   - a file row no request row matches is removed, and a request row no file
+//     row matches is appended at the end (a renamed key therefore moves);
+//   - comments and blank lines stay where they are.
+//
+// Changed and new rows are validated as the stack table's are
+// (validateEnvEntries, by request index); an unchanged row is the file's own
+// text and is not.
+func mergeGlobalEnv(current string, req []EnvEntry) (string, error) {
+	entries := (&EnvHandler{}).parseEnvFile(current)
+	fileVars, from := globalEnvVars(entries)
+
+	pending := map[string][]int{}
+	for j, v := range fileVars {
+		pending[v["key"]] = append(pending[v["key"]], j)
+	}
+	matched := make([]int, len(fileVars)) // request index + 1, 0 = unmatched
+	added := []EnvEntry{}
+	toCheck := append([]EnvEntry(nil), req...)
+	for i, r := range req {
+		if r.Key == "" && r.Value == "" {
+			continue // a blank row, as serializeEnvFile has always treated it
+		}
+		if q := pending[r.Key]; r.Key != "" && len(q) > 0 {
+			pending[r.Key] = q[1:]
+			matched[q[0]] = i + 1
+			if r.Value == fileVars[q[0]]["value"] {
+				toCheck[i] = EnvEntry{}
+			}
+			continue
+		}
+		added = append(added, r)
+	}
+	if err := validateEnvEntries(toCheck); err != nil {
+		return "", err
+	}
+
+	// Each entry's original text: its line, or for a value spanning lines,
+	// every line up to the next entry. The raw split keeps a "\r".
+	rawLines := strings.Split(current, "\n")
+	lineCount := len(envLines(current))
+	varOf := make(map[int]int, len(from))
+	for j, k := range from {
+		varOf[k] = j
+	}
+
+	var b strings.Builder
+	endsVerbatim := false
+	for k, e := range entries {
+		end := lineCount
+		if k+1 < len(entries) {
+			end = entries[k+1].Line - 1
+		}
+		j, isVar := varOf[k]
+		switch {
+		case isVar && matched[j] == 0:
+			continue // removed on the page
+		case isVar && req[matched[j]-1].Value != fileVars[j]["value"]:
+			b.WriteString(serializeEnvFile([]EnvEntry{{Key: e.Key, Value: req[matched[j]-1].Value}}))
+			endsVerbatim = false
+		default:
+			for _, l := range rawLines[e.Line-1 : end] {
+				b.WriteString(l)
+				b.WriteString("\n")
+			}
+			endsVerbatim = end == lineCount
+		}
+	}
+	added = slices.DeleteFunc(added, func(e EnvEntry) bool { return e.Key == "" && e.Value == "" })
+	if len(added) > 0 {
+		b.WriteString(serializeEnvFile(added))
+		endsVerbatim = false
+	}
+	out := b.String()
+	// An unchanged last line keeps the file's missing final newline too.
+	if endsVerbatim && !strings.HasSuffix(current, "\n") {
+		out = strings.TrimSuffix(out, "\n")
+	}
+	return out, nil
 }
 
 func (h *SettingsHandler) GetLogRetention(c *gin.Context) {

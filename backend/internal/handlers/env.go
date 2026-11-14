@@ -282,51 +282,40 @@ func redactEnvCommentRow(e *EnvEntry) {
 	}
 }
 
-// redactGlobalEnvVars masks the global env rows (settings.go parseGlobalEnvText) for
-// a locked session with the stack env's redaction, line by line (agent-os-yt2f
-// review S2). That parser drops comment lines and lines with no "=", and splits
-// every other line at its first "=", so a multi-line secret's body lines that
-// hold "=" (base64 padding) came back as rows whose KEY was secret text, and
-// "KEY: a=b" as a key holding part of the value; only values were masked.
+// redactGlobalEnvVars masks the global env rows (settings.go parseGlobalEnvText)
+// for a locked session with the stack env's redaction (agent-os-yt2f review S2).
+// Both are views of the same parser since agent-os-rd1l, so each row is the
+// projection of one parsed entry: the entries are redacted (redactEnvResponse,
+// which also hides a multi-line secret's body rows) and projected again, row
+// for row. A sensitive row keeps its key and loses its value; a hidden body row
+// loses both.
 //
 // raw must be the text the rows were parsed from; GetGlobalEnv passes the one
-// read it parsed (review DS1). Each row is matched to the line it came from by
-// that parser's own rule, and the stack env's verdict on the line decides: a
-// sensitive line keeps only the key compose reads (none for a body line) and
-// no value. If the rows do not match raw's lines (a caller passed other text),
-// every key and value is blanked: fail closed. agent-os-rd1l, which replaces
-// that parser, can drop the matching.
+// read it parsed (review DS1). If the rows are not exactly raw's projection (a
+// caller passed other text), every key and value is blanked: fail closed.
 func redactGlobalEnvVars(vars []map[string]string, raw string) {
-	resp := EnvResponse{Raw: raw, Entries: (&EnvHandler{}).parseEnvFile(raw)}
-	redactEnvResponse(&resp)
-	byLine := map[int]EnvEntry{}
-	for _, e := range resp.Entries {
-		byLine[e.Line] = e
+	entries := (&EnvHandler{}).parseEnvFile(raw)
+	fileVars, from := globalEnvVars(entries)
+	aligned := len(fileVars) == len(vars)
+	for i := 0; aligned && i < len(vars); i++ {
+		aligned = vars[i]["key"] == fileVars[i]["key"] && vars[i]["value"] == fileVars[i]["value"]
 	}
 
-	lineOf := make([]int, len(vars))
-	n := 0
-	for i, l := range strings.Split(raw, "\n") {
-		t := strings.TrimSpace(l)
-		if t == "" || strings.HasPrefix(t, "#") || !strings.Contains(t, "=") {
+	resp := EnvResponse{Raw: raw, Entries: entries}
+	redactEnvResponse(&resp)
+	for i, v := range vars {
+		if !aligned {
+			v["key"], v["value"] = "", ""
 			continue
 		}
-		if n == len(vars) || !strings.HasPrefix(t, vars[n]["key"]) {
-			n = -1
-			break
-		}
-		lineOf[n] = i + 1
-		n++
-	}
-	aligned := n == len(vars)
-
-	for i, v := range vars {
-		e, found := byLine[lineOf[i]]
+		red, ok := globalEnvVarOf(resp.Entries[from[i]])
 		switch {
-		case !aligned || !found:
+		case !ok:
 			v["key"], v["value"] = "", ""
-		case e.Sensitive || services.IsSensitiveEnvVar(v["key"], v["value"]):
-			v["key"], v["value"] = e.Key, ""
+		case resp.Entries[from[i]].Sensitive || services.IsSensitiveEnvVar(v["key"], v["value"]):
+			v["key"], v["value"] = red["key"], ""
+		default:
+			v["key"], v["value"] = red["key"], red["value"]
 		}
 	}
 }
