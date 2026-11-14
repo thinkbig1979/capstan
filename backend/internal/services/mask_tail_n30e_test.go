@@ -1,9 +1,9 @@
 package services
 
 import (
+	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/compose-spec/compose-go/v2/dotenv"
 	"github.com/stretchr/testify/assert"
@@ -80,14 +80,23 @@ func TestMaskSecrets_n30e_HarmlessTailStaysVisible(t *testing.T) {
 }
 
 // One line of many statements is masked in one pass: a splice per masked
-// statement took 6 s here.
+// statement copied the whole line each time, quadratic. The check is the
+// bytes allocated, not a clock: under -race the linear masker runs about
+// 11x slower and the splice barely slower, so no wall-clock bound both
+// passed the masker on a loaded CI runner and failed the splice (PR #736).
+// At 40000 statements the masker allocates about 47x the line (177x under
+// -race) and the splice about 43700x, in both modes.
 func TestMaskSecrets_n30e_LongTailLineMasksInLinearTime(t *testing.T) {
 	line := "NOTES=\"a\"" + strings.Repeat(" A_TOKEN=\"b\"", 40000) + "\n"
-	start := time.Now()
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
 	out, _ := MaskSecrets(line, "stack/.env", nil)
-	elapsed := time.Since(start)
-	assert.NotContains(t, out, "\"b\"")
-	assert.Less(t, elapsed, 2*time.Second, "%d bytes took %s to mask", len(line), elapsed)
+	runtime.ReadMemStats(&after)
+	require.NotContains(t, out, "\"b\"")
+	allocated := after.TotalAlloc - before.TotalAlloc
+	t.Logf("%d bytes masked, %d bytes allocated (%.0fx)", len(line), allocated, float64(allocated)/float64(len(line)))
+	assert.Less(t, allocated, uint64(1000*len(line)), "masking one line allocated %d bytes for %d: not linear", allocated, len(line))
 }
 
 // A tail value whose quote does not close on its line is masked to the
