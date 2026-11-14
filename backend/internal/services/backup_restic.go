@@ -200,6 +200,13 @@ func newResticManagerWithRunner(cfg BackupConfig, runner commandRunner, logger *
 // withPasswordFile creates a temporary 0600 file containing the restic
 // password and returns its path plus a cleanup function. The caller must defer
 // cleanup(). The password is never logged.
+//
+// The password is written as stored. restic trims leading and trailing
+// whitespace (spaces, "\r", "\n") from a password file, but not from
+// RESTIC_PASSWORD, so the trimmed password is the repository's key: Capstan,
+// which only uses the file, always opens what it made, and a manual restore
+// needs the password without that whitespace (agent-os-1zpq, OBSERVED with
+// restic 0.18.0; pinned by TestRealRestic_PasswordFileIsTrimmed_1zpq).
 func (m *ResticManager) withPasswordFile() (path string, cleanup func(), err error) {
 	if m.cfg.ResticPassword == "" {
 		return "", func() {}, fmt.Errorf("restic password is not configured")
