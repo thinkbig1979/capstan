@@ -168,14 +168,25 @@ func (s *GitService) historyDiff(dirPath string, cred gitCreds, oid string, pare
 // occurrence that overlaps it; the secrets that do not touch the token are
 // left whole for MaskFullContextDiff; a last redactToken covers the
 // unmasked view.
+//
+// While the masker runs, the token's spans hold tokenSpanSentinel rather than
+// "***": "***" starts a YAML alias, so a compose line such as `NOTE: ***`
+// failed the masker's YAML pass and a secret only that pass finds (the item
+// after --password) was shown. The sentinel is a plain scalar.
 func maskPatch(diff, token string, mask *diffMasking) string {
 	if mask != nil {
 		diff = MaskFullContextDiff(maskTokenSpans(diff, token, mask.secrets), mask.secrets)
+		diff = strings.ReplaceAll(diff, tokenSpanSentinel, "***")
 	}
 	return redactToken(diff, token)
 }
 
-// maskTokenSpans replaces with "***" each union of overlapping occurrences of
+// tokenSpanSentinel stands in for a masked token span while the secret masker
+// reads the patch: letters and digits only, so YAML reads it as a plain
+// scalar, and long enough that no secret is expected to equal or hold it.
+const tokenSpanSentinel = "CapstanMaskedTokenSpan9wwa"
+
+// maskTokenSpans replaces with tokenSpanSentinel each union of overlapping occurrences of
 // token and of secrets that contains at least one occurrence of token.
 // Secrets MaskSecrets would skip (too short, or multi-line) do not grow a
 // span, so this masks nothing the masker itself would leave.
@@ -215,7 +226,7 @@ func maskTokenSpans(s, token string, secrets []string) string {
 		}
 		if cur.tok {
 			b.WriteString(s[at:cur.a])
-			b.WriteString("***")
+			b.WriteString(tokenSpanSentinel)
 			at = cur.b
 		}
 	}

@@ -507,6 +507,39 @@ func TestJointMaskTokenAndSecrets9wwa(t *testing.T) {
 			check(t, res.Diff)
 		})
 	}
+
+	// Round 2: the token's mask must stay a plain YAML scalar while the
+	// masker runs. "***" starts an alias, the masker's YAML pass then fails,
+	// and a secret only that pass finds (the item after --password) showed.
+	const yamlTok = "ghpZQ7tokenVALUE"
+	compose := "services:\n  app:\n    image: nginx\n    environment:\n      NOTE: " + yamlTok +
+		"\n    command:\n      - --password\n      - s3cretPLAINzz\n"
+	checkYAML := func(t *testing.T, diff string) {
+		t.Helper()
+		assert.Contains(t, diff, "--password", "control: the patch shows the compose file")
+		assert.NotContains(t, diff, "s3cretPLAINzz", "the YAML pass's secret is shown")
+		assert.NotContains(t, diff, yamlTok)
+	}
+	t.Run("yaml/change diff", func(t *testing.T) {
+		f := newCommitFix(t, false)
+		setToken9wwa(t, f.svc, f.db, f.dir, yamlTok)
+		writeFile(t, filepath.Join(f.top, "compose.yaml"), compose)
+		res, err := f.svc.GetChangeDiffMasked(f.dir, "compose.yaml", []string{"unrelatedSECRET9"})
+		require.NoError(t, err)
+		checkYAML(t, res.Diff)
+	})
+	t.Run("yaml/history diff", func(t *testing.T) {
+		f := newHistFix9wwa(t)
+		f.write(t, "compose.yaml", "services:\n  app:\n    image: nginx\n")
+		f.commit(t, "seed")
+		f.register(t, "", "s", "")
+		f.write(t, "compose.yaml", compose)
+		h := f.commit(t, "edit")
+		setToken9wwa(t, f.svc, f.db, f.top, yamlTok)
+		res, err := f.svc.GetDiffMasked(f.top, h, []string{"unrelatedSECRET9"})
+		require.NoError(t, err)
+		checkYAML(t, res.Diff)
+	})
 }
 
 // #5 keep-green arms, each pinned by a boundary mutant.
@@ -629,6 +662,11 @@ func safeArg9wwa(a ast.Expr, safeCalls map[string]bool) bool {
 			}
 		}
 		if safeCalls[name] {
+			// redactToken(x, "") masks nothing: the second argument must be
+			// the credential's token.
+			if name == "redactToken" || name == "redactErr" || name == "redactAll" {
+				return len(a.Args) == 2 && isToken9wwa(a.Args[1])
+			}
 			return true
 		}
 		if name == "fmt.Sprintf" || name == "fmt.Errorf" {
@@ -647,6 +685,26 @@ func safeArg9wwa(a ast.Expr, safeCalls map[string]bool) bool {
 // an error, a value passed through redactToken/redactErr/redactAll, or one of
 // the listed values below, each with why it cannot hold repository text. A
 // new argument fails here until it is masked or listed.
+// isToken9wwa is cred.token, h.cred.token or a parameter named token.
+func isToken9wwa(e ast.Expr) bool {
+	switch e := e.(type) {
+	case *ast.Ident:
+		return e.Name == "token"
+	case *ast.SelectorExpr:
+		if e.Sel.Name != "token" {
+			return false
+		}
+		switch x := e.X.(type) {
+		case *ast.Ident:
+			return x.Name == "cred"
+		case *ast.SelectorExpr:
+			h, ok := x.X.(*ast.Ident)
+			return ok && h.Name == "h" && x.Sel.Name == "cred"
+		}
+	}
+	return false
+}
+
 func TestSinkArgsCensus9wwa(t *testing.T) {
 	const (
 		num      = "a number or a format Capstan wrote"
@@ -732,4 +790,36 @@ func TestSinkArgsCensus9wwa(t *testing.T) {
 	sort.Strings(wantNames)
 	assert.Equal(t, wantNames, gotNames,
 		"a sink in the raw-reading files takes a value that is neither masked nor listed: mask it with redactToken/redactErr BEFORE formatting, or list it with why it cannot hold repository text")
+}
+
+// Round 2: repoRel masks the token in a path it cannot place BEFORE
+// boundedPath quotes it. A past compose file that is a link to an absolute
+// path too long to resolve, holding a token that %q escapes, reaches the
+// history view's warning log through repoRel's error.
+func TestRepoRelMasksBeforeQuoting9wwa(t *testing.T) {
+	f := newHistFix9wwa(t)
+	target := filepath.Join(f.top, "l-"+quotedTok9wwa+strings.Repeat("a", 300), "c.yaml")
+	f.write(t, "x.txt", "x\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(f.top, "old"), 0o750))
+	require.NoError(t, os.Symlink(target, filepath.Join(f.top, "old", "compose.yaml")))
+	f.commit(t, "seed")
+	f.write(t, "x.txt", "PUBLIC\n")
+	h := f.commit(t, "edit")
+	require.NoError(t, os.RemoveAll(filepath.Join(f.top, "old")))
+	f.commit(t, "remove old stack")
+	setToken9wwa(t, f.svc, f.db, f.top, quotedTok9wwa)
+	var buf bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(old) })
+
+	res, err := f.svc.GetDiff(f.top, h)
+	out := buf.String()
+	if err != nil {
+		out += "\n" + err.Error()
+	} else {
+		out += "\n" + res.Diff
+	}
+	require.Contains(t, out, "l-", "control: the link's path reached a message")
+	requireNoToken9wwa(t, out, quotedTok9wwa, "the log or error")
 }
