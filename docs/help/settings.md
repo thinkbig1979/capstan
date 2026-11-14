@@ -103,6 +103,10 @@ Variables applied to every stack. Docker Compose loads them before a stack's own
   password) under any key. Reveal them by entering your password, which unlocks
   values for 5 minutes.
 - **A stack's own `.env` wins** when both define the same key.
+- **Some lines are read-only here.** A bare `KEY` (taken from the environment),
+  a `KEY: value` line, a line holding a second variable, and a multi-line value
+  are shown but cannot be edited on this page. Edit `global.env` directly, or
+  remove the row.
 
 ## Git
 

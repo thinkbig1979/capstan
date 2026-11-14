@@ -3,7 +3,7 @@ import { Input } from '@/components/ui/input'
 import { Eye, EyeOff, Trash2 } from 'lucide-react'
 import { isSensitiveKey } from '@/components/stack/env-editor/sensitiveKey'
 import type { EditableField, IndexedEnvVar } from './types'
-import { MultilineValue } from './MultilineValue'
+import { ReadOnlyValue } from './ReadOnlyValue'
 
 interface GlobalEnvCardsProps {
   hasVars: boolean
@@ -41,19 +41,20 @@ export function GlobalEnvCards({
           // (agent-os-ruuw); the name covers a key typed since the last load.
           const sensitive = entry.sensitive === true || isSensitiveKey(entry.key)
           const reveal = !!visible[index]
-          const multiline = entry.value.includes('\n')
+          // A line the server keeps verbatim (agent-os-jb5g), or a multi-line value.
+          const readOnly = entry.readOnly === true || entry.value.includes('\n')
           return (
             <div key={`mrow-${index}`} className="rounded-lg border p-4 space-y-3">
               <Input
                 value={entry.key}
                 onChange={(e) => onChange(index, 'key', e.target.value)}
                 placeholder="KEY"
-                disabled={multiline}
+                disabled={readOnly}
                 aria-label={`Global env key ${index + 1}`}
               />
               <div className="flex items-center gap-2">
-                {multiline ? (
-                  <MultilineValue value={entry.value} masked={sensitive && !reveal} />
+                {readOnly ? (
+                  <ReadOnlyValue value={entry.value} masked={sensitive && !reveal} />
                 ) : (
                   <Input
                     type={sensitive && !reveal ? 'password' : 'text'}

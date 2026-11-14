@@ -82,11 +82,17 @@ export interface EnvResponse {
  * key, or a secret-shaped value under any key. It is set on locked and
  * unlocked responses alike, so the page masks by it rather than by the key's
  * name alone.
+ * ReadOnly marks a line the page cannot write back as KEY=value without
+ * changing what compose reads (agent-os-jb5g): a bare KEY, KEY: value, a value
+ * followed by a second statement, or a multi-line value. The stack table shows
+ * the same lines read-only (EnvEntry.Comment with a key). A save refuses a
+ * changed value for one; it may still be deleted.
  */
 export interface GlobalEnvVar {
   key: string;
   value: string;
   sensitive?: boolean;
+  readOnly?: boolean;
 }
 /**
  * GlobalEnvResponse is the wire shape of GET /settings/global-env. Locked

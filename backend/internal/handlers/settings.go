@@ -313,7 +313,8 @@ func (h *SettingsHandler) GetGlobalEnv(c *gin.Context) {
 // globalEnvResponseVars is the global env page's rows over the file's text,
 // redacted for a locked session. Each row carries its flags whether locked or
 // not: Sensitive is the locked view's rule (agent-os-ruuw), taken from the
-// entries redacted as a locked GET redacts them, on a copy.
+// entries redacted as a locked GET redacts them, on a copy; ReadOnly is a line
+// the parser keeps verbatim (agent-os-jb5g).
 func globalEnvResponseVars(text string, locked bool) []GlobalEnvVar {
 	entries := (&EnvHandler{}).parseEnvFile(text)
 	vars, from := globalEnvVars(entries)
@@ -323,6 +324,7 @@ func globalEnvResponseVars(text string, locked bool) []GlobalEnvVar {
 	out := make([]GlobalEnvVar, len(vars))
 	for i, v := range vars {
 		out[i].Sensitive = globalEnvVarSensitive(redacted.Entries[from[i]], v)
+		out[i].ReadOnly = entries[from[i]].Comment
 	}
 
 	if locked {
@@ -515,7 +517,9 @@ func globalValueReadsAsOne(key, value string) bool {
 //     request row of a key to the n-th file row of it;
 //   - a matched row whose value is unchanged keeps its original line(s)
 //     byte for byte, so a read-only line (bare KEY, KEY: value) survives;
-//   - a changed row is written in place as KEY=value;
+//   - a changed row is written in place as KEY=value, except a read-only
+//     line (a multi-line value, bare KEY, KEY: value, a second statement),
+//     whose change is refused (agent-os-jb5g);
 //   - a file row no request row matches is removed, and a request row no file
 //     row matches is appended at the end (a renamed key therefore moves);
 //   - comments and blank lines stay where they are.
@@ -553,6 +557,13 @@ func mergeGlobalEnv(current string, req []EnvEntry) (string, error) {
 			// A=2 with the multi-line row and is refused too (review F2).
 			if strings.Contains(fileVars[q[0]]["value"], "\n") {
 				return "", fmt.Errorf("entry at index %d (key %q) is a multi-line value, which cannot be edited on this page; edit global.env directly", i, r.Key)
+			}
+			// Every other line the parser keeps verbatim (agent-os-jb5g)
+			// changes meaning as KEY=value: a bare KEY is inherited from the
+			// environment, and a second statement after a closing quote is
+			// a variable of its own.
+			if entries[from[q[0]]].Comment {
+				return "", fmt.Errorf("entry at index %d (key %q) is a read-only line (a bare KEY, KEY: value, or a second variable on its line), which cannot be edited on this page; edit global.env directly", i, r.Key)
 			}
 			continue
 		}

@@ -127,12 +127,14 @@ func TestGlobalEnvColon_MergeEditDeleteAppend(t *testing.T) {
 
 	w := putGlobalVars(t, router, []map[string]string{
 		{"key": "FOO", "value": ""},
-		{"key": "BAR", "value": "2"},
+		{"key": "BAR", "value": "1"},
 		{"key": "API_TOKEN", "value": "a=b"},
 		{"key": "NEW", "value": "n"},
 	})
 	require.Equal(t, http.StatusNoContent, w.Code, w.Body.String())
-	assert.Equal(t, "  FOO\nBAR=2\nAPI_TOKEN: a=b\nNEW=n\n", readGlobalEnvTestFile(t, p))
+	assert.Equal(t, "  FOO\nBAR: 1\nAPI_TOKEN: a=b\nNEW=n\n", readGlobalEnvTestFile(t, p))
+	// An edit of a read-only line is refused since agent-os-jb5g (it was
+	// written as BAR=2): settings_globalenv_jb5g_test.go.
 }
 
 // A changed or new value is still validated; an unchanged one is not.
@@ -221,22 +223,22 @@ func TestGlobalEnvColon_MultilineValueChangeRefused(t *testing.T) {
 
 // Review F1: the parser keys "export A=1" as "export A" (the key the page
 // shows and sends back) while compose's dotenv reads it as A, so the C4
-// re-read must look the value up under compose's key. Every export row is
-// edited; the 1c017b1 behaviour (before C4) is the expected output.
+// re-read must look the value up under compose's key. The export KEY=value
+// row is edited; "export B: 2" and "export C" are read-only lines since
+// agent-os-jb5g (they were written as B=x and C=x) and stay as they are.
 func TestGlobalEnvColon_ExportRowsEditable(t *testing.T) {
+	const kept = "export B: 2\nexport C\n"
 	dataDir, router := globalEnvTestRouter(t)
-	p := writeGlobalEnvFile(t, dataDir, "export A=1\nexport B: 2\nexport C\n")
+	p := writeGlobalEnvFile(t, dataDir, "export A=1\n"+kept)
 	vars, _ := getGlobalVars(t, router, "/unlocked")
 	require.Len(t, vars, 3)
-	for _, v := range vars {
-		v["value"] = "x"
-	}
+	vars[0]["value"] = "x"
 	w := putGlobalVars(t, router, vars)
 	require.Equal(t, http.StatusNoContent, w.Code, w.Body.String())
-	assert.Equal(t, "export A=x\nB=x\nC=x\n", readGlobalEnvTestFile(t, p))
+	assert.Equal(t, "export A=x\n"+kept, readGlobalEnvTestFile(t, p))
 
 	// The quote-shape refusal still holds for an export row.
-	w = putGlobalVars(t, router, []map[string]string{{"key": "export A", "value": `"open`}, {"key": "B", "value": "x"}, {"key": "C", "value": "x"}})
+	w = putGlobalVars(t, router, []map[string]string{{"key": "A", "value": `"open`}, vars[1], vars[2]})
 	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
-	assert.Equal(t, "export A=x\nB=x\nC=x\n", readGlobalEnvTestFile(t, p), "nothing written")
+	assert.Equal(t, "export A=x\n"+kept, readGlobalEnvTestFile(t, p), "nothing written")
 }

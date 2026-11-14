@@ -4,7 +4,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Eye, EyeOff, Trash2 } from 'lucide-react'
 import { isSensitiveKey } from '@/components/stack/env-editor/sensitiveKey'
 import type { EditableField, IndexedEnvVar } from './types'
-import { MultilineValue } from './MultilineValue'
+import { ReadOnlyValue } from './ReadOnlyValue'
 
 /** The single source of truth for this table's width: the header cells and the
  * spanning row's colSpan both derive from it, so adding a column cannot leave
@@ -64,7 +64,8 @@ export function GlobalEnvTable({
               // (agent-os-ruuw); the name covers a key typed since the last load.
               const sensitive = entry.sensitive === true || isSensitiveKey(entry.key)
               const reveal = !!visible[index]
-              const multiline = entry.value.includes('\n')
+              // A line the server keeps verbatim (agent-os-jb5g), or a multi-line value.
+              const readOnly = entry.readOnly === true || entry.value.includes('\n')
               return (
                 <TableRow key={`row-${index}`}>
                   <TableCell>
@@ -72,14 +73,14 @@ export function GlobalEnvTable({
                       value={entry.key}
                       onChange={(e) => onChange(index, 'key', e.target.value)}
                       placeholder="KEY"
-                      disabled={multiline}
+                      disabled={readOnly}
                       aria-label={`Global env key ${index + 1}`}
                     />
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-2">
-                      {multiline ? (
-                        <MultilineValue value={entry.value} masked={sensitive && !reveal} />
+                      {readOnly ? (
+                        <ReadOnlyValue value={entry.value} masked={sensitive && !reveal} />
                       ) : (
                         <Input
                           type={sensitive && !reveal ? 'password' : 'text'}
