@@ -5,11 +5,12 @@
  * EnvEditor.vqf5.test.tsx). Table mode only: the raw view is hydrated by the
  * same block in EnvEditor.tsx.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { screen, waitFor, fireEvent } from '@testing-library/react'
 import { QueryClient } from '@tanstack/react-query'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '../../../test/utils'
+import { useEnvUnlockStore } from '@/stores/envUnlockStore'
 
 type Payload = {
   hasEnvFile: true
@@ -61,6 +62,19 @@ vi.mock('sonner', () => ({
 import { EnvEditor } from '../EnvEditor'
 import { useGitPull } from '@/hooks/useGit'
 
+// The server answers locked exactly when the session holds no unlock token, so
+// the unlock store moves with every payload the mock serves, before it lands
+// (agent-os-wm7t): once a refetch has landed, an unlocked payload under a
+// locked store cannot happen. Between a lock and its refetch it can, and the
+// wm7t tests drive that window directly.
+function storeFollows<T extends object>(payload: T): T {
+  const locked = 'locked' in payload && payload.locked === true
+  const store = useEnvUnlockStore.getState()
+  if (locked && store.unlockedUntil !== null) store.lock()
+  else if (!locked && store.unlockedUntil === null) store.unlock('tok')
+  return payload
+}
+
 const NOTICE = 'This file changed on disk. Reload to see the new version; saving now overwrites it.'
 
 function EditorWithPull() {
@@ -103,12 +117,16 @@ async function pullTo(next: Payload) {
 beforeEach(() => {
   vi.clearAllMocks()
   disk = envFile('8080')
-  mockGetEnv.mockImplementation(() => Promise.resolve(disk))
+  mockGetEnv.mockImplementation(() => Promise.resolve(storeFollows(disk)))
   mockUpdateEnv.mockImplementation((_id: string, body: { entries?: Array<{ value: string }> }) => {
     disk = envFile(body.entries?.[0]?.value ?? '')
     return Promise.resolve({ outcome: 'success', reason: 'Saved' })
   })
   mockGitPull.mockResolvedValue({ outcome: 'success', reason: 'Pulled' })
+})
+
+afterEach(() => {
+  useEnvUnlockStore.getState().lock()
 })
 
 describe('EnvEditor after a git pull (agent-os-umig)', () => {

@@ -1,7 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '../../../test/utils'
+import { useAuthStore } from '@/stores/authStore'
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 
@@ -44,8 +45,15 @@ const baseEnvData = {
 // ─── Suite ───────────────────────────────────────────────────────────────────
 
 describe('EnvEditor', () => {
+  // No auth, so no unlock window: the payload is never locked and the Raw tab
+  // is always there (agent-os-wm7t).
   beforeEach(() => {
     vi.clearAllMocks()
+    useAuthStore.setState({ authDisabled: true })
+  })
+
+  afterEach(() => {
+    useAuthStore.setState({ authDisabled: false })
   })
 
   // ── Existing behaviour (regression) ──────────────────────────────────────

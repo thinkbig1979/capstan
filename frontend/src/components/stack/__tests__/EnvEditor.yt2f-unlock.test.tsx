@@ -39,6 +39,19 @@ vi.mock('sonner', () => ({
 
 import { EnvEditor } from '../EnvEditor'
 
+// The server answers locked exactly when the session holds no unlock token, so
+// the unlock store moves with every payload the mock serves, before it lands
+// (agent-os-wm7t): once a refetch has landed, an unlocked payload under a
+// locked store cannot happen. Between a lock and its refetch it can, and the
+// wm7t tests drive that window directly.
+function storeFollows<T extends object>(payload: T): T {
+  const locked = 'locked' in payload && payload.locked === true
+  const store = useEnvUnlockStore.getState()
+  if (locked && store.unlockedUntil !== null) store.lock()
+  else if (!locked && store.unlockedUntil === null) store.unlock('tok')
+  return payload
+}
+
 // PORT=8080 / #OLD_SECRET=commentedvalue / SSH_KEY="-----BEGIN / bodylineAAAA / -----END" / TZ=UTC
 const pemUnlocked = {"hasEnvFile":true,"filename":".env","entries":[{"key":"PORT","value":"8080","line":1,"sensitive":false},{"key":"","value":"#OLD_SECRET=commentedvalue","line":2,"sensitive":false,"comment":true},{"key":"SSH_KEY","value":"\"-----BEGIN","line":3,"sensitive":true},{"key":"bodylineAAAA","value":"bodylineAAAA","line":4,"sensitive":false,"comment":true},{"key":"","value":"-----END\"","line":5,"sensitive":false,"comment":true},{"key":"TZ","value":"UTC","line":6,"sensitive":false}],"raw":"PORT=8080\n#OLD_SECRET=commentedvalue\nSSH_KEY=\"-----BEGIN\nbodylineAAAA\n-----END\"\nTZ=UTC\n"}
 const pemLocked = {"hasEnvFile":true,"filename":".env","entries":[{"key":"PORT","value":"8080","line":1,"sensitive":false},{"key":"","value":"#OLD_SECRET=","line":2,"sensitive":true,"comment":true},{"key":"SSH_KEY","value":"","line":3,"sensitive":true},{"key":"","value":"","line":4,"sensitive":true,"comment":true},{"key":"","value":"","line":5,"sensitive":true,"comment":true},{"key":"TZ","value":"UTC","line":6,"sensitive":false}],"locked":true}
@@ -126,7 +139,7 @@ beforeEach(() => {
   act(() => useEnvUnlockStore.getState().lock())
   useAuthStore.setState({ authDisabled: false })
   server = pemUnlocked
-  mockGetEnv.mockImplementation(() => Promise.resolve(server))
+  mockGetEnv.mockImplementation(() => Promise.resolve(storeFollows(server)))
   mockUpdateEnv.mockResolvedValue({ outcome: 'success', reason: 'Saved' })
 })
 

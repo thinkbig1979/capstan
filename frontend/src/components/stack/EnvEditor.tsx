@@ -256,7 +256,11 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   const locked = envData?.hasEnvFile === true && envData.locked === true
   // The Raw tab and its view go away while locked. Showing the table then keeps
   // the edits the user kept visible, whichever view the lock found them in.
-  const activeView = locked ? 'table' : view
+  // The unlock store counts too: after a lock the last payload is still the
+  // unlocked one until the lock's refetch lands, and for good if it fails, so
+  // the payload alone would leave the whole file on screen (agent-os-wm7t).
+  const rawHidden = locked || (!authDisabled && unlockedUntil === null)
+  const activeView = rawHidden ? 'table' : view
 
   const refusal = saveRefused
     ? 'unaligned'
@@ -333,7 +337,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
         onUndo={handleUndo}
         onRedo={handleRedo}
         hasUnsavedChanges={hasUnsavedChanges}
-        locked={locked}
+        locked={rawHidden}
       />
       <EnvUnlockDialog
         open={unlockDialogOpen}
@@ -382,7 +386,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
         saveRefused={refusal !== null}
       />
 
-      {view === 'raw' && !locked && (
+      {view === 'raw' && !rawHidden && (
         <EnvRawView
           rawContent={rawContent}
           onRawChange={handleRawChange}

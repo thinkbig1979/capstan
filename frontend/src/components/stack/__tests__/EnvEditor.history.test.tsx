@@ -5,10 +5,11 @@
  * raw-textarea editing, the history dedup guard (identical states collapse
  * into one step), and the exact payload shape posted on raw-view save.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { screen, waitFor, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '../../../test/utils'
+import { useAuthStore } from '@/stores/authStore'
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 
@@ -53,8 +54,15 @@ function getRedoButton() {
 }
 
 describe('EnvEditor undo/redo history', () => {
+  // No auth, so no unlock window: the payload is never locked and the Raw tab
+  // is always there (agent-os-wm7t).
   beforeEach(() => {
     vi.clearAllMocks()
+    useAuthStore.setState({ authDisabled: true })
+  })
+
+  afterEach(() => {
+    useAuthStore.setState({ authDisabled: false })
   })
 
   it('Undo and Redo are both disabled immediately after load (single history entry)', async () => {

@@ -32,6 +32,19 @@ vi.mock('sonner', () => ({
 
 import { EnvEditor } from '../EnvEditor'
 
+// The server answers locked exactly when the session holds no unlock token, so
+// the unlock store moves with every payload the mock serves, before it lands
+// (agent-os-wm7t): once a refetch has landed, an unlocked payload under a
+// locked store cannot happen. Between a lock and its refetch it can, and the
+// wm7t tests drive that window directly.
+function storeFollows<T extends object>(payload: T): T {
+  const locked = 'locked' in payload && payload.locked === true
+  const store = useEnvUnlockStore.getState()
+  if (locked && store.unlockedUntil !== null) store.lock()
+  else if (!locked && store.unlockedUntil === null) store.unlock('tok')
+  return payload
+}
+
 const lockedPayload = {
   hasEnvFile: true,
   filename: '.env',
@@ -83,7 +96,7 @@ beforeEach(() => {
   act(() => useEnvUnlockStore.getState().lock())
   useAuthStore.setState({ authDisabled: false })
   server = unlockedPayload
-  mockGetEnv.mockImplementation(() => Promise.resolve(server))
+  mockGetEnv.mockImplementation(() => Promise.resolve(storeFollows(server)))
   mockUpdateEnv.mockResolvedValue({ outcome: 'success', reason: 'Saved' })
 })
 
