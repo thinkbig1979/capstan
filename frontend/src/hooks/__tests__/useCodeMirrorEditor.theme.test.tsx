@@ -17,6 +17,7 @@ import { useState } from 'react'
 import { EditorView } from 'codemirror'
 import { renderWithProviders } from '../../test/utils'
 import { useUIStore } from '@/stores/uiStore'
+import { useAuthStore } from '@/stores/authStore'
 
 const SAVED = 'services:\n  web:\n    image: nginx\n'
 const EDITED = 'services:\n  web:\n    image: nginx:edited\n'
@@ -57,12 +58,17 @@ function replaceDoc(view: EditorView, text: string) {
 }
 
 describe('theme change keeps the live editor (agent-os-z91e.41)', () => {
+  // No unlock window in these tests: with auth on, a payload served unlocked
+  // while the unlock store is locked cannot happen, and the editor would hide it
+  // (agent-os-xz6h).
   beforeEach(() => {
     vi.clearAllMocks()
+    useAuthStore.setState({ authDisabled: true })
     act(() => useUIStore.getState().setTheme('light'))
   })
 
   afterEach(() => {
+    useAuthStore.setState({ authDisabled: false })
     act(() => useUIStore.getState().setTheme('light'))
   })
 

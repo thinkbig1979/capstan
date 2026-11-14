@@ -6,7 +6,8 @@
  *   - success path: only updateComposeAndEnv is called once (atomic, correct body)
  *   - 404 fallback path: env PUT fires BEFORE compose PUT (safe ordering)
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { useAuthStore } from '@/stores/authStore'
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '../../../test/utils'
@@ -89,6 +90,16 @@ vi.mock('sonner', () => ({
 // ─── Imports that must come after mocks ──────────────────────────────────────
 
 import { ComposeEditor } from '../ComposeEditor'
+
+// No unlock window in these tests: with auth on, a payload served unlocked
+// while the unlock store is locked cannot happen, and the editor would hide it
+// (agent-os-xz6h).
+beforeEach(() => {
+  useAuthStore.setState({ authDisabled: true })
+})
+afterEach(() => {
+  useAuthStore.setState({ authDisabled: false })
+})
 import { toast } from 'sonner'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

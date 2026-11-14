@@ -5,7 +5,8 @@
  *
  * useCodeMirrorEditor is mocked as in ComposeEditor.locked-w6wx.test.tsx.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { useEnvUnlockStore } from '@/stores/envUnlockStore'
 import { act, fireEvent, screen, waitFor } from '@testing-library/react'
 import { QueryClient } from '@tanstack/react-query'
 import { useEffect, useRef } from 'react'
@@ -67,6 +68,23 @@ vi.mock('sonner', () => ({ toast: toastMocks }))
 
 import { ComposeEditor } from '../ComposeEditor'
 
+// The server answers locked exactly when the session holds no unlock token, so
+// the unlock store moves with every payload the mock serves, before it lands
+// (agent-os-xz6h): once a refetch has landed, an unlocked payload under a
+// locked store cannot happen. Between a lock and its refetch it can, and the
+// xz6h tests drive that window directly.
+function storeFollows<T extends object>(payload: T): T {
+  const locked = 'locked' in payload && payload.locked === true
+  const store = useEnvUnlockStore.getState()
+  if (locked && store.unlockedUntil !== null) store.lock()
+  else if (!locked && store.unlockedUntil === null) store.unlock('tok')
+  return payload
+}
+
+afterEach(() => {
+  useEnvUnlockStore.getState().lock()
+})
+
 const REAL = 'services:\n  db:\n    environment:\n      POSTGRES_PASSWORD: hunter2\n'
 const MASKED = 'services:\n  db:\n    environment:\n      POSTGRES_PASSWORD: ***\n'
 const EDITED = 'services:\n  db:\n    image: postgres:17\n    environment:\n      POSTGRES_PASSWORD: hunter2\n'
@@ -85,7 +103,7 @@ beforeEach(() => {
   capturedOnChange = undefined
   capturedOnSave = undefined
   lastReadOnly = undefined
-  mockGetCompose.mockImplementation(() => Promise.resolve({ ...disk, locked: disk.maskedValues > 0 }))
+  mockGetCompose.mockImplementation(() => Promise.resolve(storeFollows({ ...disk, locked: disk.maskedValues > 0 })))
   mockLintCompose.mockResolvedValue({ valid: true, lintResults: [] })
 })
 

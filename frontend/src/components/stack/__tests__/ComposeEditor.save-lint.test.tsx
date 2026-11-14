@@ -16,7 +16,8 @@
  * trigger it by invoking the captured onSave callback directly, mirroring the
  * withSelection pattern already used in ComposeEditor.b4.test.tsx for onSelect.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { useAuthStore } from '@/stores/authStore'
 import { act, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '../../../test/utils'
@@ -87,6 +88,16 @@ vi.mock('sonner', () => ({
 }))
 
 import { ComposeEditor } from '../ComposeEditor'
+
+// No unlock window in these tests: with auth on, a payload served unlocked
+// while the unlock store is locked cannot happen, and the editor would hide it
+// (agent-os-xz6h).
+beforeEach(() => {
+  useAuthStore.setState({ authDisabled: true })
+})
+afterEach(() => {
+  useAuthStore.setState({ authDisabled: false })
+})
 import { toast } from 'sonner'
 
 async function triggerCtrlSSave() {

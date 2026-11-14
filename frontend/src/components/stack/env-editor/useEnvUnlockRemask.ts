@@ -54,7 +54,10 @@ export function useEnvUnlockRemask(
       const remask = (rows: EnvEntryRow[]) => {
         let changed = false
         const next = rows.map((e) => {
-          if (!e.sensitive && (isSensitiveKey(e.key) || masked.has(e._rowId))) {
+          // Every comment row too: the server flags a multi-line secret's body
+          // rows and a commented-out secret only in the payload it redacts, so
+          // rows kept from an unlocked payload carry no flag (agent-os-y6e8).
+          if (!e.sensitive && (e.comment === true || isSensitiveKey(e.key) || masked.has(e._rowId))) {
             changed = true
             return { ...e, sensitive: true }
           }
