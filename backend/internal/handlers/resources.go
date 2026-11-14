@@ -20,6 +20,7 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
+	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
 
 // updateScanner is the narrow seam checkUpdates needs from a scheduler: start
@@ -136,6 +137,20 @@ type ResourcesHandler struct {
 	hostSpace hostSpaceService
 	// pruneScope is docker, seen through volumePruneScoper; nil means use docker.
 	pruneScope volumePruneScoper
+	// statusReader is docker, seen through services.StackStatusReader; nil
+	// means use docker. The single-container actions re-read the owning
+	// stack through it (agent-os-nyt5).
+	statusReader services.StackStatusReader
+}
+
+// statusReaderSeam is the injected reader in tests, else docker. A nil
+// *DockerService boxed here is fine: Status answers ErrDockerUnavailable on a
+// nil receiver.
+func (h *ResourcesHandler) statusReaderSeam() services.StackStatusReader {
+	if h.statusReader != nil {
+		return h.statusReader
+	}
+	return h.docker
 }
 
 // SetOperationLock installs the per-stack operation lock shared with the
@@ -266,38 +281,59 @@ func (h *ResourcesHandler) listContainers(c *gin.Context) {
 // (which stops the stack), a restore or a compose up on it (agent-os-w1cj).
 // The owner is found the way updateContainer finds it: the container's compose
 // project label, looked up in the stacks table. A container with no label, or
-// whose project no stack here manages, takes no lock.
+// whose project no stack here manages, takes no lock and returns a nil stack.
+// The stack returned is the one whose status the action stores
+// (storeContainerStackStatus).
 //
 // On ok=false the response is written: dockerFail renders an inspect error the
 // way the action renders its own Docker error, a busy stack answers 409, and a
 // stacks table that cannot be read answers 500, because managed and standalone
 // are then indistinguishable and acting unlocked is the unsafe guess.
-func (h *ResourcesHandler) lockContainerStack(c *gin.Context, id string, dockerFail func(error)) (release func(), ok bool) {
+func (h *ResourcesHandler) lockContainerStack(c *gin.Context, id string, dockerFail func(error)) (release func(), stack *models.Stack, ok bool) {
 	inspect, err := h.containerOps.InspectContainer(c.Request.Context(), id)
 	if err != nil {
 		dockerFail(err)
-		return nil, false
+		return nil, nil, false
 	}
 	projectName := ""
 	if inspect.Config != nil {
 		projectName = inspect.Config.Labels["com.docker.compose.project"]
 	}
 	if projectName == "" {
-		return func() {}, true
+		return func() {}, nil, true
 	}
-	stack, err := h.db.GetStackByProjectName(projectName)
+	owner, err := h.db.GetStackByProjectName(projectName)
 	switch {
 	case errors.Is(err, errdefs.ErrNotFound):
-		return func() {}, true
+		return func() {}, nil, true
 	case errors.Is(err, errdefs.ErrAmbiguous):
 		refuseAmbiguousStack(c, err)
-		return nil, false
+		return nil, nil, false
 	case err != nil:
 		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR",
 			"Failed to look up the stack that owns this container", err))
-		return nil, false
+		return nil, nil, false
 	}
-	return acquireStackLock(c, h.opLock, stack.ID, services.OpKindContainer)
+	release, ok = acquireStackLock(c, h.opLock, owner.ID, services.OpKindContainer)
+	if !ok {
+		return nil, nil, false
+	}
+	return release, owner, true
+}
+
+// storeContainerStackStatus stores the owning stack's status as Docker
+// reports it after a single-container action (agent-os-nyt5), under the
+// stack's lock the caller still holds. The stack is re-read rather than the
+// action's result mapped: one container stopped is not the whole stack
+// stopped. err is the action's error; a failed action is stored too, since a
+// stop or restart that failed can still have changed what runs, and
+// ErrDockerUnavailable stores nothing. A nil stack (a container no managed
+// stack owns) stores nothing.
+func (h *ResourcesHandler) storeContainerStackStatus(stack *models.Stack, err error) {
+	if stack == nil {
+		return
+	}
+	services.StoreObservedStackStatus(h.db, h.statusReaderSeam(), *stack, truth.ActionResult{Err: err})
 }
 
 // refuseAmbiguousStack answers 409 AMBIGUOUS_STACK for a container whose
@@ -315,12 +351,14 @@ func (h *ResourcesHandler) startContainer(c *gin.Context) {
 		slog.Error("Failed to start container", "id", id, "error", err)
 		respondDockerErr(c, err, http.StatusInternalServerError, "DOCKER_OPERATION", "Failed to start container")
 	}
-	release, ok := h.lockContainerStack(c, id, fail)
+	release, stack, ok := h.lockContainerStack(c, id, fail)
 	if !ok {
 		return
 	}
 	defer release()
-	if err := h.containerOps.StartContainer(c.Request.Context(), id); err != nil {
+	err := h.containerOps.StartContainer(c.Request.Context(), id)
+	h.storeContainerStackStatus(stack, err)
+	if err != nil {
 		fail(err)
 		return
 	}
@@ -334,12 +372,14 @@ func (h *ResourcesHandler) stopContainer(c *gin.Context) {
 		slog.Error("Failed to stop container", "id", id, "error", err)
 		respondDockerErr(c, err, http.StatusInternalServerError, "DOCKER_OPERATION", "Failed to stop container")
 	}
-	release, ok := h.lockContainerStack(c, id, fail)
+	release, stack, ok := h.lockContainerStack(c, id, fail)
 	if !ok {
 		return
 	}
 	defer release()
-	if err := h.containerOps.StopContainer(c.Request.Context(), id); err != nil {
+	err := h.containerOps.StopContainer(c.Request.Context(), id)
+	h.storeContainerStackStatus(stack, err)
+	if err != nil {
 		fail(err)
 		return
 	}
@@ -353,12 +393,14 @@ func (h *ResourcesHandler) restartContainer(c *gin.Context) {
 		slog.Error("Failed to restart container", "id", id, "error", err)
 		respondDockerErr(c, err, http.StatusInternalServerError, "DOCKER_OPERATION", "Failed to restart container")
 	}
-	release, ok := h.lockContainerStack(c, id, fail)
+	release, stack, ok := h.lockContainerStack(c, id, fail)
 	if !ok {
 		return
 	}
 	defer release()
-	if err := h.containerOps.RestartContainer(c.Request.Context(), id); err != nil {
+	err := h.containerOps.RestartContainer(c.Request.Context(), id)
+	h.storeContainerStackStatus(stack, err)
+	if err != nil {
 		fail(err)
 		return
 	}
