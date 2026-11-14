@@ -95,6 +95,13 @@ var olcnReviewCases = []struct{ name, content string }{
 	// not judge on its own: only the walk from MSG reaches the tail secret.
 	{"m4 sensitivity carried past a folded reopening row", "TZ=UTC\nMSG=\"x\nX='a\" N=\"c\nz'\nd\" API_TOKEN: 'e\nSEKRIT'\nB=1\n"},
 	{"commented plain opener over a plain opener", "# MSG=\"x\nNOTES=\"y\nb\" API_TOKEN: 'c\nSEKRIT'\nB=1\n"},
+	// Re-review (n2): the body's closing row is a body row too; its own
+	// "PRIVATE KEY-----" is what marks the body secret.
+	{"n2 key marker on the closing row", "CERT=\"x\nMIISEKRIT\n-----END PRIVATE KEY-----\" Z=1\nB=1\n"},
+	// Re-review (n5): pass 1 blanks NOTE's row, which sits inside
+	// DB_PASSWORD's body; pass 2 must still judge it, since the ' it opens
+	// runs over the key marker (base ec4a1d7 hid V's row this way).
+	{"n5 opener on a row pass 1 blanked", "DB_PASSWORD=\"a\nNOTE='b\nc\" Q=1\nW=\"-----BEGIN PRIVATE KEY-----\"\nV=MIISEKRIT\nY=\"x' Z=1\"\nB=1\n"},
 }
 
 func TestEnvLocked_olcn_ReviewCasesHiddenWhenLocked(t *testing.T) {
