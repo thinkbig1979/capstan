@@ -193,6 +193,10 @@ type SchedulerService struct {
 	// warned about once per process, not on every tick (agent-os-ygyv).
 	rekeyMu          sync.Mutex
 	unresolvedWarned map[string]bool
+	// setAsideLogged: the policies already logged at Info as waiting on a
+	// set-aside container, so the boot re-key's retries log them at Debug
+	// (agent-os-6w3x). Guarded by rekeyMu.
+	setAsideLogged map[string]bool
 
 	// closed is the terminal latch set by Close at process shutdown. Once set,
 	// Start and Restart refuse, so a settings save that lands during shutdown
@@ -1116,7 +1120,15 @@ func (s *SchedulerService) rekeyLegacyContainerPolicies(ctx context.Context) (co
 					// one whose final removal failed. Moving the row to that
 					// temporary name would match nothing once it is gone, and
 					// the row would no longer look like an ID to retry.
-					s.logger.Info("Container is set aside by an update; its auto-update policy is re-keyed on a later run",
+					level := slog.LevelDebug
+					if !s.setAsideLogged[p.ID] {
+						if s.setAsideLogged == nil {
+							s.setAsideLogged = map[string]bool{}
+						}
+						s.setAsideLogged[p.ID] = true
+						level = slog.LevelInfo
+					}
+					s.logger.Log(ctx, level, "Container is set aside by an update; its auto-update policy is re-keyed on a later run",
 						"policy_id", p.ID, "container_id", p.TargetID, "container_name", name)
 					completed = false
 					continue

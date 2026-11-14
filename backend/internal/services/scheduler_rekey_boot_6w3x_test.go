@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"sync"
 	"testing"
@@ -132,4 +133,83 @@ func TestBootRekeyAfterCloseStartsNothing_6w3x_ygyv(t *testing.T) {
 
 		require.Equal(t, 0, docker.callCount())
 	})
+}
+
+// newDiskScheduler6w3x is a scheduler over an on-disk database, so a second
+// raw connection (koy9Raw) can inject faults the *database.DB API cannot.
+func newDiskScheduler6w3x(t *testing.T, checker updateChecker) (*SchedulerService, *sql.DB) {
+	t.Helper()
+	db, dataDir := koy9HealthyDB(t)
+	return NewSchedulerService(checker, db, nil, nil), koy9Raw(t, dataDir)
+}
+
+func mustExec6w3x(t *testing.T, raw *sql.DB, stmt string) {
+	t.Helper()
+	_, err := raw.Exec(stmt)
+	require.NoError(t, err, stmt)
+}
+
+// TestBootRekeyRetriesWhatARunLeft_6w3x_ygyv: each way a run can leave a row
+// for later is retried by the boot re-key, which has no later scan to wait
+// for: a container set aside by an update, a failed read of the policies, a
+// failed re-key write. The fault clears before the first retry.
+func TestBootRekeyRetriesWhatARunLeft_6w3x_ygyv(t *testing.T) {
+	cases := []struct {
+		name         string
+		fault, clear func(t *testing.T, docker *ygyvDocker, raw *sql.DB)
+	}{
+		{
+			"container set aside by an update",
+			func(t *testing.T, d *ygyvDocker, _ *sql.DB) {
+				d.mu.Lock()
+				d.live[ygyvOldID] = "web" + oldContainerSuffix + "1"
+				d.mu.Unlock()
+			},
+			func(t *testing.T, d *ygyvDocker, _ *sql.DB) {
+				d.mu.Lock()
+				d.live[ygyvOldID] = "web"
+				d.mu.Unlock()
+			},
+		},
+		{
+			"policies cannot be read",
+			func(t *testing.T, _ *ygyvDocker, raw *sql.DB) {
+				mustExec6w3x(t, raw, `ALTER TABLE auto_update_policies RENAME TO auto_update_policies_6w3x`)
+			},
+			func(t *testing.T, _ *ygyvDocker, raw *sql.DB) {
+				mustExec6w3x(t, raw, `ALTER TABLE auto_update_policies_6w3x RENAME TO auto_update_policies`)
+			},
+		},
+		{
+			"re-key write fails",
+			func(t *testing.T, _ *ygyvDocker, raw *sql.DB) {
+				mustExec6w3x(t, raw, `CREATE TRIGGER fail_rekey_6w3x BEFORE UPDATE ON auto_update_policies
+					BEGIN SELECT RAISE(ABORT, '6w3x injected write fault'); END`)
+			},
+			func(t *testing.T, _ *ygyvDocker, raw *sql.DB) {
+				mustExec6w3x(t, raw, `DROP TRIGGER fail_rekey_6w3x`)
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				docker := &ygyvDocker{live: map[string]string{ygyvOldID: "web"}}
+				svc, raw := newDiskScheduler6w3x(t, docker)
+				seedYgyvPolicy(t, svc, "p-old", ygyvOldID, 0)
+				tc.fault(t, docker, raw)
+
+				svc.RekeyLegacyContainerPoliciesInBackground()
+				synctest.Wait()
+				tc.clear(t, docker, raw)
+				require.Contains(t, ygyvPolicies(t, svc), ygyvOldID, "the faulted run must leave the row")
+
+				time.Sleep(rekeyRetryFirst)
+				synctest.Wait()
+
+				requireKeyedByName6w3x(t, svc)
+				svc.Close()
+			})
+		})
+	}
 }
