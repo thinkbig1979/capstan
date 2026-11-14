@@ -12,7 +12,7 @@
  * A no_change job must NEVER render as "Updated".
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { screen } from '@testing-library/react'
+import { screen, fireEvent } from '@testing-library/react'
 import { renderWithProviders } from '../../../test/utils'
 import { UpdateJobStatusCell } from '../UpdateJobStatusCell'
 import type { UpdateJob } from '@/stores/updateJobStore'
@@ -181,6 +181,40 @@ describe('UpdateJobStatusCell — outcome=failed', () => {
     const job = makeJob({ status: 'error', outcome: 'failed', reason: 'pull error' })
     renderWithProviders(<UpdateJobStatusCell {...defaultProps} job={job} />)
     expect(screen.getByRole('button', { name: /Retry/i })).toBeInTheDocument()
+  })
+})
+
+// ─── Failed tooltip carries the cause (agent-os-64ll) ─────────────────────────
+
+// The backend sends a generic reason ("update apply failed") and the real cause
+// in error (handlers/updates.go returns ar.Err as the job error). The tooltip
+// used to show reason alone whenever it was set, so the cause never showed.
+describe('UpdateJobStatusCell — failed tooltip (agent-os-64ll)', () => {
+  const cause =
+    'not updated: the container was started with --rm (auto-remove), so stopping it for the update would make Docker delete its unnamed volumes (/data)'
+
+  async function tooltipText(job: UpdateJob, expanded: boolean): Promise<string> {
+    renderWithProviders(<UpdateJobStatusCell {...defaultProps} expanded={expanded} job={job} />)
+    fireEvent.focus(screen.getByText('Failed').parentElement as HTMLElement)
+    return (await screen.findByRole('tooltip')).textContent ?? ''
+  }
+
+  for (const expanded of [false, true]) {
+    it(`shows the reason and the cause (expanded=${expanded})`, async () => {
+      const job = makeJob({ status: 'error', outcome: 'failed', reason: 'update apply failed', error: cause })
+      const text = await tooltipText(job, expanded)
+      expect(text).toContain('update apply failed: ' + cause)
+    })
+  }
+
+  it('shows the reason alone when there is no error', async () => {
+    const job = makeJob({ status: 'error', outcome: 'failed', reason: 'manifest unknown' })
+    expect(await tooltipText(job, false)).toBe('manifest unknown')
+  })
+
+  it('shows the text once when error repeats the reason', async () => {
+    const job = makeJob({ status: 'error', outcome: 'failed', reason: 'compose up failed', error: 'compose up failed' })
+    expect(await tooltipText(job, false)).toBe('compose up failed')
   })
 })
 
