@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
+	"github.com/thinkbig1979/capstan/backend/internal/services"
 )
 
 // fakeStackStatusReader reports what Docker would say about the stack: "pre"
@@ -18,9 +19,14 @@ type fakeStackStatusReader struct {
 	mu     sync.Mutex
 	ops    *fakeContainerOps
 	stacks []string
+	// during runs inside Status, while the handler is storing.
+	during func()
 }
 
 func (r *fakeStackStatusReader) Status(stack models.Stack) (string, []models.Container, error) {
+	if r.during != nil {
+		r.during()
+	}
 	r.mu.Lock()
 	r.stacks = append(r.stacks, stack.ID)
 	r.mu.Unlock()
@@ -86,5 +92,33 @@ func TestContainerActions_UnmanagedStoreNoStatus_Nyt5(t *testing.T) {
 				assert.Equal(t, "running", stack.Status)
 			})
 		}
+	}
+}
+
+// TestContainerActions_StoreUnderStackLock_Nyt5: the stack is re-read and
+// stored while the action still holds the stack's lock, so a backup or
+// compose up cannot slip in between the action and the stored status.
+func TestContainerActions_StoreUnderStackLock_Nyt5(t *testing.T) {
+	for _, a := range containerActions("managed") {
+		t.Run(a.name, func(t *testing.T) {
+			h, lock, fake := newContainerLockFixture(t)
+			reader := &fakeStackStatusReader{ops: fake}
+			var heldErr error
+			reader.during = func() {
+				var token string
+				token, heldErr = lock.Acquire("s1", services.OpKindBackup)
+				if heldErr == nil {
+					lock.Release("s1", token)
+				}
+			}
+			h.statusReader = reader
+
+			w := doContainerAction(h, a)
+
+			require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+			require.Equal(t, []string{"s1"}, reader.reads())
+			require.Error(t, heldErr, "the stack's lock was free while its status was stored")
+			assert.Contains(t, heldErr.Error(), services.OpKindContainer+" in progress since")
+		})
 	}
 }
