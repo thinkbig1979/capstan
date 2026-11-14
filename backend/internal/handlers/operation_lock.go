@@ -148,7 +148,11 @@ func stacksSharingFiles(db stackLister, selfID string, paths []string) ([]models
 			// links is ELOOP to the kernel but followed by EvalSymlinks, and a
 			// loop in a parent folder or a file gone since the Stat are not this
 			// link's fault. Those stay the 500 below.
-			if li, lerr := os.Lstat(p); lerr == nil && li.Mode()&os.ModeSymlink != 0 {
+			li, lerr := os.Lstat(p)
+			if lerr != nil {
+				return nil, lerr
+			}
+			if li.Mode()&os.ModeSymlink != 0 {
 				if _, evalErr := filepath.EvalSymlinks(p); evalErr != nil && !errors.Is(evalErr, os.ErrNotExist) {
 					return nil, unfollowableLinkRefusal(filepath.Base(p), evalErr)
 				}
