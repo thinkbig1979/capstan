@@ -12,7 +12,7 @@ import {
   NO_REDACTED_ROWS,
 } from '@/lib/env-unlock-rebase'
 import { useNextRowId } from '@/components/stack/env-editor/useRowId'
-import type { EnvRow, EnvVar, IndexedEnvVar } from './types'
+import type { EditableField, EnvRow, EnvVar, IndexedEnvVar } from './types'
 
 /** The fields of a variable the locked view can hide, so an unlock can put them back. */
 const REDACTABLE_FIELDS = ['key', 'value'] as const
@@ -128,7 +128,7 @@ export function useGlobalEnvVars(setVisible: Dispatch<SetStateAction<Record<numb
   )
   const { query, setQuery, filtered } = useTextFilter(indexedVars, ENV_SEARCH_FIELDS)
 
-  const handleChange = (index: number, field: keyof EnvVar, value: string) => {
+  const handleChange = (index: number, field: EditableField, value: string) => {
     setVars((prev) => {
       const next = [...prev]
       next[index] = { ...next[index], [field]: value }

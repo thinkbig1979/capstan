@@ -302,21 +302,38 @@ func (h *SettingsHandler) GetGlobalEnv(c *gin.Context) {
 		))
 		return
 	}
-	envVars := parseGlobalEnvText(string(data))
-
 	// Same second factor as the per-stack .env surface: without a live unlock
 	// token, secret-looking values are blanked. Global env routinely holds the
 	// credentials every stack shares, so leaving it ungated would just move the
 	// hole one endpoint sideways.
 	locked := !envUnlocked(c)
-	if locked {
-		redactGlobalEnvVars(envVars, string(data))
+	c.JSON(http.StatusOK, GlobalEnvResponse{Vars: globalEnvResponseVars(string(data), locked), Locked: locked})
+}
+
+// globalEnvResponseVars is the global env page's rows over the file's text,
+// redacted for a locked session. Each row carries its flags whether locked or
+// not: Sensitive is the locked view's rule (agent-os-ruuw), taken from the
+// entries redacted as a locked GET redacts them, on a copy; ReadOnly is a line
+// the parser keeps verbatim (agent-os-jb5g).
+func globalEnvResponseVars(text string, locked bool) []GlobalEnvVar {
+	entries := (&EnvHandler{}).parseEnvFile(text)
+	vars, from := globalEnvVars(entries)
+
+	redacted := EnvResponse{Raw: text, Entries: slices.Clone(entries)}
+	redactEnvResponse(&redacted)
+	out := make([]GlobalEnvVar, len(vars))
+	for i, v := range vars {
+		out[i].Sensitive = globalEnvVarSensitive(redacted.Entries[from[i]], v)
+		out[i].ReadOnly = entries[from[i]].Comment
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"vars":   envVars,
-		"locked": locked,
-	})
+	if locked {
+		redactGlobalEnvVars(vars, text)
+	}
+	for i, v := range vars {
+		out[i].Key, out[i].Value = v["key"], v["value"]
+	}
+	return out
 }
 
 func (h *SettingsHandler) UpdateGlobalEnv(c *gin.Context) {
@@ -496,11 +513,14 @@ func globalValueReadsAsOne(key, value string) bool {
 // mergeGlobalEnv applies a save of the global env page's rows to the file's
 // current text (agent-os-rd1l, agent-os-jx88). The page sends variables only,
 // so the file is the source for everything else:
-//   - a request row is matched to the file's row with the same key, the n-th
-//     request row of a key to the n-th file row of it;
+//   - a request row is matched to a file row with the same key: a read-only
+//     line only to a request row equal to it, the other rows of a key in
+//     order (the n-th request row to the n-th file row);
 //   - a matched row whose value is unchanged keeps its original line(s)
 //     byte for byte, so a read-only line (bare KEY, KEY: value) survives;
-//   - a changed row is written in place as KEY=value;
+//   - a changed row is written in place as KEY=value, except a read-only
+//     line (a multi-line value, bare KEY, KEY: value, a second statement),
+//     whose change is refused (agent-os-jb5g);
 //   - a file row no request row matches is removed, and a request row no file
 //     row matches is appended at the end (a renamed key therefore moves);
 //   - comments and blank lines stay where they are.
@@ -509,6 +529,14 @@ func globalValueReadsAsOne(key, value string) bool {
 // (validateEnvEntries, by request index); an unchanged row is the file's own
 // text and is not.
 func mergeGlobalEnv(current string, req []EnvEntry) (string, error) {
+	// A key typed as "export FOO" is the variable FOO to compose, written
+	// with its prefix (agent-os-ale2), as the stack table writes it.
+	req = slices.Clone(req)
+	for i := range req {
+		if loc := exportPrefix.FindStringIndex(req[i].Key); loc != nil {
+			req[i].Key, req[i].Export = req[i].Key[loc[1]:], true
+		}
+	}
 	entries := (&EnvHandler{}).parseEnvFile(current)
 	fileVars, from := globalEnvVars(entries)
 
@@ -524,20 +552,37 @@ func mergeGlobalEnv(current string, req []EnvEntry) (string, error) {
 			continue // a blank row, as serializeEnvFile has always treated it
 		}
 		if q := pending[r.Key]; r.Key != "" && len(q) > 0 {
-			pending[r.Key] = q[1:]
-			matched[q[0]] = i + 1
-			if r.Value == fileVars[q[0]]["value"] {
+			// A read-only line cannot change, so it pairs only with a row
+			// equal to it; other rows of the key pair in order (review F1:
+			// by position alone, deleting A=1 above a bare A wrote the kept
+			// A as "A=" and dropped the bare A). With no editable row left,
+			// the first read-only one takes the row, and its change is
+			// refused below.
+			pick := slices.IndexFunc(q, func(j int) bool {
+				return entries[from[j]].Comment && fileVars[j]["value"] == r.Value
+			})
+			if pick == -1 {
+				pick = max(0, slices.IndexFunc(q, func(j int) bool { return !entries[from[j]].Comment }))
+			}
+			j := q[pick]
+			pending[r.Key] = slices.Delete(slices.Clone(q), pick, pick+1)
+			matched[j] = i + 1
+			if r.Value == fileVars[j]["value"] {
 				toCheck[i] = EnvEntry{}
 				continue
 			}
 			// The page edits a value in a one-line field, which drops the
 			// line breaks of a multi-line value (review C2): an edit of one
 			// would rewrite it as a different value, and add variables.
-			// Rows of one key match in order, so deleting the multi-line
-			// copy of a duplicated key (A="x\ny" then A=2) pairs the kept
-			// A=2 with the multi-line row and is refused too (review F2).
-			if strings.Contains(fileVars[q[0]]["value"], "\n") {
+			if strings.Contains(fileVars[j]["value"], "\n") {
 				return "", fmt.Errorf("entry at index %d (key %q) is a multi-line value, which cannot be edited on this page; edit global.env directly", i, r.Key)
+			}
+			// Every other line the parser keeps verbatim (agent-os-jb5g)
+			// changes meaning as KEY=value: a bare KEY is inherited from the
+			// environment, and a second statement after a closing quote is
+			// a variable of its own.
+			if entries[from[j]].Comment {
+				return "", fmt.Errorf("entry at index %d (key %q) is a read-only line (a bare KEY, KEY: value, or a second variable on its line), which cannot be edited on this page; edit global.env directly", i, r.Key)
 			}
 			continue
 		}
@@ -554,13 +599,21 @@ func mergeGlobalEnv(current string, req []EnvEntry) (string, error) {
 		if e.Key == "" {
 			continue
 		}
+		// A key is one word after an optional "export " (review F5):
+		// "export export FOO" or "MY KEY" otherwise reached the quotes
+		// message below.
+		if strings.ContainsAny(e.Key, " \t") {
+			return "", fmt.Errorf("entry at index %d (key %q) has a space in its key; a key is one word, optionally after \"export \"", i, e.Key)
+		}
 		if !globalValueReadsAsOne(e.Key, e.Value) {
 			return "", fmt.Errorf("entry at index %d (key %q) has a value whose quotes or comment do not read back as that one variable; check its quotes", i, e.Key)
 		}
 	}
 
 	// Each entry's original text: its line, or for a value spanning lines,
-	// every line up to the next entry. The raw split keeps a "\r".
+	// every line up to the next entry. The raw split keeps a "\r". A written
+	// row takes the file's line ending (agent-os-ale2).
+	eol := fileEOL(current)
 	rawLines := strings.Split(current, "\n")
 	lineCount := len(envLines(current))
 	varOf := make(map[int]int, len(from))
@@ -580,25 +633,32 @@ func mergeGlobalEnv(current string, req []EnvEntry) (string, error) {
 		case isVar && matched[j] == 0:
 			continue // removed on the page
 		case isVar && req[matched[j]-1].Value != fileVars[j]["value"]:
-			b.WriteString(serializeEnvFile([]EnvEntry{{Key: e.Key, Value: req[matched[j]-1].Value, Export: e.Export}}))
+			r := req[matched[j]-1]
+			b.WriteString(strings.ReplaceAll(serializeEnvFile([]EnvEntry{{Key: e.Key, Value: r.Value, Export: e.Export || r.Export}}), "\n", eol))
 			endsVerbatim = false
 		default:
-			for _, l := range rawLines[e.Line-1 : end] {
-				b.WriteString(l)
-				b.WriteString("\n")
+			for i := e.Line - 1; i < end; i++ {
+				b.WriteString(rawLines[i])
+				// A line keeps its own "\r"; the file's last line has no end
+				// of its own and takes the file's.
+				if i == len(rawLines)-1 {
+					b.WriteString(eol)
+				} else {
+					b.WriteString("\n")
+				}
 			}
 			endsVerbatim = end == lineCount
 		}
 	}
 	added = slices.DeleteFunc(added, func(e EnvEntry) bool { return e.Key == "" && e.Value == "" })
 	if len(added) > 0 {
-		b.WriteString(serializeEnvFile(added))
+		b.WriteString(strings.ReplaceAll(serializeEnvFile(added), "\n", eol))
 		endsVerbatim = false
 	}
 	out := b.String()
 	// An unchanged last line keeps the file's missing final newline too.
 	if endsVerbatim && !strings.HasSuffix(current, "\n") {
-		out = strings.TrimSuffix(out, "\n")
+		out = strings.TrimSuffix(out, eol)
 	}
 	return out, nil
 }

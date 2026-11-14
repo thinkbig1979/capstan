@@ -76,6 +76,36 @@ export interface EnvResponse {
   locked?: boolean;
 }
 /**
+ * GlobalEnvVar is one variable of GET /settings/global-env. Value is the text
+ * compose reads after the separator, quotes and an inline comment included.
+ * Sensitive marks a value the locked view blanks (agent-os-ruuw): a secret
+ * key, or a secret-shaped value under any key. It is set on locked and
+ * unlocked responses alike, so the page masks by it rather than by the key's
+ * name alone.
+ * ReadOnly marks a line the page cannot write back as KEY=value without
+ * changing what compose reads (agent-os-jb5g): a bare KEY, KEY: value, a value
+ * followed by a second statement, or a multi-line value. The stack table shows
+ * the same lines read-only (EnvEntry.Comment with a key). A save refuses a
+ * changed value for one; it may still be deleted, which removes the whole
+ * line: deleting NOTES of `NOTES="a" OTHER=b` removes OTHER too. Among rows
+ * of one key, a read-only line pairs only with a request row equal to it.
+ */
+export interface GlobalEnvVar {
+  key: string;
+  value: string;
+  sensitive?: boolean;
+  readOnly?: boolean;
+}
+/**
+ * GlobalEnvResponse is the wire shape of GET /settings/global-env. Locked
+ * means the session has not re-entered its password and sensitive values are
+ * blanked.
+ */
+export interface GlobalEnvResponse {
+  vars: GlobalEnvVar[];
+  locked: boolean;
+}
+/**
  * BuildCacheEntry is our own wire representation of a Docker build-cache
  * record.
  * The endpoint used to serialize build.CacheRecord from the Docker SDK

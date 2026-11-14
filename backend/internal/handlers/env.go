@@ -391,7 +391,7 @@ func redactGlobalEnvVars(vars []map[string]string, raw string) {
 		switch {
 		case !ok:
 			v["key"], v["value"] = "", ""
-		case resp.Entries[from[i]].Sensitive || services.IsSensitiveEnvVar(v["key"], v["value"]):
+		case globalEnvVarSensitive(resp.Entries[from[i]], v):
 			v["key"], v["value"] = red["key"], ""
 		default:
 			v["key"], v["value"] = red["key"], red["value"]
@@ -1122,10 +1122,7 @@ func closingQuote(s string, q byte) (idx int, trailingEscape bool) {
 // state. A row only matches when it is the same row, so a file changed since
 // the client read it falls back to the request's rows.
 func serializeEnvFileOver(current string, entries []EnvEntry) string {
-	eol := "\n"
-	if i := strings.IndexByte(current, '\n'); i > 0 && current[i-1] == '\r' {
-		eol = "\r\n"
-	}
+	eol := fileEOL(current)
 
 	// Each file row's original text: its line, or for a value spanning
 	// lines, every line up to the next row. The raw split keeps a "\r".

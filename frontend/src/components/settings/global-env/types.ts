@@ -1,4 +1,10 @@
-export type EnvVar = { key: string; value: string }
+import type { GlobalEnvVar } from '@/types/generated-handlers'
+
+/** A row as the server sends it: key, value and its flags (agent-os-ruuw). */
+export type EnvVar = GlobalEnvVar
+
+/** The fields a row's inputs edit. */
+export type EditableField = 'key' | 'value'
 
 // Indexed wrapper so the text-filter result can carry the original vars[] index,
 // ensuring handleChange / handleDelete / toggleVisible always target the right entry.

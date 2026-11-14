@@ -99,8 +99,15 @@ Variables applied to every stack. Docker Compose loads them before a stack's own
 
 - **Changes apply on the next stack restart.** Running stacks keep their old values.
 - **Secrets are masked.** Keys that look like passwords, tokens or API keys stay
-  hidden. Reveal them by entering your password, which unlocks values for 5 minutes.
+  hidden, and so do values that look like secrets (a private key, a URL with a
+  password) under any key. Reveal them by entering your password, which unlocks
+  values for 5 minutes.
 - **A stack's own `.env` wins** when both define the same key.
+- **Some lines are read-only here.** A bare `KEY` (taken from the environment),
+  a `KEY: value` line, a line holding a second variable, and a multi-line value
+  are shown but cannot be edited on this page. Edit `global.env` directly, or
+  remove the row. Removing a row removes its whole line: removing `NOTES` from
+  `NOTES="a" OTHER=b` removes `OTHER` too.
 
 ## Git
 
