@@ -774,14 +774,30 @@ func (h *EnvHandler) parseEnvFile(content string) []EnvEntry {
 				if colonIndex != -1 {
 					value = trimmedLine[colonIndex+1:]
 				}
-				entry.Sensitive = services.IsSensitiveEnvVar(key, value)
+				entry.Sensitive = services.IsSensitiveEnvVar(key, value) || tailLooksSensitive(value)
 			}
 			entries = append(entries, entry)
 			continue
 		}
 
 		key := strings.TrimSpace(trimmedLine[:eqIndex])
-		value, quote, inlineComment := splitEnvValue(strings.TrimSpace(trimmedLine[eqIndex+1:]))
+		rawValue := strings.TrimSpace(trimmedLine[eqIndex+1:])
+
+		// Text after a closing quote is a variable of its own to compose
+		// (agent-os-zpbi), so the line is not one editable value: it is a
+		// read-only row written back verbatim, masked if either part is secret.
+		if _, ok := textAfterClosingQuote(rawValue); ok {
+			entries = append(entries, EnvEntry{
+				Key:       key,
+				Value:     trimmedLine,
+				Line:      lineNum,
+				Sensitive: services.IsSensitiveEnvVar(key, rawValue) || tailLooksSensitive(rawValue),
+				Comment:   true,
+			})
+			continue
+		}
+
+		value, quote, inlineComment := splitEnvValue(rawValue)
 
 		entries = append(entries, EnvEntry{
 			Key:           key,
@@ -920,6 +936,34 @@ func splitEnvValue(raw string) (value, quote, inlineComment string) {
 		return value, "", raw[len(value):]
 	}
 	return raw, "", ""
+}
+
+// textAfterClosingQuote returns the text compose reads as the next statement
+// on a line whose value is quoted: what follows the closing quote, when that
+// is not empty and not a "#" comment (compose-go v2 dotenv/parser.go,
+// extractVarValue returns the rest after the quote and parse reads on from
+// there). `"a" DB_PASSWORD=x` gives `DB_PASSWORD=x` (agent-os-zpbi).
+func textAfterClosingQuote(value string) (string, bool) {
+	v := strings.TrimLeftFunc(value, unicode.IsSpace)
+	if v == "" || (v[0] != '\'' && v[0] != '"') {
+		return "", false
+	}
+	end, _ := closingQuote(v[1:], v[0])
+	if end == -1 {
+		return "", false
+	}
+	tail := strings.TrimLeftFunc(v[1+end+1:], unicode.IsSpace)
+	if tail == "" || tail[0] == '#' {
+		return "", false
+	}
+	return tail, true
+}
+
+// tailLooksSensitive reports whether the variables compose reads after a
+// quoted value's closing quote include one the locked view must mask.
+func tailLooksSensitive(value string) bool {
+	tail, ok := textAfterClosingQuote(value)
+	return ok && bodyLooksSensitive([]string{tail})
 }
 
 // closingQuote returns the index in s of the first quote q not escaped by a
