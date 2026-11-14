@@ -16,6 +16,9 @@
     { "selected": "C:\\dir\\", "line": "MY_VAR=\"C:\\\\dir\\\\\"" },
     { "selected": "  lead and trail  ", "line": "MY_VAR=\"  lead and trail  \"" },
     { "selected": "héllo wörld ✓", "line": "MY_VAR=\"héllo wörld ✓\"" },
-    { "selected": "${DB_HOST} and more", "line": "MY_VAR=\"${DB_HOST} and more\"" }
+    { "selected": "${DB_HOST} and more", "line": "MY_VAR=\"${DB_HOST} and more\"" },
+    { "selected": "C:\\new dir", "line": "MY_VAR=\"C:\\\\new dir\"" },
+    { "selected": "pa$$ word", "line": "MY_VAR=\"pa$$ word\"" },
+    { "selected": "line one\nline two", "line": "MY_VAR=\"line one\nline two\"" }
   ]
 }

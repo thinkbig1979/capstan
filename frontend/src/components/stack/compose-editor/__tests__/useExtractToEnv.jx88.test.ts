@@ -76,3 +76,14 @@ describe('useExtractToEnv value quoting (jx88)', () => {
     },
   )
 })
+
+describe('useExtractToEnv empty selection (jx88 review F3)', () => {
+  it('jx88: an empty selection writes nothing', async () => {
+    const { result } = setup('')
+    await act(async () => {
+      await result.current.confirmExtract()
+    })
+    expect(stacksApi.getEnv).not.toHaveBeenCalled()
+    expect(stacksApi.updateComposeAndEnv).not.toHaveBeenCalled()
+  })
+})
