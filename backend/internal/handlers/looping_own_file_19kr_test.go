@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -92,5 +94,32 @@ func TestSharedFileSave_LoopingStackFolder_19kr(t *testing.T) {
 	rec := f.do(http.MethodPut, "/a/compose", composeBody19kr)
 
 	assert.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+	assert.Contains(t, rec.Body.String(), "Failed to check which stacks share this stack's files")
+}
+
+// TestSharedFileSave_LongLinkChain_19kr: a chain of 50 links ending at a file
+// inside the stack is ELOOP to the kernel (40 links) but not to Go's
+// EvalSymlinks (255), so the write helper's link branch does not refuse it.
+// The save answers 500, never a containment refusal claiming the file is
+// outside.
+func TestSharedFileSave_LongLinkChain_19kr(t *testing.T) {
+	f := newLockOrderFixture(t)
+	a := filepath.Join(f.root, "a")
+	writeFile0j8a(t, filepath.Join(a, "real.yaml"), "services: {}\n")
+	next := filepath.Join(a, "real.yaml")
+	for i := range 50 {
+		link := filepath.Join(a, "link"+strconv.Itoa(i))
+		require.NoError(t, os.Symlink(next, link))
+		next = link
+	}
+	require.NoError(t, os.Symlink(next, filepath.Join(a, "compose.yaml")))
+	_, statErr := os.Stat(filepath.Join(a, "compose.yaml"))
+	require.ErrorIs(t, statErr, syscall.ELOOP, "the fixture must be a chain the kernel refuses")
+	f.addStack(t, "a", a, "compose.yaml", ".env")
+
+	rec := f.do(http.MethodPut, "/a/compose", composeBody19kr)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+	assert.NotContains(t, rec.Body.String(), "outside")
 	assert.Contains(t, rec.Body.String(), "Failed to check which stacks share this stack's files")
 }

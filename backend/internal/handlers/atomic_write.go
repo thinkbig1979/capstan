@@ -75,7 +75,7 @@ func resolveWriteTarget(path string, roots []string) (string, os.FileInfo, error
 			return "", nil, &writeRefusal{msg: fmt.Sprintf("%s is a symlink to a missing file (%s); fix or remove the link, then save again", name, dest)}
 		}
 		if err != nil {
-			return "", nil, &writeRefusal{msg: fmt.Sprintf("%s is a symlink that cannot be followed (%v); fix or remove the link, then save again", name, err)}
+			return "", nil, unfollowableLinkRefusal(name, err)
 		}
 		if info, err = os.Stat(resolved); err != nil {
 			return "", nil, fmt.Errorf("check %s's link target: %w", name, err)
@@ -128,6 +128,12 @@ func checkWriteContained(path, target string, roots []string) error {
 type writeRefusal struct{ msg string }
 
 func (e *writeRefusal) Error() string { return e.msg }
+
+// unfollowableLinkRefusal is the refusal for a link named name that
+// EvalSymlinks could not follow (a loop) with err.
+func unfollowableLinkRefusal(name string, err error) *writeRefusal {
+	return &writeRefusal{msg: fmt.Sprintf("%s is a symlink that cannot be followed (%v); fix or remove the link, then save again", name, err)}
+}
 
 // writeFailureError is the AppError for a write helper's error: 409 with the
 // refusal's text, or a 500 carrying code and message with err as its cause.

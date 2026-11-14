@@ -143,12 +143,15 @@ func stacksSharingFiles(db stackLister, selfID string, paths []string) ([]models
 			targets = append(targets, sharedTarget{resolved: resolved})
 		case errors.Is(err, syscall.ELOOP):
 			// The save's own file is a link loop (agent-os-19kr): answer the
-			// write helper's refusal naming the link, as the write would.
-			// Only its refusal is used. Its success result must never be:
-			// with no roots it has checked no containment.
-			var refusal *writeRefusal
-			if _, _, rerr := resolveWriteTarget(p, nil); errors.As(rerr, &refusal) { //writerefusal:ignore returned to lockStacksSharingFiles, which renders it through writeFailureError
-				return nil, refusal
+			// refusal the write helper gives a link it cannot follow. Only when
+			// the file is a link and EvalSymlinks fails too: a chain of 41-255
+			// links is ELOOP to the kernel but followed by EvalSymlinks, and a
+			// loop in a parent folder or a file gone since the Stat are not this
+			// link's fault. Those stay the 500 below.
+			if li, lerr := os.Lstat(p); lerr == nil && li.Mode()&os.ModeSymlink != 0 {
+				if _, evalErr := filepath.EvalSymlinks(p); evalErr != nil && !errors.Is(evalErr, os.ErrNotExist) {
+					return nil, unfollowableLinkRefusal(filepath.Base(p), evalErr)
+				}
 			}
 			return nil, err
 		default:
