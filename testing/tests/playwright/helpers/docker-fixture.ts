@@ -13,12 +13,24 @@ export const FIXTURE_IMAGE =
 export const LEFTOVER_CONTAINER = 'capstan-e2e-leftover'
 export const LEFTOVER_VOLUME = 'capstan-e2e-leftover-vol'
 
-/** Opt-in for tests that remove what the Free up dialog lists (every unlabelled leftover on the host). */
-export const DESTRUCTIVE = process.env.CAPSTAN_E2E_DESTRUCTIVE === '1'
-export const DESTRUCTIVE_SKIP_REASON =
+const DESTRUCTIVE_WHAT =
   'Removes EVERY unlabelled stopped container (and, with defaults, unused images and build cache) on this ' +
-  'Docker host, not only the fixture. Set CAPSTAN_E2E_DESTRUCTIVE=1 only on an ephemeral runner ' +
-  '(the GitHub-hosted backup-flow job does).'
+  'Docker host, not only the fixture, so it runs only on an ephemeral GitHub-hosted runner.'
+
+/**
+ * Why a test that removes what the Free up dialog lists must skip here, or
+ * undefined when it may run. The opt-in alone is not enough: it also needs a
+ * GitHub-hosted runner (an ephemeral VM), so a stray export on a developer
+ * machine or the self-hosted runner removes nothing.
+ */
+export function destructiveSkipReason(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  if (env.CAPSTAN_E2E_DESTRUCTIVE !== '1') return `${DESTRUCTIVE_WHAT} CAPSTAN_E2E_DESTRUCTIVE is not 1.`
+  if (env.GITHUB_ACTIONS !== 'true') return `${DESTRUCTIVE_WHAT} GITHUB_ACTIONS is not true.`
+  if (env.RUNNER_ENVIRONMENT !== 'github-hosted') {
+    return `${DESTRUCTIVE_WHAT} RUNNER_ENVIRONMENT is ${env.RUNNER_ENVIRONMENT ?? 'unset'}, not github-hosted.`
+  }
+  return undefined
+}
 
 function docker(args: string[]): string {
   return execFileSync('docker', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })

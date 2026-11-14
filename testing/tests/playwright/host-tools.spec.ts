@@ -15,8 +15,9 @@
  * DESTRUCTIVE TESTS (HOST-FREE-001, HOST-FREE-003) click "Remove selected" for
  * real, which removes every unlabelled stopped container on the host (and, with
  * the defaults, unused images and build cache), not only the fixture. They run
- * only with CAPSTAN_E2E_DESTRUCTIVE=1, which the GitHub-hosted backup-flow job
- * sets (an ephemeral VM). Never set it on a developer machine or on the
+ * only with CAPSTAN_E2E_DESTRUCTIVE=1 on a GitHub-hosted runner
+ * (GITHUB_ACTIONS=true, RUNNER_ENVIRONMENT=github-hosted): the backup-flow job,
+ * an ephemeral VM. Never set it on a developer machine or on the
  * self-hosted runner. HOST-FREE-002 intercepts the request instead, so it runs
  * everywhere.
  *
@@ -30,8 +31,7 @@
 import { test, expect, type APIRequestContext, type Page } from 'playwright/test'
 import { waitForInvalidationSettle } from './helpers/network-settle'
 import {
-  DESTRUCTIVE,
-  DESTRUCTIVE_SKIP_REASON,
+  destructiveSkipReason,
   LEFTOVER_CONTAINER,
   LEFTOVER_VOLUME,
   createLeftoverContainer,
@@ -322,7 +322,8 @@ test.describe('Host tab', () => {
     page,
     request,
   }) => {
-    test.skip(!DESTRUCTIVE, DESTRUCTIVE_SKIP_REASON)
+    const skipReason = destructiveSkipReason()
+    test.skip(skipReason !== undefined, skipReason)
     createLeftoverContainer()
 
     const dialog = await openFreeUpDialog(page)
@@ -339,7 +340,8 @@ test.describe('Host tab', () => {
   })
 
   test('HOST-FREE-003 (destructive): an unlabelled volume survives a real default Remove selected', async ({ page }) => {
-    test.skip(!DESTRUCTIVE, DESTRUCTIVE_SKIP_REASON)
+    const skipReason = destructiveSkipReason()
+    test.skip(skipReason !== undefined, skipReason)
     createLeftoverVolume()
     createLeftoverContainer()
 

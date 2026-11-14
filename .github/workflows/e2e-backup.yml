@@ -314,7 +314,9 @@ jobs:
           # real, which removes every unlabelled stopped container (and unused
           # images and build cache) on the Docker host. This runner is an
           # ephemeral GitHub VM, so that is safe here and nowhere else: never set
-          # it on the self-hosted capstan-e2e runner (agent-os-bugc).
+          # it on the self-hosted capstan-e2e runner (agent-os-bugc). The spec also
+          # requires GITHUB_ACTIONS=true and RUNNER_ENVIRONMENT=github-hosted, which
+          # GitHub sets here, so a stray export elsewhere still removes nothing.
           CAPSTAN_E2E_DESTRUCTIVE: '1'
         # No spec path argument: a hardcoded path
         # (testing/tests/playwright/backup-flow.spec.ts) only ever selected
