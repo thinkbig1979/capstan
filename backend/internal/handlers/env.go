@@ -780,7 +780,13 @@ func (h *EnvHandler) parseEnvFile(content string) []EnvEntry {
 			continue
 		}
 
+		// compose reads `export KEY=` as KEY (agent-os-m5uj); the flag puts
+		// the prefix back on save.
 		key := strings.TrimSpace(trimmedLine[:eqIndex])
+		export := false
+		if loc := exportPrefix.FindStringIndex(key); loc != nil {
+			key, export = key[loc[1]:], true
+		}
 		rawValue := strings.TrimSpace(trimmedLine[eqIndex+1:])
 
 		// Text after a closing quote is a variable of its own to compose
@@ -807,6 +813,7 @@ func (h *EnvHandler) parseEnvFile(content string) []EnvEntry {
 			Comment:       false,
 			Quote:         quote,
 			InlineComment: inlineComment,
+			Export:        export,
 		})
 	}
 
@@ -999,6 +1006,9 @@ func serializeEnvFile(entries []EnvEntry) string {
 		} else if entry.Key == "" && entry.Value == "" {
 			buf.WriteString("\n")
 		} else {
+			if entry.Export {
+				buf.WriteString("export ")
+			}
 			buf.WriteString(entry.Key)
 			buf.WriteString("=")
 			buf.WriteString(entry.Quote)

@@ -49,6 +49,11 @@ import (
 // Quote is "", "'" or `"`; InlineComment is the text after the value or
 // closing quote, such as "  # note". Both come back from the client on PUT,
 // so validateEnvEntries checks them before they reach the file.
+//
+// Export marks a `export KEY=value` line (agent-os-m5uj). Key is then the
+// name compose reads, without the prefix, and serializeEnvFile writes the
+// prefix back, so a renamed or edited row keeps it. omitempty, and optional
+// in TypeScript, like Comment.
 type EnvEntry struct {
 	Key           string `json:"key"`
 	Value         string `json:"value"`
@@ -57,6 +62,7 @@ type EnvEntry struct {
 	Comment       bool   `json:"comment,omitempty"`
 	Quote         string `json:"quote,omitempty"`
 	InlineComment string `json:"inlineComment,omitempty"`
+	Export        bool   `json:"export,omitempty"`
 }
 
 // EnvResponse is the wire shape of GET /:id/env when the stack HAS an env file.

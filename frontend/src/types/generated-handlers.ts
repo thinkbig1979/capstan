@@ -40,6 +40,10 @@ import type * as models from './generated'
  * Quote is "", "'" or `"`; InlineComment is the text after the value or
  * closing quote, such as "  # note". Both come back from the client on PUT,
  * so validateEnvEntries checks them before they reach the file.
+ * Export marks a `export KEY=value` line (agent-os-m5uj). Key is then the
+ * name compose reads, without the prefix, and serializeEnvFile writes the
+ * prefix back, so a renamed or edited row keeps it. omitempty, and optional
+ * in TypeScript, like Comment.
  */
 export interface EnvEntry {
   key: string;
@@ -49,6 +53,7 @@ export interface EnvEntry {
   comment?: boolean;
   quote?: string;
   inlineComment?: string;
+  export?: boolean;
 }
 /**
  * EnvResponse is the wire shape of GET /:id/env when the stack HAS an env file.

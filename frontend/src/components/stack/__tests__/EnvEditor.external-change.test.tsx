@@ -22,6 +22,7 @@ type Payload = {
     line: number
     quote?: string
     inlineComment?: string
+    export?: boolean
   }>
   raw?: string
   locked?: boolean
@@ -254,5 +255,30 @@ describe('EnvEditor after a git pull (agent-os-umig)', () => {
     expect(screen.queryByText(NOTICE)).not.toBeInTheDocument()
     expect(portInput().value).toBe('9090')
     expect(screen.getByText('Save')).toBeDisabled()
+  })
+})
+
+/**
+ * agent-os-m5uj: `export` is written back by a table save, so a file that
+ * differs from the edited rows only in the prefix is a different file. The
+ * edit must not be taken as already on disk, which would drop the prefix the
+ * user's save would have written.
+ */
+describe('EnvEditor external change in the export prefix (agent-os-m5uj)', () => {
+  it('an external edit that only drops export still shows the notice', async () => {
+    const exported = (port: string): Payload =>
+      envFile(port, {
+        entries: [{ key: 'PORT', value: port, sensitive: false, comment: false, line: 1, export: true }],
+        raw: `export PORT=${port}\n`,
+      })
+    disk = exported('8080')
+    renderEditor()
+    await loaded()
+    edit('7070')
+
+    await pullTo(envFile('7070'))
+
+    expect(await screen.findByText(NOTICE)).toBeInTheDocument()
+    expect(portInput().value).toBe('7070')
   })
 })

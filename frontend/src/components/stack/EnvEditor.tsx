@@ -394,9 +394,9 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
 }
 
 /**
- * Two row lists say the same file, field for field. Quote and inline comment
- * count: a table save writes them back (agent-os-wcrq). `sensitive` does not,
- * it is display state.
+ * Two row lists say the same file, field for field. Quote, inline comment and
+ * the export prefix count: a table save writes them back (agent-os-wcrq,
+ * agent-os-m5uj). `sensitive` does not, it is display state.
  */
 function sameEntries(a: EnvEntryDraft[], b: EnvEntryDraft[]) {
   return (
@@ -407,7 +407,8 @@ function sameEntries(a: EnvEntryDraft[], b: EnvEntryDraft[]) {
         e.value === b[i].value &&
         !!e.comment === !!b[i].comment &&
         (e.quote ?? '') === (b[i].quote ?? '') &&
-        (e.inlineComment ?? '') === (b[i].inlineComment ?? ''),
+        (e.inlineComment ?? '') === (b[i].inlineComment ?? '') &&
+        !!e.export === !!b[i].export,
     )
   )
 }
