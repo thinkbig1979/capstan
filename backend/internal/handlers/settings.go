@@ -528,6 +528,14 @@ func globalValueReadsAsOne(key, value string) bool {
 // (validateEnvEntries, by request index); an unchanged row is the file's own
 // text and is not.
 func mergeGlobalEnv(current string, req []EnvEntry) (string, error) {
+	// A key typed as "export FOO" is the variable FOO to compose, written
+	// with its prefix (agent-os-ale2), as the stack table writes it.
+	req = slices.Clone(req)
+	for i := range req {
+		if loc := exportPrefix.FindStringIndex(req[i].Key); loc != nil {
+			req[i].Key, req[i].Export = req[i].Key[loc[1]:], true
+		}
+	}
 	entries := (&EnvHandler{}).parseEnvFile(current)
 	fileVars, from := globalEnvVars(entries)
 
@@ -586,7 +594,9 @@ func mergeGlobalEnv(current string, req []EnvEntry) (string, error) {
 	}
 
 	// Each entry's original text: its line, or for a value spanning lines,
-	// every line up to the next entry. The raw split keeps a "\r".
+	// every line up to the next entry. The raw split keeps a "\r". A written
+	// row takes the file's line ending (agent-os-ale2).
+	eol := fileEOL(current)
 	rawLines := strings.Split(current, "\n")
 	lineCount := len(envLines(current))
 	varOf := make(map[int]int, len(from))
@@ -606,25 +616,32 @@ func mergeGlobalEnv(current string, req []EnvEntry) (string, error) {
 		case isVar && matched[j] == 0:
 			continue // removed on the page
 		case isVar && req[matched[j]-1].Value != fileVars[j]["value"]:
-			b.WriteString(serializeEnvFile([]EnvEntry{{Key: e.Key, Value: req[matched[j]-1].Value, Export: e.Export}}))
+			r := req[matched[j]-1]
+			b.WriteString(strings.ReplaceAll(serializeEnvFile([]EnvEntry{{Key: e.Key, Value: r.Value, Export: e.Export || r.Export}}), "\n", eol))
 			endsVerbatim = false
 		default:
-			for _, l := range rawLines[e.Line-1 : end] {
-				b.WriteString(l)
-				b.WriteString("\n")
+			for i := e.Line - 1; i < end; i++ {
+				b.WriteString(rawLines[i])
+				// A line keeps its own "\r"; the file's last line has no end
+				// of its own and takes the file's.
+				if i == len(rawLines)-1 {
+					b.WriteString(eol)
+				} else {
+					b.WriteString("\n")
+				}
 			}
 			endsVerbatim = end == lineCount
 		}
 	}
 	added = slices.DeleteFunc(added, func(e EnvEntry) bool { return e.Key == "" && e.Value == "" })
 	if len(added) > 0 {
-		b.WriteString(serializeEnvFile(added))
+		b.WriteString(strings.ReplaceAll(serializeEnvFile(added), "\n", eol))
 		endsVerbatim = false
 	}
 	out := b.String()
 	// An unchanged last line keeps the file's missing final newline too.
 	if endsVerbatim && !strings.HasSuffix(current, "\n") {
-		out = strings.TrimSuffix(out, "\n")
+		out = strings.TrimSuffix(out, eol)
 	}
 	return out, nil
 }
