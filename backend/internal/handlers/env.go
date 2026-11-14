@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
@@ -717,11 +716,10 @@ func (h *EnvHandler) parseEnvFile(content string) []EnvEntry {
 	// TypeError there. The contract is made true here, where the value is
 	// minted, rather than by widening the client type to admit the null.
 	entries := []EnvEntry{}
-	scanner := bufio.NewScanner(strings.NewReader(content))
 	lineNum := 0
 
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+	for _, line := range envLines(content) {
+		line = strings.TrimSpace(line)
 		lineNum++
 
 		trimmedLine := strings.TrimSpace(line)
@@ -782,6 +780,23 @@ func (h *EnvHandler) parseEnvFile(content string) []EnvEntry {
 	}
 
 	return entries
+}
+
+// envLines splits an env file into lines the way bufio.ScanLines did, with no
+// line length limit (agent-os-m7qr): the scanner's 64 KiB limit ended the
+// parse silently at a longer line, and a table save then wrote only the rows
+// before it. One trailing "\r" is dropped per line, and a final newline adds
+// no empty line. The content is already in memory, so there is nothing to
+// bound here; the read of the file is the caller's.
+func envLines(content string) []string {
+	if content == "" {
+		return nil
+	}
+	lines := strings.Split(strings.TrimSuffix(content, "\n"), "\n")
+	for i, l := range lines {
+		lines[i] = strings.TrimSuffix(l, "\r")
+	}
+	return lines
 }
 
 var exportPrefix = regexp.MustCompile(`^export\s+`)
