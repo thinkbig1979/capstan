@@ -258,6 +258,12 @@ func (h *OperationsHandler) handleOperation(jwtSecret string, authDisabled bool)
 			for line := range h.docker.RunStreaming(opCtx, *stack, subcommand, extraArgs) {
 				if line.Type == "done" {
 					result = line
+					// A restart's down phase already ran, so a refused up
+					// phase still changed the stack: store it, as REST's
+					// RestartVerified does (agent-os-hnys review finding A).
+					if action == "restart" {
+						result.Refused = false
+					}
 				} else {
 					collect(line)
 				}

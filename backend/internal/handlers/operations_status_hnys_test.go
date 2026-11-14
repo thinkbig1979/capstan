@@ -49,6 +49,10 @@ func TestOperationsPersistStatus_Hnys(t *testing.T) {
 		{"start fails", "start", map[string]services.StreamLine{"up": doneFailedHnys}, "error"},
 		// The early return when the stop phase fails is its own exit path.
 		{"restart fails at stop", "restart", map[string]services.StreamLine{"down": doneFailedHnys, "up": doneRunningHnys}, "error"},
+		// Review finding A: down ran, then the up phase's own lookup refused.
+		// The stack is stopped, so this is a failure to store, as REST's
+		// RestartVerified stores "error"; Refused only means "nothing ran".
+		{"restart refused at up after down ran", "restart", map[string]services.StreamLine{"down": doneStoppedHnys, "up": {Type: "done", Success: false, Outcome: truth.OutcomeFailed, Reason: "refused", Refused: true}}, "error"},
 		// CONTROL (passes on base too): REST pull without restart writes no
 		// status, so neither does the socket.
 		{"pull writes nothing", "pull", map[string]services.StreamLine{"pull": {Type: "done", Success: true, Outcome: truth.OutcomeSuccess}}, "running"},
