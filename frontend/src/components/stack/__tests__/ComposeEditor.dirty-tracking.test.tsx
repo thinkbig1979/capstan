@@ -10,7 +10,8 @@
  * does, capturing the options passed by ComposeEditor so the test can invoke
  * onChange directly to simulate a codemirror doc change.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { useAuthStore } from '@/stores/authStore'
 import { act, screen, waitFor } from '@testing-library/react'
 import { renderWithProviders } from '../../../test/utils'
 import { useRef } from 'react'
@@ -82,6 +83,16 @@ vi.mock('sonner', () => ({
 }))
 
 import { ComposeEditor } from '../ComposeEditor'
+
+// No unlock window in these tests: with auth on, a payload served unlocked
+// while the unlock store is locked cannot happen, and the editor would hide it
+// (agent-os-xz6h).
+beforeEach(() => {
+  useAuthStore.setState({ authDisabled: true })
+})
+afterEach(() => {
+  useAuthStore.setState({ authDisabled: false })
+})
 
 describe('ComposeEditor — Save button tracks editor dirtiness', () => {
   beforeEach(() => {

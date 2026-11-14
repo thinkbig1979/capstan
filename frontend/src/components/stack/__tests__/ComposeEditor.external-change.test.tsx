@@ -11,7 +11,8 @@
  * `[options.doc, options.docKey]` effect). `view.text` is therefore what the
  * user sees.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { useAuthStore } from '@/stores/authStore'
 import { act, screen, waitFor, fireEvent } from '@testing-library/react'
 import { QueryClient } from '@tanstack/react-query'
 import { useEffect, useRef } from 'react'
@@ -71,6 +72,16 @@ vi.mock('sonner', () => ({
 }))
 
 import { ComposeEditor } from '../ComposeEditor'
+
+// No unlock window in these tests: with auth on, a payload served unlocked
+// while the unlock store is locked cannot happen, and the editor would hide it
+// (agent-os-xz6h).
+beforeEach(() => {
+  useAuthStore.setState({ authDisabled: true })
+})
+afterEach(() => {
+  useAuthStore.setState({ authDisabled: false })
+})
 import { useGitPull } from '@/hooks/useGit'
 
 const NOTICE = 'This file changed on disk. Reload to see the new version; saving now overwrites it.'
@@ -258,7 +269,7 @@ describe('ComposeEditor after a git pull (agent-os-umig)', () => {
     // reached the editor (observed: green at base). Wait for it to land.
     const key = ['stack', 's1', 'compose']
     await waitFor(() => expect(queryClient.getQueryState(key)?.fetchStatus).toBe('idle'))
-    expect(queryClient.getQueryData(key)).toEqual({ text: EDITED, masked: false })
+    expect(queryClient.getQueryData(key)).toEqual({ text: EDITED, masked: false, locked: false })
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 20))
     })
@@ -291,7 +302,7 @@ describe('ComposeEditor after a git pull (agent-os-umig)', () => {
     await act(async () => release())
     const key = ['stack', 's1', 'compose']
     await waitFor(() => expect(queryClient.getQueryState(key)?.fetchStatus).toBe('idle'))
-    expect(queryClient.getQueryData(key)).toEqual({ text: EDITED, masked: false })
+    expect(queryClient.getQueryData(key)).toEqual({ text: EDITED, masked: false, locked: false })
 
     // Back to the saved text: clean again, view shows EDITED.
     type(EDITED)
@@ -299,7 +310,7 @@ describe('ComposeEditor after a git pull (agent-os-umig)', () => {
 
     await pullTo(ORIGINAL)
 
-    await waitFor(() => expect(queryClient.getQueryData(key)).toEqual({ text: ORIGINAL, masked: false }))
+    await waitFor(() => expect(queryClient.getQueryData(key)).toEqual({ text: ORIGINAL, masked: false, locked: false }))
     await waitFor(() => expect(view.text).toBe(ORIGINAL))
     expect(screen.queryByText(NOTICE)).not.toBeInTheDocument()
   })

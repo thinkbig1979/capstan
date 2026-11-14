@@ -17,6 +17,8 @@ import { useExternalFileChange } from '@/hooks/useExternalFileChange'
 import { EnvUnlockDialog } from '@/components/EnvUnlockDialog'
 import { Button } from '@/components/ui/button'
 import { Lock } from 'lucide-react'
+import { useAuth } from '@/hooks/useAuth'
+import { useEnvUnlockStore } from '@/stores/envUnlockStore'
 
 /**
  * One load of the compose file. `masked` is true when the server masked
@@ -26,7 +28,12 @@ import { Lock } from 'lucide-react'
 interface ComposeLoad {
   text: string
   masked: boolean
+  /** The server answered without an unlock token in play. */
+  locked: boolean
 }
+
+/** What the view shows in place of a file loaded while unlocked, once locked. */
+const HIDDEN_DOC = { text: '' }
 
 interface ComposeEditorProps {
   stackId: string
@@ -56,20 +63,29 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
       // string-typed React state and the editor's initial document.
       // '' rather than undefined: the hydrate below skips an empty body,
       // as it always has for an absent one.
-      const body = compose as { content?: unknown; maskedValues?: unknown } | undefined
+      const body = compose as { content?: unknown; maskedValues?: unknown; locked?: unknown } | undefined
       const load: ComposeLoad = {
         text: stringOr(body?.content, ''),
         masked: typeof body?.maskedValues === 'number' && body.maskedValues > 0,
+        locked: body?.locked === true,
       }
       return load
     },
   })
-  const masked = data?.masked ?? false
+  const { authDisabled } = useAuth()
+  const unlockedUntil = useEnvUnlockStore((s) => s.unlockedUntil)
+  // After a lock the last payload is still the one loaded while unlocked, with
+  // the secrets in the clear, until the lock's refetch lands, and for good if
+  // it fails (agent-os-xz6h). A clean view drops that text and waits for the
+  // masked file; unsaved edits stay, as a re-lock keeps them (agent-os-w6wx).
+  const staleUnlocked = !authDisabled && unlockedUntil === null && data !== undefined && !data.locked
+  const hideText = staleUnlocked && content === lastSaved
+  const masked = (data?.masked ?? false) || staleUnlocked
   const [unlockOpen, setUnlockOpen] = useState(false)
   // The view shows "***" where secrets are. Edits kept across a re-lock
   // stay editable: they hold no "***", and the server refuses their save
   // until unlock.
-  const readOnly = masked && loaded.masked
+  const readOnly = (masked && loaded.masked) || hideText
 
   // The stack row StackPage already fetched, read from the cache: `enabled:
   // false` means this observer never requests it. Decides whether the save
@@ -84,10 +100,10 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
   const { viewRef } = useCodeMirrorEditor(editorRef, {
     // Not `data`: while the editor holds unsaved edits a new query result
     // must not reach the view (agent-os-umig).
-    doc: loaded.text,
+    doc: hideText ? HIDDEN_DOC.text : loaded.text,
     // A fresh object per load: the same text loaded again still replaces a
     // view that has moved on (load A, edit and save A', A comes back).
-    docKey: loaded,
+    docKey: hideText ? HIDDEN_DOC : loaded,
     ariaLabel: 'Compose file editor',
     readOnly,
     // Ctrl+S is a no-op while read-only: the view holds masked text.
