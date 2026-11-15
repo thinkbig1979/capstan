@@ -46,7 +46,10 @@ export type ServedDiff<T> = T & { servedUnlocked: boolean }
 
 async function stampServed<T extends object>(request: () => Promise<T>): Promise<ServedDiff<T>> {
   const servedUnlocked = useEnvUnlockStore.getState().token !== null
-  return { ...(await request()), servedUnlocked }
+  const result = await request()
+  // A response with no body passes through as it came: the views report it as
+  // a failed load, and a stamp would turn it into an empty diff.
+  return result == null ? result : { ...result, servedUnlocked }
 }
 
 export function useGitDiff(stackId: string, hash: string) {
