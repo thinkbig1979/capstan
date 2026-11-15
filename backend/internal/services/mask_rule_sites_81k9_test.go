@@ -78,3 +78,13 @@ func TestMaskSecrets_81k9_OpenValueBodyLineMaskedWhole(t *testing.T) {
 	out, _ := MaskSecrets("DB_PASSWORD:'a\nIMAGE={\"password\":\"SEKRITi9\"}\nb'\n", ".env", nil)
 	require.Equal(t, "***", strings.Split(out, "\n")[1], "%q", out)
 }
+
+// A URL credential the YAML pass masks first still marks the quoted value
+// before it on the line, as it did before agent-os-81k9 (origLeadValue; the
+// superset corpus line, review round 2 F4).
+func TestMaskSecrets_81k9_URLCueReadOnTheOriginalLine(t *testing.T) {
+	line := `TZ="SEKRIT\"j10" IMAGE: https://p/?url=https%3A%2F%2Fu%3ASEKRITf6%40h`
+	out, _ := MaskSecrets(line+"\n", "docker-compose.yml", nil)
+	require.NotContains(t, out, "j10", "%q", out)
+	require.NotContains(t, out, "SEKRITf6", "%q", out)
+}
