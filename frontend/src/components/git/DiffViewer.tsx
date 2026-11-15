@@ -13,6 +13,7 @@ import { parseDiff } from '@/lib/diff-parser'
 import { classifyError } from '@/lib/error-handler'
 import { isFirstLoad } from '@/lib/query-state'
 import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
+import { useEnvLockedNow } from '@/hooks/useEnvLockedNow'
 
 type DiffView = 'unified' | 'split'
 
@@ -26,7 +27,17 @@ interface DiffViewerProps {
 }
 
 export function DiffViewer({ stackId, commitHash }: DiffViewerProps) {
-  const { data: diffData, isPending, fetchStatus, error, refetch } = useGitDiff(stackId, commitHash)
+  const { data, isPending, fetchStatus, error, refetch } = useGitDiff(stackId, commitHash)
+  // A diff fetched while unlocked holds secrets in the clear. Once locked it is
+  // not shown: the view waits for the masked diff, or reports the failed load
+  // (agent-os-npxh).
+  const lockedNow = useEnvLockedNow()
+  const stale = lockedNow && data?.servedUnlocked === true
+  const diffData = stale ? undefined : data
+
+  if (stale && fetchStatus === 'fetching') {
+    return <div className="flex items-center justify-center py-4">Loading diff...</div>
+  }
 
   // isFirstLoad: useGitDiff is `enabled: !!hash`, and offline the first fetch is
   // paused (agent-os-7nqa).
