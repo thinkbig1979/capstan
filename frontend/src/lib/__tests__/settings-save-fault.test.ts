@@ -37,6 +37,12 @@ describe('settingsSaveFault', () => {
     ).toBe(message)
   })
 
+  // agent-os-zp59: a save that lands after a relock.
+  it('returns the message on an ENV_LOCKED', () => {
+    const message = 'Unlock env values to change the git credentials: pushes and pulls use them'
+    expect(settingsSaveFault({ error: 'Forbidden', code: 'ENV_LOCKED', message, status: 403 })).toBe(message)
+  })
+
   // VALIDATION_ERROR arrives at 422 as well as 400 on the backup endpoint
   // (backup.go:449 and :462). Keyed on the code, so the status is irrelevant —
   // pinned here because a status-keyed reader would drop exactly these two.

@@ -1417,3 +1417,27 @@ describe('BackupSettingsContent — locked session (agent-os-h71i)', () => {
     for (const el of controls()) expect(el).toBeEnabled()
   })
 })
+
+// agent-os-zp59: a save sent while unlocked can land after the session locked
+// again. The server answers 403 ENV_LOCKED, and the toast shows its sentence,
+// not the bare generic title.
+describe('BackupSettingsContent — a save that races a relock', () => {
+  beforeEach(() => {
+    useEnvUnlockStore.getState().unlock('t')
+  })
+
+  it('shows the env-locked refusal from the server', async () => {
+    const sentence =
+      "Unlock env values to change where backups go, their credentials or their retention: backups hold every stack's .env, so whoever picks the repository can read them"
+    mockUpdateSettings.mockRejectedValue({ error: 'Forbidden', code: 'ENV_LOCKED', message: sentence, status: 403 })
+    const wrapper = createWrapper()
+    render(<BackupSettingsContent />, { wrapper })
+
+    fireEvent.change(await screen.findByLabelText('Repository path'), { target: { value: '/new/path' } })
+    fireEvent.click(screen.getByRole('button', { name: /save backup settings/i }))
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Failed to save backup settings', { description: sentence }),
+    )
+  })
+})

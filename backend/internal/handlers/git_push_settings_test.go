@@ -37,6 +37,7 @@ func newPushTestEnv(t *testing.T) *pushTestEnv {
 
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
+	r.Use(envUnlockedMiddleware()) // a credential save needs an unlock (agent-os-mu4z)
 	dirs.RegisterRoutes(r.Group("/directories"))
 	r.GET("/settings/git", settings.GetGitSettings)
 	r.PUT("/settings/git", settings.UpdateGitSettings)

@@ -475,12 +475,7 @@ func (h *EnvHandler) Put(c *gin.Context) {
 	// locked session was handed blanked sensitive values by Get, so letting it
 	// PUT what it holds would overwrite every secret in the file with "". The
 	// gate is what makes the redaction safe rather than destructive.
-	if !envUnlocked(c) {
-		c.JSON(http.StatusForbidden, models.NewAppError(
-			http.StatusForbidden,
-			models.ErrForbidden,
-			"Re-enter your password to edit environment variables",
-		))
+	if refuseLocked(c, "save environment variables", lockedBlankedReason) {
 		return
 	}
 

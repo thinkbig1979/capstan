@@ -17,6 +17,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '../../../test/utils'
+import { useEnvUnlockStore } from '@/stores/envUnlockStore'
 
 const mockUseGitStatus = vi.fn()
 const mockMutate = vi.fn()
@@ -114,6 +115,9 @@ async function expectPullNotActionable(user: ReturnType<typeof userEvent.setup>)
 
 describe('GitStatus unknown state (agent-os-528x)', () => {
   beforeEach(() => {
+    // Unlocked, so Pull is off only for the reason each test names, never for
+    // the lock (agent-os-hblm, covered in GitStatus.locked.test.tsx).
+    useEnvUnlockStore.getState().unlock('t')
     vi.clearAllMocks()
     mockUseGitPull.mockReturnValue({ mutate: mockMutate, isPending: false })
   })

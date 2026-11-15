@@ -13,6 +13,10 @@ import type { Stack } from '@/types'
 import { GitSettingsSection } from '@/components/git/GitSettingsSection'
 import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 import { CommitPushDialog } from '@/components/git/CommitPushDialog'
+import { EnvLockedNotice } from '@/components/EnvLockedNotice'
+import { EnvUnlockDialog } from '@/components/EnvUnlockDialog'
+import { useEnvLockedNow } from '@/hooks/useEnvLockedNow'
+import { LOCKED_PULL_NOTICE } from '@/lib/locked-copy'
 
 // Why Pull is off whenever the status could not be read (agent-os-528x). A pull
 // on a dirty tree is the dangerous operation, and a failed probe cannot say the
@@ -102,6 +106,9 @@ export function GitStatus({ stack }: GitStatusProps) {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [commitOpen, setCommitOpen] = useState(false)
   const [isRescanning, setIsRescanning] = useState(false)
+  const [unlockOpen, setUnlockOpen] = useState(false)
+  // Locked, the server refuses a pull (agent-os-hblm).
+  const locked = useEnvLockedNow()
   const queryClient = useQueryClient()
 
   // Backs the Rescan offered on the non-repo chip below. Directory scanning has
@@ -162,7 +169,8 @@ export function GitStatus({ stack }: GitStatusProps) {
     gitStatus.isRepo &&
     gitStatus.hasCommits &&
     !gitStatus.isBare &&
-    !pullMutation.isPending
+    !pullMutation.isPending &&
+    !locked
 
   // A failed request with nothing we can still show (agent-os-528x). It used to
   // render nothing, folded together with "still loading", so a probe fault took
@@ -379,6 +387,10 @@ export function GitStatus({ stack }: GitStatusProps) {
           </div>
 
           <GitPullActions canPull={canPull} onPull={handlePull} />
+          {locked && (
+            <EnvLockedNotice onUnlock={() => setUnlockOpen(true)}>{LOCKED_PULL_NOTICE}</EnvLockedNotice>
+          )}
+          <EnvUnlockDialog open={unlockOpen} onOpenChange={setUnlockOpen} />
           <GitCommitActions stackId={stack.id} onOpen={() => setCommitOpen(true)} />
           {!statusKnown && (
             <p className="text-xs text-muted-foreground">{PULL_BLOCKED_REASON}</p>

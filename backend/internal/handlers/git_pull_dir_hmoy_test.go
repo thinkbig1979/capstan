@@ -56,6 +56,7 @@ func TestGitPull_RefusesDirParameter(t *testing.T) {
 	cfg := &config.Config{StacksDir: root}
 	handler := NewGitHandler(services.NewGitService(cfg, db), nil, db, cfg)
 	router := gin.New()
+	router.Use(envUnlockedMiddleware()) // a pull needs an unlock (agent-os-hblm); the lock gate is not this test's subject
 	handler.RegisterRoutes(router.Group("/api/git"))
 	post := func(query string) *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()

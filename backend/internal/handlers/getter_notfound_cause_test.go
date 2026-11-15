@@ -130,6 +130,7 @@ func TestGetRunDetail_HealthyMissingRunKeeps404(t *testing.T) {
 func newDirectoriesRouter(db *database.DB) *gin.Engine {
 	r := gin.New()
 	r.Use(middleware.RequestID())
+	r.Use(envUnlockedMiddleware()) // a credential save needs an unlock (agent-os-mu4z)
 	NewDirectoriesHandler(nil, db).RegisterRoutes(r.Group("/api/directories"))
 	return r
 }

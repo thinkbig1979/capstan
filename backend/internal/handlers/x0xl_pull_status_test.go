@@ -59,6 +59,7 @@ func TestGitPull_FailureStatusReachesTheWire(t *testing.T) {
 	cfg := &config.Config{StacksDir: stacksDir}
 	handler := NewGitHandler(services.NewGitService(cfg, db), nil, db, cfg)
 	router := gin.New()
+	router.Use(envUnlockedMiddleware()) // a pull needs an unlock (agent-os-hblm); the lock gate is not this test's subject
 	handler.RegisterRoutes(router.Group("/api/git"))
 
 	cases := []struct {

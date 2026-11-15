@@ -40,6 +40,7 @@ func TestGitPull_UnresolvableStackFolderIsNamedOnTheWire(t *testing.T) {
 	svc := services.NewGitService(cfg, db)
 	svc.SetOperationLock(services.NewOperationLock())
 	router := gin.New()
+	router.Use(envUnlockedMiddleware()) // a pull needs an unlock (agent-os-hblm); the lock gate is not this test's subject
 	NewGitHandler(svc, nil, db, cfg).RegisterRoutes(router.Group("/api/git"))
 	// The repository top is read from git, so the good folder must be one.
 	//nolint:gosec // test helper, explicit argv, not a shell string

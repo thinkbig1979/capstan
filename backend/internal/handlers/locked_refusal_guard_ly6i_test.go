@@ -5,6 +5,7 @@ import (
 	"go/parser"
 	"go/token"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -26,14 +27,36 @@ var lockedRefusalSinks = map[string]bool{
 	"LaunchDRRestore":  true,
 	"LaunchPrune":      true,
 	"EnsureRepository": true,
+	// agent-os-mu4z: a folder's own git credential.
+	"UpdateDirectoryCredentials": true,
 }
 
-// lockedRefusalFileSinks are sinks only in the named file: backup.go's
-// SetSettings is where the repository, its password, the rclone remote and
-// the retention are written (agent-os-h71i). SetSettings elsewhere writes
-// settings a locked session may change.
-var lockedRefusalFileSinks = map[string]string{
-	"SetSettings": "backup.go",
+// lockedRefusalFieldSinks are sinks named with the handler field they are
+// called on, where the method name alone is shared by something else:
+// h.git.PullVerified is a git pull (agent-os-hblm), while
+// h.dockerSvc().PullVerified pulls images and lands no text. A git service
+// reached through a field not named git is not seen.
+var lockedRefusalFieldSinks = map[string]bool{
+	"git.PullVerified": true,
+}
+
+// lockedSettingKeys are the settings a locked session must not write
+// (agent-os-h71i, 97pn): where backups go, with what credential, and how
+// long they are kept. A database.SettingValue literal or a SetSetting call
+// naming one of them is a sink in ANY handlers file, so moving the write out
+// of backup.go does not move it out of the guard.
+//
+// Blind spot: a key that is not a string literal (a variable, a constant) is
+// not seen. Today one site builds keys that way, settings.go's
+// UpdateLogRetention, from a fixed list of four history-retention keys.
+var lockedSettingKeys = map[string]bool{
+	"restic_repository": true, "restic_password": true,
+	"rclone_remote": true, "rclone_path": true,
+	"backup_keep_daily": true, "backup_keep_weekly": true,
+	"backup_keep_monthly": true, "backup_keep_yearly": true,
+	"backup_auto_prune": true,
+	// agent-os-mu4z: the credential git uses to reach the remote.
+	"git_ssh_key": true, "git_https_user": true, "git_https_token": true,
 }
 
 // lockedRefusalExempt names the handlers that reach a sink without
@@ -42,10 +65,6 @@ var lockedRefusalFileSinks = map[string]string{
 var lockedRefusalExempt = map[string]string{
 	// Writes back the file's own bytes from before the save, never request text.
 	"compose.go:restoreEnv": "restore of the pre-save bytes",
-	// Gated by the older `if !envUnlocked(c)` 403 FORBIDDEN before the write;
-	// moving them onto refuseLocked is a follow-up (orch-dm-60 ruling, (i)).
-	"env.go:Put":                  "older envUnlocked gate, follow-up (i)",
-	"settings.go:UpdateGlobalEnv": "older envUnlocked gate, follow-up (i)",
 }
 
 // lockedRefusalConditional names the handlers whose gate may be
@@ -57,6 +76,9 @@ var lockedRefusalConditional = map[string]string{
 	// Refused when the body changes where or with what credential backups
 	// go, or the retention; a schedule edit stays allowed (agent-os-h71i).
 	"backup.go:updateSettings": "refused only when a destination, credential or retention field is present",
+	// Refused when a credential field is present; the author stays allowed
+	// (agent-os-mu4z).
+	"settings.go:UpdateGitSettings": "refused only when a credential field is present",
 }
 
 // TestLockedRefusalGuard_ly6i keeps every handler that lints or writes
@@ -86,7 +108,7 @@ func TestLockedRefusalGuard_ly6i(t *testing.T) {
 				continue
 			}
 			key := name + ":" + fn.Name.Name
-			sink := firstLockedRefusalSink(fn.Body, name)
+			sink := firstLockedRefusalSink(fn.Body)
 			if sink == token.NoPos {
 				continue
 			}
@@ -100,7 +122,7 @@ func TestLockedRefusalGuard_ly6i(t *testing.T) {
 			// A conditional entry is used only while its gate really is the
 			// `<cond> && refuseLocked` form (review F8).
 			used[key] = used[key] || (conditional && viaCond)
-			if !assert.NotEqual(t, token.NoPos, gate, "%s lints or writes request text, or starts a restore, prune or repository change, with no top-level `if refuseLocked(c, ...) { return }`: a locked session would read its own text back through the secret masking (agent-os-ly6i) or reach secrets through backups (agent-os-h71i)", fset.Position(sink)) {
+			if !assert.NotEqual(t, token.NoPos, gate, "%s lints or writes request text, or starts a restore, prune or repository change, with no top-level `if refuseLocked(c, ...) { return }`: a locked session would read its own text back through the secret masking (agent-os-ly6i) or reach secrets through backups (agent-os-h71i) or git credentials (agent-os-mu4z)", fset.Position(sink)) {
 				continue
 			}
 			assert.Less(t, gate, sink, "%s: refuseLocked must come before the first lint or write at %s", key, fset.Position(sink))
@@ -119,34 +141,66 @@ func TestLockedRefusalGuard_ly6i(t *testing.T) {
 		"stack_crud.go:Create", "stacks.go:Lint", "env.go:Create",
 		"backup.go:runRestore", "backup.go:runDRRestore", "backup.go:runPrune",
 		"backup.go:repoInit", "backup.go:updateSettings",
+		"settings.go:UpdateGitSettings", "directories.go:UpdateCredentials",
+		"env.go:Put", "settings.go:UpdateGlobalEnv", "git.go:Pull",
 	} {
 		assert.Contains(t, inScope, want)
 	}
 }
 
-// firstLockedRefusalSink is the position of the first sink call in body, or
-// NoPos. file is the source file's name, for the file-scoped sinks.
-func firstLockedRefusalSink(body *ast.BlockStmt, file string) token.Pos {
+// firstLockedRefusalSink is the position of the first sink in body, or NoPos:
+// a call in lockedRefusalSinks, or a write naming a lockedSettingKeys key.
+func firstLockedRefusalSink(body *ast.BlockStmt) token.Pos {
 	first := token.NoPos
 	ast.Inspect(body, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
 		}
-		var name string
+		var name, field string
 		switch f := call.Fun.(type) {
 		case *ast.Ident:
 			name = f.Name
 		case *ast.SelectorExpr:
 			name = f.Sel.Name
+			if x, ok := f.X.(*ast.SelectorExpr); ok {
+				field = x.Sel.Name + "." + name
+			}
 		}
-		inFile := lockedRefusalFileSinks[name] == file
-		if (lockedRefusalSinks[name] || inFile) && (first == token.NoPos || call.Pos() < first) {
+		lockedKey := name == "SetSetting" && len(call.Args) > 0 && isLockedSettingKey(call.Args[0])
+		if (lockedRefusalSinks[name] || lockedRefusalFieldSinks[field] || lockedKey) && (first == token.NoPos || call.Pos() < first) {
 			first = call.Pos()
 		}
 		return true
 	})
+	ast.Inspect(body, func(n ast.Node) bool {
+		lit, ok := n.(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		for _, el := range lit.Elts {
+			kv, ok := el.(*ast.KeyValueExpr)
+			if !ok {
+				continue
+			}
+			if id, ok := kv.Key.(*ast.Ident); ok && id.Name == "Key" && isLockedSettingKey(kv.Value) && (first == token.NoPos || lit.Pos() < first) {
+				first = lit.Pos()
+			}
+		}
+		return true
+	})
 	return first
+}
+
+// isLockedSettingKey reports whether e is a string literal naming a key in
+// lockedSettingKeys.
+func isLockedSettingKey(e ast.Expr) bool {
+	lit, ok := e.(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return false
+	}
+	key, err := strconv.Unquote(lit.Value)
+	return err == nil && lockedSettingKeys[key]
 }
 
 // topLevelRefuseLocked is the position of the first top-level statement of

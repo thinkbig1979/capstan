@@ -23,5 +23,27 @@ export const LOCKED_BACKUP_NOTICE =
 export const LOCKED_RESTORE_NOTICE =
   'Env values are locked. Restoring a snapshot needs an unlock, because a restore writes files into the stack.'
 
+/**
+ * What a locked session cannot do with git credentials (agent-os-mu4z): the
+ * server refuses a change to the SSH key, HTTPS user or token, global or per
+ * folder, because pushes and pulls use them.
+ */
+export const LOCKED_GIT_CREDENTIALS_NOTICE =
+  'Env values are locked. Changing the SSH key, HTTPS username or token needs an unlock, because pushes and pulls use them. The commit author stays editable.'
+
+export const LOCKED_FOLDER_CREDENTIALS_NOTICE =
+  'Env values are locked. Changing this folder\'s git credentials needs an unlock, because pushes and pulls use them.'
+
+/**
+ * Why Pull is off while locked (agent-os-hblm): the server refuses a pull,
+ * because it lands the remote's text in the stack folder, where a locked view
+ * masks it, and a redeploy runs it.
+ */
+export const LOCKED_PULL_NOTICE =
+  "Env values are locked. Pulling needs an unlock, because a pull writes the remote's files into your stacks and a redeploy runs them."
+
+/** Tooltip on a credential control disabled while locked. */
+export const LOCKED_CREDENTIAL_TITLE = 'Unlock env values to change this'
+
 /** Tooltip on a backup control disabled while locked. */
 export const LOCKED_BACKUP_TITLE = 'Unlock env values to change this'

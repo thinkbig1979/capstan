@@ -133,6 +133,11 @@ func (h *DirectoriesHandler) Scan(c *gin.Context) {
 }
 
 func (h *DirectoriesHandler) UpdateCredentials(c *gin.Context) {
+	// Every request here sets a folder's git credential, which git uses
+	// before the global one, so all of it needs an unlock (agent-os-mu4z).
+	if refuseLocked(c, "change the git credentials", lockedGitCredentialReason) {
+		return
+	}
 	var req struct {
 		Path       string `json:"path" binding:"required"`
 		AuthType   string `json:"authType"`

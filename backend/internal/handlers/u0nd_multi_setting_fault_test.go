@@ -49,6 +49,7 @@ func u0ndWriters() []u0ndWriter {
 		h := NewSettingsHandler(db, "/opt/stacks", dbFaultTestSecret, false, nil, &config.Config{})
 		r := gin.New()
 		r.Use(authContextMiddleware("test-user-id"))
+		r.Use(envUnlockedMiddleware()) // a credential save needs an unlock (agent-os-mu4z)
 		h.RegisterRoutes(r.Group("/api"))
 		return r
 	}

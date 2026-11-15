@@ -373,12 +373,20 @@ type backupSettingsRequest struct {
 	Hostname                *string `json:"hostname"`
 }
 
+// backupFieldsAllowedLocked are the backupSettingsRequest fields a locked
+// session may set: none of them changes where backups go, with what
+// credential, or how long they are kept.
+var backupFieldsAllowedLocked = []string{
+	"scheduleIntervalMinutes", "scheduleMode", "scheduleTime", "scheduleDays",
+	"syncAfterBackup", "verifyWeekly", "rcloneTransfers", "hostname",
+}
+
 // changesDestinationOrRetention reports whether the request sets a field
-// that moves backups to a new place or credential, or changes how long
-// they are kept: the fields a locked session may not change (agent-os-h71i).
+// outside backupFieldsAllowedLocked: the repository, its password, the
+// rclone remote and path, the retention, and any field added later, which a
+// locked session may not change (agent-os-h71i, 97pn).
 func (r *backupSettingsRequest) changesDestinationOrRetention() bool {
-	return r.Repository != nil || r.Password != nil || r.RcloneRemote != nil || r.RclonePath != nil ||
-		r.KeepDaily != nil || r.KeepWeekly != nil || r.KeepMonthly != nil || r.KeepYearly != nil || r.AutoPrune != nil
+	return setsFieldOutside(r, backupFieldsAllowedLocked...)
 }
 
 // validateScheduleFields validates the three schedule fields that are present
@@ -437,7 +445,7 @@ func (h *BackupHandler) updateSettings(c *gin.Context) {
 	// the repository at a place it controls reads every stack's .env from
 	// the next snapshot, and keep=1 with autoPrune would let the next run
 	// destroy the backups. A schedule or hostname edit stays allowed.
-	if req.changesDestinationOrRetention() && refuseLocked(c, "change where backups go, their credentials or their retention", lockedBackupReason) {
+	if req.changesDestinationOrRetention() && refuseLocked(c, "change where backups go, their credentials or their retention", lockedBackupSettingsReason) {
 		return
 	}
 
@@ -1297,7 +1305,7 @@ func (h *BackupHandler) runRestore(c *gin.Context) {
 
 	// A restore writes a snapshot's files into the stack folder: refused
 	// while env values are locked (agent-os-h71i).
-	if refuseLocked(c, "restore a backup", lockedBackupReason) {
+	if refuseLocked(c, "restore a backup", lockedRestoreReason) {
 		return
 	}
 
@@ -1395,7 +1403,7 @@ func (h *BackupHandler) runDRRestore(c *gin.Context) {
 
 	// A DR restore pulls the repository and restores every stack: refused
 	// while env values are locked (agent-os-h71i).
-	if refuseLocked(c, "run a disaster-recovery restore", lockedBackupReason) {
+	if refuseLocked(c, "run a disaster-recovery restore", lockedDRRestoreReason) {
 		return
 	}
 
@@ -1460,7 +1468,7 @@ func (h *BackupHandler) runPrune(c *gin.Context) {
 
 	// A prune deletes snapshots: it needs the password, as a retention
 	// change does (agent-os-h71i, orch-dm-61 ruling).
-	if refuseLocked(c, "prune backups", lockedBackupReason) {
+	if refuseLocked(c, "prune backups", lockedPruneReason) {
 		return
 	}
 
@@ -1552,7 +1560,7 @@ func (h *BackupHandler) runVerify(c *gin.Context) {
 
 func (h *BackupHandler) repoInit(c *gin.Context) {
 	// Initialising a repository needs the password (agent-os-h71i).
-	if refuseLocked(c, "initialise a backup repository", lockedBackupReason) {
+	if refuseLocked(c, "initialise a backup repository", lockedRepoInitReason) {
 		return
 	}
 

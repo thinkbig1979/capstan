@@ -340,12 +340,7 @@ func (h *SettingsHandler) UpdateGlobalEnv(c *gin.Context) {
 	// Gated for the same reason as EnvHandler.Put: a locked session was handed
 	// blanked sensitive values, and this endpoint replaces the whole file, so
 	// saving from that state would wipe every secret it could not see.
-	if !envUnlocked(c) {
-		c.JSON(http.StatusForbidden, models.NewAppError(
-			http.StatusForbidden,
-			models.ErrForbidden,
-			"Re-enter your password to edit global environment variables",
-		))
+	if refuseLocked(c, "save global environment variables", lockedBlankedReason) {
 		return
 	}
 
@@ -1270,6 +1265,14 @@ func (h *SettingsHandler) UpdateGitSettings(c *gin.Context) {
 			"VALIDATION_ERROR",
 			"Invalid request body",
 		))
+		return
+	}
+
+	// A credential field present needs an unlock, even with the stored value,
+	// so the answer says nothing about what is stored (agent-os-mu4z). Before
+	// the validation, which would otherwise answer about a locked caller's
+	// input. The author fields stay allowed.
+	if setsFieldOutside(&req, gitFieldsAllowedLocked...) && refuseLocked(c, "change the git credentials", lockedGitCredentialReason) {
 		return
 	}
 

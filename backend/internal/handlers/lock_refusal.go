@@ -2,6 +2,9 @@ package handlers
 
 import (
 	"net/http"
+	"reflect"
+	"slices"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
@@ -22,6 +25,11 @@ import (
 // what they keep, and the ones that restore, prune or initialise a
 // repository, use it too (agent-os-h71i): a locked session that could point
 // the repository at a place it controls would read every stack's .env.
+//
+// A git pull uses it too (agent-os-hblm): it lands the remote's text in a
+// stack folder, which a locked view then masks. The git credential writes use
+// it too (agent-os-mu4z): the global SSH key,
+// HTTPS user and token, and a folder's own credentials.
 //
 // A handler whose request may not need the refusal (an empty env create, a
 // backup settings save that only edits the schedule) gates with
@@ -45,7 +53,47 @@ const (
 	// lockedEchoReason: the reply passes the caller's own text through the
 	// secret masking (agent-os-ly6i).
 	lockedEchoReason = "while locked, the reply could show which text matches a secret"
-	// lockedBackupReason: the request changes where backups go, with what
-	// credential, or what they keep (agent-os-h71i).
-	lockedBackupReason = "this needs your password, because it changes where backups go or what they keep"
+	// lockedPullReason: a pull writes the remote's text into the stack folder,
+	// where a locked view masks it, and a redeploy runs it (agent-os-hblm).
+	lockedPullReason = "a pull writes the remote's files into your stacks, and a redeploy runs them"
+	// The backup refusals (agent-os-h71i), one reason per action (zp59).
+	lockedBackupSettingsReason = "backups hold every stack's .env, so whoever picks the repository can read them"
+	lockedRestoreReason        = "a restore writes backed-up files, secrets included, into your stacks"
+	lockedDRRestoreReason      = "it writes backed-up files, secrets included, into your stacks"
+	lockedPruneReason          = "pruning deletes backups"
+	lockedRepoInitReason       = "the repository will hold every stack's .env"
+	// lockedBlankedReason: a locked session was handed the env values blanked,
+	// so a save from that state would write the blanks (agent-os-d1ue).
+	lockedBlankedReason = "while locked, the values you see are blanked, so saving would overwrite every secret with them"
+	// lockedGitCredentialReason: the request changes the credential git uses
+	// to reach the remote (agent-os-mu4z).
+	lockedGitCredentialReason = "pushes and pulls use them"
 )
+
+// gitFieldsAllowedLocked are the git settings a locked session may change:
+// the commit author. The SSH key, HTTPS user and token, and any field added
+// later, need an unlock (agent-os-mu4z).
+var gitFieldsAllowedLocked = []string{"authorName", "authorEmail"}
+
+// setsFieldOutside reports whether req, a pointer to a request struct, sets a
+// field whose json name is not in allowed. A field is set when it is not its
+// zero value: a non-nil pointer, a non-empty string. It is an allow list on
+// purpose (agent-os-97pn): a field added to the request later is refused
+// while locked until someone names it here, instead of being let through.
+func setsFieldOutside(req any, allowed ...string) bool {
+	v := reflect.Indirect(reflect.ValueOf(req))
+	t := v.Type()
+	for i := 0; i < t.NumField(); i++ {
+		if v.Field(i).IsZero() {
+			continue
+		}
+		name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
+		if name == "" {
+			name = t.Field(i).Name
+		}
+		if !slices.Contains(allowed, name) {
+			return true
+		}
+	}
+	return false
+}

@@ -265,6 +265,14 @@ func (h *GitHandler) Pull(c *gin.Context) {
 		handleError(c, models.NewAppError(http.StatusBadRequest, models.ErrValidation, "Pull needs a stackId"))
 		return
 	}
+	// A pull lands the remote's text in the stack folder, where every locked
+	// view masks it, so a list of guesses pushed to the remote would come back
+	// with the secret's line starred; with ?redeploy=true it also runs the
+	// remote's compose. It needs an unlock, like a locked compose save
+	// (agent-os-hblm, ly6i).
+	if refuseLocked(c, "pull from the remote", lockedPullReason) {
+		return
+	}
 	absPath, err := h.stackDir(stackID)
 	if err != nil {
 		handleError(c, err)

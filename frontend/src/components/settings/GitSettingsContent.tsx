@@ -11,6 +11,10 @@ import { Eye, EyeOff } from 'lucide-react'
 import { toast } from 'sonner'
 import { settingsSaveFault } from '@/lib/settings-save-fault'
 import { presentFault } from '@/lib/error-handler'
+import { EnvLockedNotice } from '@/components/EnvLockedNotice'
+import { EnvUnlockDialog } from '@/components/EnvUnlockDialog'
+import { useEnvLockedNow } from '@/hooks/useEnvLockedNow'
+import { LOCKED_CREDENTIAL_TITLE, LOCKED_GIT_CREDENTIALS_NOTICE } from '@/lib/locked-copy'
 
 export function GitSettingsContent() {
   const { data: gitSettings, isPending, isError, refetch } = useGitSettings()
@@ -22,6 +26,11 @@ export function GitSettingsContent() {
   const [authorName, setAuthorName] = useState<string | undefined>(undefined)
   const [authorEmail, setAuthorEmail] = useState<string | undefined>(undefined)
   const [showToken, setShowToken] = useState(false)
+  const [unlockOpen, setUnlockOpen] = useState(false)
+  // Locked, the server refuses the SSH key, HTTPS user and token, even with
+  // the stored value (agent-os-mu4z). The author stays editable.
+  const locked = useEnvLockedNow()
+  const lockedTitle = locked ? LOCKED_CREDENTIAL_TITLE : undefined
 
   const effectiveSshKey = sshKey !== undefined ? sshKey : (gitSettings?.sshKey || '')
   const effectiveHttpsUser = httpsUser !== undefined ? httpsUser : (gitSettings?.httpsUser || '')
@@ -54,8 +63,11 @@ export function GitSettingsContent() {
 
   const handleSave = () => {
     const data: Parameters<typeof updateGitSettings.mutate>[0] = {}
-    if (effectiveSshKey) data.sshKey = effectiveSshKey
-    if (effectiveHttpsUser) data.httpsUser = effectiveHttpsUser
+    // Sent only when edited, like the author below: the server refuses any
+    // credential field while locked, so resending the stored ones would turn
+    // a locked author-only save away (agent-os-mu4z).
+    if (effectiveSshKey && effectiveSshKey !== (gitSettings?.sshKey || '')) data.sshKey = effectiveSshKey
+    if (effectiveHttpsUser && effectiveHttpsUser !== (gitSettings?.httpsUser || '')) data.httpsUser = effectiveHttpsUser
     if (httpsToken) data.httpsToken = httpsToken
     // Sent only when edited, so a credentials-only save never re-validates a
     // stored author. The server answers 400 VALIDATION_ERROR with the reason,
@@ -87,6 +99,10 @@ export function GitSettingsContent() {
 
   return (
     <form onSubmit={(e) => { e.preventDefault(); handleSave() }} className="space-y-6">
+      {locked && (
+        <EnvLockedNotice onUnlock={() => setUnlockOpen(true)}>{LOCKED_GIT_CREDENTIALS_NOTICE}</EnvLockedNotice>
+      )}
+      <EnvUnlockDialog open={unlockOpen} onOpenChange={setUnlockOpen} />
       <div className="space-y-4">
         <h3 className="text-lg font-medium">SSH</h3>
         <div className="space-y-2">
@@ -103,6 +119,8 @@ export function GitSettingsContent() {
             placeholder="/path/to/id_rsa (inside container)"
             value={effectiveSshKey}
             onChange={(e) => setSshKey(e.target.value)}
+            disabled={locked}
+            title={lockedTitle}
             className="max-w-md"
           />
           <p className="text-xs text-muted-foreground">
@@ -121,6 +139,8 @@ export function GitSettingsContent() {
             placeholder="git"
             value={effectiveHttpsUser}
             onChange={(e) => setHttpsUser(e.target.value)}
+            disabled={locked}
+            title={lockedTitle}
             className="max-w-md"
           />
         </div>
@@ -150,6 +170,8 @@ export function GitSettingsContent() {
               }
               value={httpsToken}
               onChange={(e) => setHttpsToken(e.target.value)}
+              disabled={locked}
+              title={lockedTitle}
               className="flex-1"
             />
             <Button
