@@ -218,7 +218,7 @@ func renameIntoPlaceOwned(path string, content []byte, mode os.FileMode, owner *
 
 	if owner != nil {
 		if err := chownTempFile(tmp, owner.uid, owner.gid); err != nil && owner.bestEffort {
-			slog.Warn("Saved a file but could not keep its owner; it is now owned by the user Capstan runs as",
+			slog.Warn("Could not keep a file's owner; saving it as the user Capstan runs as",
 				"file", path, "uid", owner.uid, "gid", owner.gid, "error", err)
 		} else if err != nil {
 			tmp.Close()
