@@ -176,6 +176,9 @@ func redactEnvResponse(resp *EnvResponse) {
 	for i := range resp.Entries {
 		e := &resp.Entries[i]
 		switch {
+		case e.Comment && e.Key == "" && e.Sensitive:
+			// An unkeyed line that looked secret (agent-os-qdnb): hidden.
+			e.Value = ""
 		case e.Comment && e.Key == "":
 			redactEnvCommentRow(e)
 		case e.Sensitive:
@@ -836,7 +839,15 @@ func validateEnvCommentRow(e EnvEntry) error {
 	// Ask the parser GET uses, so this accepts exactly the rows it produces.
 	// A "\n" passes only inside a multi-line value it reads back as this one
 	// row (agent-os-fw2q); one that would add a line does not.
-	back := (&EnvHandler{}).parseEnvFile(serializeEnvFile([]EnvEntry{e}))
+	line := serializeEnvFile([]EnvEntry{e})
+	back := (&EnvHandler{}).parseEnvFile(line)
+	// A bare name is unkeyed as an unterminated last line (agent-os-qdnb),
+	// which is that row read without its line end.
+	if len(back) == 1 && back[0].Key != e.Key && e.Key == "" {
+		if last := (&EnvHandler{}).parseEnvFile(strings.TrimSuffix(line, "\n")); len(last) == 1 && last[0].Key == "" {
+			back = last
+		}
+	}
 	if len(back) != 1 || !back[0].Comment || back[0].Value != e.Value {
 		if strings.Contains(e.Value, "\n") {
 			return errors.New("is a comment containing a newline; this would corrupt the env file")
@@ -979,6 +990,12 @@ func (h *EnvHandler) parseEnvFile(content string) []EnvEntry {
 					value = trimmedLine[colonIndex+1:]
 				}
 				entry.Sensitive = services.IsSensitiveEnvVar(key, value) || statementsLookSensitive(trimmedLine)
+				// A bare name compose does not define (agent-os-qdnb) is not
+				// keyed, and stays hidden while locked if it looked secret
+				// (redactEnvResponse).
+				if eqIndex == -1 && colonIndex == -1 && bareNameUndefined(trimmedLine, n == len(lines)-1 && !strings.HasSuffix(content, "\n")) {
+					entry.Key = ""
+				}
 			}
 			entries = append(entries, entry)
 			continue
@@ -1123,6 +1140,36 @@ func composeLineKey(line string) (key string, ok bool) {
 		}
 	}
 	return key, true
+}
+
+// bareNameUndefined reports whether a line holding only a name (the caller
+// has found no "=" or ":") is one compose's dotenv parser does not define
+// (agent-os-qdnb): a bare "export", whose line end the export prefix takes,
+// and any bare name on an unterminated last line, which compose reads as the
+// value of key "" because no '=', ':' or line end ends its name (compose-go
+// v2 dotenv/parser.go, locateKeyName).
+func bareNameUndefined(line string, unterminatedLast bool) bool {
+	return line == "export" || unterminatedLast
+}
+
+// unterminatedBareName reports whether e is a row parseEnvFile left unkeyed
+// because it is a bare name on an unterminated last line: the same text with
+// a line end is a variable, so written with one, or with any row after it,
+// compose would define that name.
+func unterminatedBareName(e EnvEntry) bool {
+	if !e.Comment || e.Key != "" {
+		return false
+	}
+	h := &EnvHandler{}
+	v := strings.TrimSpace(e.Value)
+	alone, ended := h.parseEnvFile(v), h.parseEnvFile(v+"\n")
+	return len(alone) == 1 && alone[0].Key == "" && len(ended) == 1 && ended[0].Key != ""
+}
+
+// errRowAfterBareLastLine refuses a save that would give the file's
+// unterminated bare last line a line end, and so define it (agent-os-qdnb).
+func errRowAfterBareLastLine(i int) error {
+	return fmt.Errorf("entry at index %d is a bare name on the file's last line, with no line end, which compose does not define; anything written after it would define it, so add the line end in the Raw view (global env: in global.env) first", i)
 }
 
 // splitEnvValue splits the text after "=" the way compose's dotenv parser
@@ -1289,6 +1336,11 @@ func serializeEnvFileOver(current string, entries []EnvEntry) (string, error) {
 	lastBlank := out == eol || strings.HasSuffix(out, eol+eol)
 	if current != "" && !strings.HasSuffix(current, "\n") && !lastBlank {
 		out = strings.TrimSuffix(out, eol)
+	}
+	for i, e := range entries {
+		if unterminatedBareName(e) && (i != len(entries)-1 || strings.HasSuffix(out, "\n")) {
+			return "", errRowAfterBareLastLine(i)
+		}
 	}
 	return out, nil
 }

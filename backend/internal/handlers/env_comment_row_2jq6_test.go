@@ -43,12 +43,25 @@ func TestValidateEnvEntries_CommentRows(t *testing.T) {
 		{Comment: true, Value: "# x\rEVIL=1"},
 		{Comment: true, Value: " # padded"},
 		{Comment: true, Key: "EVIL", Value: "# x"},
-		{Comment: true, Value: "LEGACY_FLAG"}, // unkeyed, the locked view could not mask it
 		{Comment: true, Value: "KEY: v"},
 	}
 	for _, e := range rejected {
 		assert.Error(t, validateEnvEntries([]EnvEntry{e}), "comment row key %q value %q", e.Key, e.Value)
 	}
+
+	// An unkeyed bare name is the row parseEnvFile makes of an unterminated
+	// last line (agent-os-qdnb), so whether it is refused depends on where it
+	// is written: anywhere it would gain a line end, compose would define it,
+	// and serializeEnvFileOver refuses it.
+	bare := EnvEntry{Comment: true, Value: "LEGACY_FLAG", Line: 2}
+	require.NoError(t, validateEnvEntries([]EnvEntry{bare}))
+	_, err := serializeEnvFileOver("", []EnvEntry{bare})
+	assert.Error(t, err, "written with a line end")
+	_, err = serializeEnvFileOver("A=1\n", []EnvEntry{{Key: "A", Value: "1", Line: 1}, bare})
+	assert.Error(t, err, "written with a line end over a terminated file")
+	out, err := serializeEnvFileOver("A=1\nLEGACY_FLAG", []EnvEntry{{Key: "A", Value: "1", Line: 1}, bare})
+	require.NoError(t, err, "the file's own unterminated last line")
+	assert.Equal(t, "A=1\nLEGACY_FLAG", out)
 }
 
 const commentRowContent = "# header\nA=1\n"

@@ -646,6 +646,11 @@ func mergeGlobalEnv(current string, req []EnvEntry) (string, error) {
 		}
 	}
 	added = slices.DeleteFunc(added, func(e EnvEntry) bool { return e.Key == "" && e.Value == "" })
+	// A row appended after an unterminated bare last line gives it a line
+	// end, and compose would then define it (agent-os-qdnb).
+	if len(added) > 0 && len(entries) > 0 && !strings.HasSuffix(current, "\n") && unterminatedBareName(entries[len(entries)-1]) {
+		return "", errRowAfterBareLastLine(len(entries) - 1)
+	}
 	if len(added) > 0 {
 		b.WriteString(strings.ReplaceAll(serializeEnvFile(added), "\n", eol))
 		endsVerbatim = false
