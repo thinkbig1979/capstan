@@ -602,7 +602,9 @@ func sinkArgs9wwa(t *testing.T) map[string]bool {
 	}
 	fset := token.NewFileSet()
 	got := map[string]bool{}
-	for _, name := range []string{"git.go", "git_commit.go", "git_history_diff.go"} {
+	// git_pull_linkdeps.go: link targets come from the pulled tree
+	// (agent-os-zcf9 follow-up d, review rv-dm-gitpull F3).
+	for _, name := range []string{"git.go", "git_commit.go", "git_history_diff.go", "git_pull_linkdeps.go"} {
 		src, err := packageSources.ReadFile(name)
 		require.NoError(t, err)
 		file, err := parser.ParseFile(fset, name, src, 0)
@@ -904,7 +906,7 @@ func TestSinkArgsCensus9wwa(t *testing.T) {
 		"git_commit.go:selectCommitPaths:f":                            request,
 		"git.go:pullCLI:s.dirtyPullMessage(dirPath, cred)":             masked + ": dirtyPullMessage masks each path before quoting it",
 		"git.go:submoduleDriftMessage:p":                               masked + ": its one caller passes redactAll(paths)",
-		"git_history_diff.go:boundedPath:p[:maxErrPathBytes]":          masked + ": every caller in these three files passes a masked or non-repository path (git_pull_linkdeps.go does not; a follow-up)",
+		"git_history_diff.go:boundedPath:p[:maxErrPathBytes]":          masked + ": every caller in these four files passes a masked or non-repository path",
 		"git_history_diff.go:historyEnvRule:args":                      masked + ": unknown() masks each string and error in args first",
 		`git_history_diff.go:historyEnvRule:"Hiding every file but the compose files in the " + view + ": " + msg`: masked + ": view and msg are literals at every call",
 		"git_commit.go:gitRunUnredacted:gitDiagnostic(redactToken(stdout, cred.token), stderr)":                    masked + ": stderr is redacted on read",
