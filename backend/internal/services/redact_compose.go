@@ -597,8 +597,46 @@ func sensitiveEnvValues(content string) []string {
 				add(strings.TrimSuffix(text[1:], raw[:1]))
 			}
 		}
+		// Every statement compose reads after a closing quote (agent-os-czik):
+		// `NOTES="a" DB_PASSWORD=x` is two variables. compose-go finds them
+		// only in a file it parses, and gives the unescaped value; this reads
+		// them in every file, as written and unescaped.
+		for _, st := range envTailStatements(line) {
+			v := line[st.start:st.end]
+			if !IsSensitiveEnvVar(st.key, v) {
+				continue
+			}
+			if st.open {
+				// The value goes on past this line: up to its closing quote.
+				v = line[st.start:] + "\n" + strings.Join(lines[i+1:], "\n")
+				if end := envClosingQuote(v, 0, st.quote); end >= 0 {
+					v = v[:end]
+				}
+			}
+			add(v)
+			if u := envUnescaped(v); u != v {
+				add(u)
+			}
+		}
 	}
 	return values
+}
+
+// envUnescaped is v with each backslash escape replaced by the byte it
+// escapes, as compose-go reads a quoted value's \" and \\ (an approximation:
+// it also maps \n to "n"; the escaped form is added beside it, never instead).
+func envUnescaped(v string) string {
+	if !strings.Contains(v, `\`) {
+		return v
+	}
+	var b strings.Builder
+	for i := 0; i < len(v); i++ {
+		if v[i] == '\\' && i+1 < len(v) {
+			i++
+		}
+		b.WriteByte(v[i])
+	}
+	return b.String()
 }
 
 // envQuoteEnd is the index in s of the quote q that closes a value opened
