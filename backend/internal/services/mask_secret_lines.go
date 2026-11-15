@@ -548,7 +548,7 @@ func (m *lineMasker) linePass() {
 
 // authHeaderRe is an Authorization or Proxy-Authorization header in free
 // text, up to where its value starts; group 1 is the quote before it, if any.
-var authHeaderRe = regexp.MustCompile(`(?i)(?:^|([\s"'\[\{,(]))(?:proxy-)?authorization\s*[:=]\s*`)
+var authHeaderRe = regexp.MustCompile(`(?i)([\s"'\[\{,(])(?:proxy-)?authorization\s*[:=]\s*`)
 
 // authSchemeRe is the scheme word at the start of a header value.
 var authSchemeRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9\-]*\s+`)
@@ -556,40 +556,33 @@ var authSchemeRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9\-]*\s+`)
 // maskAuthHeader masks the credential of every Authorization header on line
 // i (agent-os-w4p2): what follows the scheme word (Bearer, Basic, ...), up to
 // the quote that opened the header, or to the line's end, since a Digest
-// value runs over several tokens.
+// value runs over several tokens. One pass along the line.
 func (m *lineMasker) maskAuthHeader(i int) {
-	for {
-		line := m.lines[i]
-		changed := false
-		for _, loc := range authHeaderRe.FindAllStringSubmatchIndex(line, -1) {
-			start := loc[1]
-			if sc := authSchemeRe.FindString(line[start:]); sc != "" && strings.TrimSpace(line[start+len(sc):]) != "" {
-				start += len(sc)
-			}
-			end := len(line)
-			if loc[2] >= 0 {
-				if q := line[loc[2]]; q == '"' || q == '\'' {
-					if e := strings.IndexByte(line[start:], q); e >= 0 {
-						end = start + e
-					}
+	line := m.lines[i]
+	w := m.newLineWalk(line)
+	forwardMatches(authHeaderRe, line, func(loc []int) (int, bool) {
+		start := loc[1]
+		if sc := authSchemeRe.FindString(line[start:]); sc != "" && strings.TrimSpace(line[start+len(sc):]) != "" {
+			start += len(sc)
+		}
+		end := len(line)
+		if loc[2] >= 0 {
+			if q := line[loc[2]]; q == '"' || q == '\'' {
+				if e := strings.IndexByte(line[start:], q); e >= 0 {
+					end = start + e
 				}
 			}
-			for end > start && (line[end-1] == ' ' || line[end-1] == '\t') {
-				end--
-			}
-			v := line[start:end]
-			if v == "" || v == secretMask || isSecretReference(v) {
-				continue
-			}
-			m.splice(i, start, end, secretMask)
-			m.count++
-			changed = true
-			break
 		}
-		if !changed {
-			return
+		for end > start && (line[end-1] == ' ' || line[end-1] == '\t') {
+			end--
 		}
-	}
+		v := line[start:end]
+		if v == "" || v == secretMask || isSecretReference(v) {
+			return loc[1], false
+		}
+		return w.mask(start, end, secretMask), false
+	})
+	w.apply(m, i)
 }
 
 func (m *lineMasker) maskLeadKey(i int) {
@@ -883,59 +876,137 @@ func envClosingQuote(s string, from int, q byte) int {
 	return -1
 }
 
-// maskFlowTokens masks the values of sensitive KEY=value / KEY: value tokens
-// inside { } or [ ] on line i.
-func (m *lineMasker) maskFlowTokens(i int) {
-	for {
-		line := m.lines[i]
-		changed := false
-		for _, loc := range flowKeyRe.FindAllStringSubmatchIndex(line, -1) {
-			if bareColonUnquoted(line, loc) {
-				continue
-			}
-			key := line[loc[6]:loc[7]]
-			start := loc[1]
-			end := start
-			if start < len(line) && (line[start] == '"' || line[start] == '\'') {
-				e := closingQuote(line, start+1, line[start])
-				if e < 0 {
-					if IsSensitiveEnvVar(key, line[start:]) {
-						m.maskFrom(i, start)
-					}
-					return
-				}
-				end = e + 1
-			} else {
-				for end < len(line) && !strings.ContainsRune(",}]", rune(line[end])) {
-					end++
-				}
-				// The token's own closing quote ("KEY=v", in a list).
-				if q := line[loc[4]:loc[5]]; q != "" {
-					if e := strings.LastIndex(line[start:end], q); e >= 0 {
-						end = start + e
-					}
-				}
-			}
-			value := strings.TrimSpace(line[start:end])
-			v := strings.Trim(value, `"'`)
-			if !IsSensitiveEnvVar(key, v) || v == secretMask || v == "" || isSecretReference(v) {
-				continue
-			}
-			for end > start && line[end-1] == ' ' {
-				end--
-			}
-			repl := secretMask
-			if len(value) >= 2 && (value[0] == '"' || value[0] == '\'') {
-				repl = value[:1] + secretMask + value[:1]
-			}
-			m.splice(i, start, end, repl)
-			m.count++
-			changed = true
-			break // indices moved; scan the new line again
-		}
-		if !changed {
+// forwardMatches calls fn with each match of re in line, left to right, as a
+// scan that starts again after each match finds them: fn returns the index
+// in line where the next match's first byte may sit (a match's end, or the
+// end of the value it masked), or stop. The line maskers rescanned the whole
+// line from its start after every value they masked, n*k on one long line
+// (review round 2 of run/maskfu, HIGH). A space before the line stands for
+// its start, so a regexp's leading separator class matches there as "^" did.
+// Each loc is in line's indices; a separator that is the virtual space
+// reads -1.
+func forwardMatches(re *regexp.Regexp, line string, fn func(loc []int) (next int, stop bool)) {
+	l2 := " " + line
+	for q := 0; q < len(l2); {
+		loc := re.FindStringSubmatchIndex(l2[q:])
+		if loc == nil {
 			return
 		}
+		for k := range loc {
+			if loc[k] >= 0 {
+				loc[k] += q - 1
+			}
+		}
+		next, stop := fn(loc)
+		if stop {
+			return
+		}
+		// next is a line index; its byte is l2[next+1]. Always move on.
+		q = max(next+1, q+1)
+	}
+}
+
+// lineWalk collects the masks one pass along a line makes and writes them
+// once (apply). Each is widened to the needles it overlaps when it is
+// recorded (splice's rule), on the needle runs of the line as the pass
+// found it: an earlier mask of the same pass only ever covered whole runs.
+type lineWalk struct {
+	runs  [][2]int
+	spans []lineSpan
+}
+
+type lineSpan struct {
+	a, b int
+	repl string
+}
+
+func (m *lineMasker) newLineWalk(line string) *lineWalk {
+	return &lineWalk{runs: m.needleRuns(line)}
+}
+
+// mask records [a, b) as replaced by repl and returns where the scan goes
+// on: the end of the (possibly widened) span.
+func (w *lineWalk) mask(a, b int, repl string) int {
+	if wa, wb, widened := widenToRuns(w.runs, a, b); widened {
+		a, b, repl = wa, wb, secretMask
+	}
+	w.spans = append(w.spans, lineSpan{a, b, repl})
+	return b
+}
+
+// apply writes the recorded masks into line i, counts one per mask, and
+// returns how far a position after the last one moved.
+func (w *lineWalk) apply(m *lineMasker, i int) int {
+	if len(w.spans) == 0 {
+		return 0
+	}
+	line := m.lines[i]
+	var b strings.Builder
+	b.Grow(len(line))
+	at := 0
+	for _, sp := range w.spans {
+		b.WriteString(line[at:sp.a])
+		b.WriteString(sp.repl)
+		at = sp.b
+	}
+	b.WriteString(line[at:])
+	m.lines[i] = b.String()
+	m.count += len(w.spans)
+	return len(m.lines[i]) - len(line)
+}
+
+// maskFlowTokens masks the values of sensitive KEY=value / KEY: value tokens
+// inside { } or [ ] on line i, in one pass along it.
+func (m *lineMasker) maskFlowTokens(i int) {
+	line := m.lines[i]
+	w := m.newLineWalk(line)
+	openAt := -1
+	forwardMatches(flowKeyRe, line, func(loc []int) (int, bool) {
+		if bareColonUnquoted(line, loc) {
+			return loc[1], false
+		}
+		key := line[loc[6]:loc[7]]
+		start := loc[1]
+		end := start
+		if start < len(line) && (line[start] == '"' || line[start] == '\'') {
+			e := closingQuote(line, start+1, line[start])
+			if e < 0 {
+				if IsSensitiveEnvVar(key, line[start:]) {
+					openAt = start
+				}
+				return 0, true
+			}
+			end = e + 1
+		} else {
+			for end < len(line) && !strings.ContainsRune(",}]", rune(line[end])) {
+				end++
+			}
+			// The token's own closing quote ("KEY=v", in a list).
+			if q := line[loc[4]:loc[5]]; q != "" {
+				if e := strings.LastIndex(line[start:end], q); e >= 0 {
+					end = start + e
+				}
+			}
+		}
+		value := strings.TrimSpace(line[start:end])
+		v := strings.Trim(value, `"'`)
+		if !IsSensitiveEnvVar(key, v) || v == secretMask || v == "" || isSecretReference(v) {
+			return loc[1], false
+		}
+		for end > start && line[end-1] == ' ' {
+			end--
+		}
+		repl := secretMask
+		if len(value) >= 2 && (value[0] == '"' || value[0] == '\'') {
+			repl = value[:1] + secretMask + value[:1]
+		}
+		return w.mask(start, end, repl), false
+	})
+	// An open quote is masked to the line's end, after the masks before it
+	// (all of which end before it).
+	delta := w.apply(m, i)
+	if openAt >= 0 {
+		m.maskFrom(i, openAt+delta)
 	}
 }
 
@@ -944,91 +1015,77 @@ func (m *lineMasker) maskFlowTokens(i int) {
 // brace, comma or parenthesis.
 // A key after "?", "&" or ";" is a URL or connection-string parameter
 // (agent-os-w4p2): its value also ends at the next "&", ";" or "#".
-var inlineKVRe = regexp.MustCompile(`(?:^|[\s"'\[\{,(?&;])-{0,2}([A-Za-z_][A-Za-z0-9_.\-]*)=`)
+var inlineKVRe = regexp.MustCompile(`[\s"'\[\{,(?&;]-{0,2}([A-Za-z_][A-Za-z0-9_.\-]*)=`)
 
 // maskInlineKV masks the value of every sensitive KEY=value token on line i,
-// up to the next space, quote, comma or closing bracket.
+// up to the next space, quote, comma or closing bracket, in one pass.
 func (m *lineMasker) maskInlineKV(i int) {
-	for {
-		line := m.lines[i]
-		changed := false
-		for _, loc := range inlineKVRe.FindAllStringSubmatchIndex(line, -1) {
-			key := line[loc[2]:loc[3]]
-			start := loc[1]
-			end := start
-			if strings.HasPrefix(line[start:], "${") {
-				// A reference ends at its own brace, not at the first stop.
-				if e := strings.IndexByte(line[start:], '}'); e >= 0 {
-					end = start + e + 1
-				}
+	line := m.lines[i]
+	w := m.newLineWalk(line)
+	forwardMatches(inlineKVRe, line, func(loc []int) (int, bool) {
+		key := line[loc[2]:loc[3]]
+		start := loc[1]
+		end := start
+		if strings.HasPrefix(line[start:], "${") {
+			// A reference ends at its own brace, not at the first stop.
+			if e := strings.IndexByte(line[start:], '}'); e >= 0 {
+				end = start + e + 1
 			}
-			stops := " \t\"',]})"
-			if loc[0] < loc[2] && strings.ContainsRune("?&;", rune(line[loc[0]])) {
-				stops += "&;#"
-			}
-			for end < len(line) && !strings.ContainsRune(stops, rune(line[end])) {
-				end++
-			}
-			v := line[start:end]
-			flag := loc[2] >= 2 && line[loc[2]-2:loc[2]] == "--"
-			if v == "" || v == secretMask || isSecretReference(v) || (!IsSensitiveEnvVar(key, v) && (!flag || !isSensitiveFlagName(key))) {
-				continue
-			}
-			m.splice(i, start, end, secretMask)
-			m.count++
-			changed = true
-			break
 		}
-		if !changed {
-			return
+		stops := " \t\"',]})"
+		if loc[0] >= 0 && strings.ContainsRune("?&;", rune(line[loc[0]])) {
+			stops += "&;#"
 		}
-	}
+		for end < len(line) && !strings.ContainsRune(stops, rune(line[end])) {
+			end++
+		}
+		v := line[start:end]
+		flag := loc[2] >= 2 && line[loc[2]-2:loc[2]] == "--"
+		if v == "" || v == secretMask || isSecretReference(v) || (!IsSensitiveEnvVar(key, v) && (!flag || !isSensitiveFlagName(key))) {
+			return loc[1], false
+		}
+		return w.mask(start, end, secretMask), false
+	})
+	w.apply(m, i)
 }
 
 // flagNextTokenRe is a long flag followed by its value as a separate token on
 // the same line: `--password x` in free text, or `"--password", "x"` in a
 // flow sequence. Group 1 is the flag name; the match ends where the value
 // starts.
-var flagNextTokenRe = regexp.MustCompile(`(?:^|[\s"'\[,(])--([A-Za-z][A-Za-z0-9_.\-]*)["']?(?:\s*,\s*|\s+)`)
+var flagNextTokenRe = regexp.MustCompile(`[\s"'\[,(]--([A-Za-z][A-Za-z0-9_.\-]*)["']?(?:\s*,\s*|\s+)`)
 
 // maskFlagNextToken masks the value token after every sensitive long flag on
 // line i (sec D5): up to the next space, quote, comma, bracket or #, the
 // value's own quotes kept. A reference, or a next token that is itself a
-// flag, stays visible.
+// flag, stays visible. One pass along the line.
 func (m *lineMasker) maskFlagNextToken(i int) {
-	for {
-		line := m.lines[i]
-		changed := false
-		for _, loc := range flagNextTokenRe.FindAllStringSubmatchIndex(line, -1) {
-			if !isSensitiveFlagName(line[loc[2]:loc[3]]) {
-				continue
-			}
-			start := loc[1]
-			if start < len(line) && (line[start] == '"' || line[start] == '\'') {
-				start++
-			}
-			end := start
-			if strings.HasPrefix(line[start:], "${") {
-				if e := strings.IndexByte(line[start:], '}'); e >= 0 {
-					end = start + e + 1
-				}
-			}
-			for end < len(line) && !strings.ContainsRune(" \t\"',]})#", rune(line[end])) {
-				end++
-			}
-			v := line[start:end]
-			if v == "" || v == secretMask || isSecretReference(v) || strings.HasPrefix(v, "-") {
-				continue
-			}
-			m.splice(i, start, end, secretMask)
-			m.count++
-			changed = true
-			break
+	line := m.lines[i]
+	w := m.newLineWalk(line)
+	forwardMatches(flagNextTokenRe, line, func(loc []int) (int, bool) {
+		if !isSensitiveFlagName(line[loc[2]:loc[3]]) {
+			return loc[1], false
 		}
-		if !changed {
-			return
+		start := loc[1]
+		if start < len(line) && (line[start] == '"' || line[start] == '\'') {
+			start++
 		}
-	}
+		end := start
+		if strings.HasPrefix(line[start:], "${") {
+			if e := strings.IndexByte(line[start:], '}'); e >= 0 {
+				end = start + e + 1
+			}
+		}
+		for end < len(line) && !strings.ContainsRune(" \t\"',]})#", rune(line[end])) {
+			end++
+		}
+		v := line[start:end]
+		if v == "" || v == secretMask || isSecretReference(v) || strings.HasPrefix(v, "-") {
+			return loc[1], false
+		}
+		return w.mask(start, end, secretMask), false
+	})
+	w.apply(m, i)
 }
 
 // MaskArgs masks an argv for a locked session (container inspect's Cmd,
