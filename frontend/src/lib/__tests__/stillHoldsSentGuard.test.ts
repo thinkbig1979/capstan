@@ -7,9 +7,10 @@
  * (hooks/useStillHoldsSent.ts) reads the latest state through its own ref;
  * a callback that marks clean on its own throws that typing's dirty flag away.
  *
- * 1. CONSUMER arm: every call to a clean setter (CLEAN_SETTERS) with anything
- *    but `true` sits in the then-branch of an `if` whose condition calls
- *    `.stillHolds()`, or in a scope named in ALLOWED with the reason it holds
+ * 1. CONSUMER arm: every call to a clean setter (CLEAN_SETTER: any
+ *    set...Dirty / set...Unsaved) with anything but `true` sits in the
+ *    then-branch of an `if` whose condition requires `.stillHolds()` (the call
+ *    itself or an `&&` operand, never negated or under `||`), or in a scope named in ALLOWED with the reason it holds
  *    no save in flight. The scope is the innermost variable the call sits in
  *    (`const hydrate = ...`, `const createEnvMutation = ...`). An ALLOWED entry
  *    that no longer holds a clean-setter call is a failure, so the list cannot
@@ -20,8 +21,8 @@
  * Planted violations are made IN MEMORY, so a green run cannot be a scanner
  * that matches nothing.
  *
- * BLIND SPOTS: syntax only. The setter names are a fixed list, so a clean flag
- * under another name is not seen. An editor whose dirtiness is DERIVED
+ * BLIND SPOTS: syntax only. A clean flag whose setter name has neither Dirty
+ * nor Unsaved in it is not seen. An editor whose dirtiness is DERIVED
  * (`content !== lastSaved`, the compose editors' setLastSaved) is not this
  * class and is not scanned. `.stillHolds()` is matched by name, so an `if` over
  * some other object's stillHolds passes. A ref of editor state under another
@@ -38,7 +39,8 @@ const production = Object.entries(sources).filter(
 )
 
 const HELPER = '/src/hooks/useStillHoldsSent.ts'
-const CLEAN_SETTERS = new Set(['setHasUnsavedChanges', 'setDirty'])
+// Fails closed on any dirty or unsaved setter, not a list of today's names (review F4).
+const CLEAN_SETTER = /^set\w*(Dirty|Unsaved)/
 const EDITOR_STATE = new Set(['entries', 'vars', 'content', 'rawContent'])
 
 // `${path}#${scope}` -> why a clean flag set there cannot discard typing.
@@ -63,18 +65,21 @@ function walk(node: ts.Node, visit: (n: ts.Node) => void) {
 const calleeName = (call: ts.CallExpression) =>
   ts.isIdentifier(call.expression) ? call.expression.text : ts.isPropertyAccessExpression(call.expression) ? call.expression.name.text : ''
 
-const callsStillHolds = (node: ts.Node) => {
-  let hit = false
-  walk(node, (n) => {
-    if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && n.expression.name.text === 'stillHolds') hit = true
-  })
-  return hit
+/**
+ * The condition requires `.stillHolds()`: it is the call itself, or an operand of
+ * `&&` (through parentheses). A negation or an `||` operand does not (review F4).
+ */
+function requiresStillHolds(e: ts.Expression): boolean {
+  if (ts.isParenthesizedExpression(e)) return requiresStillHolds(e.expression)
+  if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken)
+    return requiresStillHolds(e.left) || requiresStillHolds(e.right)
+  return ts.isCallExpression(e) && ts.isPropertyAccessExpression(e.expression) && e.expression.name.text === 'stillHolds'
 }
 
-/** Inside the then-branch of an `if` whose condition calls `.stillHolds()`. */
+/** Inside the then-branch of an `if` whose condition requires `.stillHolds()`. */
 function underStillHolds(node: ts.Node): boolean {
   for (let child = node, p = node.parent; p; child = p, p = p.parent) {
-    if (ts.isIfStatement(p) && p.thenStatement === child && callsStillHolds(p.expression)) return true
+    if (ts.isIfStatement(p) && p.thenStatement === child && requiresStillHolds(p.expression)) return true
   }
   return false
 }
@@ -89,7 +94,7 @@ function cleanSites(path: string, text: string) {
   const sf = parse(path, text)
   const sites: Array<{ at: string; scope: string; ok: boolean }> = []
   walk(sf, (n) => {
-    if (!ts.isCallExpression(n) || !CLEAN_SETTERS.has(calleeName(n))) return
+    if (!ts.isCallExpression(n) || !CLEAN_SETTER.test(calleeName(n))) return
     if (n.arguments[0]?.kind === ts.SyntaxKind.TrueKeyword) return
     const scope = `${path}#${innermostVariable(sf, n)}`
     sites.push({
@@ -151,6 +156,21 @@ describe('mark clean goes through useStillHoldsSent (agent-os-k59u)', () => {
     expect(planted).not.toBe(sources[path])
     expect(cleanSites(path, planted).filter((s) => !s.ok)).toEqual([
       expect.objectContaining({ scope: `${path}#saveMutation`, ok: false }),
+    ])
+  })
+
+  it.each([
+    ['a negated check', 'if (!h.stillHolds()) setDirty(false)'],
+    ['an || operand', 'if (h.stillHolds() || true) setDirty(false)'],
+    ['a setter name outside the old list', 'setIsDirty(false)'],
+  ])('flags %s (review F4)', (_name, body) => {
+    const path = '/src/components/Zz.tsx'
+    expect(cleanSites(path, `const save = () => { ${body} }`)).toEqual([expect.objectContaining({ ok: false })])
+  })
+
+  it('control: the check as an && operand passes', () => {
+    expect(cleanSites('/f.ts', 'const save = () => { if (ready && (h.stillHolds())) setDirty(false) }')).toEqual([
+      expect.objectContaining({ ok: true }),
     ])
   })
 
