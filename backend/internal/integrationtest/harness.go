@@ -111,7 +111,7 @@ func NewTempStack(t *testing.T, composeYAML string) (dir string, project string,
 				"down", "-v", "--remove-orphans",
 			)
 			downCmd.Dir = dir
-			_ = downCmd.Run()
+			_ = downCmd.Run() //nolint:errcheck // best-effort cleanup: a failure here is not the test's result
 		})
 	}
 

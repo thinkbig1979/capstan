@@ -37,10 +37,10 @@ func Test_UpdateContainer_Compose_e04r_LeavesOneOffRunning(t *testing.T) {
 	// Cleanups run last-registered first: the one-off, then its volume.
 	t.Cleanup(func() {
 		if oneOffVol != "" {
-			_ = exec.Command("docker", "volume", "rm", oneOffVol).Run()
+			_ = exec.Command("docker", "volume", "rm", oneOffVol).Run() //nolint:errcheck // best-effort cleanup: a failure here is not the test's result
 		}
 	})
-	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", oneOff).Run() })
+	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", oneOff).Run() }) //nolint:errcheck // best-effort cleanup: a failure here is not the test's result
 
 	docker := func(args ...string) string {
 		t.Helper()

@@ -40,6 +40,14 @@ version: "2"
 # gosimple as a separate name in v2. So "staticcheck" here already covers
 # what an earlier v1-era request might list as two entries; nothing was
 # dropped.
+run:
+  # The integration tests (internal/integrationtest, *_integration_test.go)
+  # are behind //go:build integration. Without the tag golangci never
+  # compiled them, and 99 findings sat there unseen (agent-os-7hpc). The
+  # tag only adds files: no file in backend/ is behind !integration.
+  build-tags:
+    - integration
+
 linters:
   default: none
   settings:
@@ -76,9 +84,9 @@ linters:
       # than matching source text, so an aliased import cannot slip past it.
       # It sees EXPRESSIONS only: sql.ErrNoRows inside a comment or a string
       # literal is invisible to this rule, and so is any file behind an
-      # unsatisfied build tag (internal/integrationtest is behind
-      # //go:build integration). Those were swept by hand for agent-os-ymyc and
-      # are not covered going forward.
+      # unsatisfied build tag. The integration tag is set under run: below
+      # (agent-os-7hpc), so internal/integrationtest is covered; any other
+      # tag is not.
       forbid:
         - pattern: 'sql\.ErrNoRows'
           msg: 'discriminate on errdefs.ErrNotFound; only internal/database may see sql.ErrNoRows (agent-os-ymyc)'
@@ -189,9 +197,8 @@ linters:
         linters: [forbidigo]
         text: 'commandWithDeadline|writeFileAtomic|lineio\.NewScanner'
       # Build-tagged (//go:build integration) test harness that shells out to
-      # docker. golangci does not compile it without build-tags (none are set),
-      # so this is inert today and records the decision for the day someone
-      # adds the tag. It also writes its compose fixture into a temp dir.
+      # docker, linted since build-tags below (agent-os-7hpc). It also writes
+      # its compose fixture into a temp dir.
       - path: 'internal/integrationtest/'
         linters: [forbidigo]
         text: 'commandWithDeadline|writeFileAtomic'
@@ -243,6 +250,15 @@ linters:
       - path: 'internal/services/git_credentials\.go'
         linters: [gosec]
         text: 'G101'
+      # The integration tests (agent-os-7hpc, linted since build-tags below)
+      # drive the real docker/compose/git CLIs with argv the test builds
+      # (G204), read the fixtures they wrote under t.TempDir() (G304), and
+      # chmod a fixture to provoke a write failure (G302). None of it is a
+      # production child process or path. Scoped to these files and these
+      # rules, so every other gosec rule still gates there.
+      - path: 'internal/integrationtest/|_integration_test\.go$'
+        linters: [gosec]
+        text: 'G204|G302|G304'
       # G124 (http.Cookie missing/insecure Secure/HttpOnly/SameSite attribute,
       # new in the gosec bundled with golangci-lint v2.12.2 — v2.11.1 reports
       # 0 issues here) fires on every req.AddCookie(&http.Cookie{...}) in

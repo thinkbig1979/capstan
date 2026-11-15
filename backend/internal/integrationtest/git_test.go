@@ -236,7 +236,7 @@ func TestGit_PullVerified_PartialOnFailedRedeploy(t *testing.T) {
 			"-f", filepath.Join(localDir, "compose.yaml"),
 			"down", "-v", "--remove-orphans")
 		cmd.Dir = localDir
-		_ = cmd.Run()
+		_ = cmd.Run() //nolint:errcheck // best-effort: a failure here is not the test's result
 	})
 
 	gitSvc := services.NewGitService(cfg, db)
@@ -354,7 +354,7 @@ func TestGit_PullVerified_SuccessWithRedeploy(t *testing.T) {
 			"-f", filepath.Join(localDir, "compose.yaml"),
 			"down", "-v", "--remove-orphans")
 		cmd.Dir = localDir
-		_ = cmd.Run()
+		_ = cmd.Run() //nolint:errcheck // best-effort: a failure here is not the test's result
 	})
 
 	// Start the stack from localDir so RestartVerified has a running container

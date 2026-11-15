@@ -57,8 +57,8 @@ func Test_UpdateComposeService_fjd6_OldImageFromServiceNotOneOff(t *testing.T) {
 	otherImage := fmt.Sprintf("capstan-it-fjd6-%d", time.Now().UnixNano())
 	oneOff := project + "-oneoff"
 	// Cleanups run last-registered first: the one-off, then its image.
-	t.Cleanup(func() { _ = exec.Command("docker", "rmi", otherImage).Run() })
-	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", oneOff).Run() })
+	t.Cleanup(func() { _ = exec.Command("docker", "rmi", otherImage).Run() })  //nolint:errcheck // best-effort cleanup: a failure here is not the test's result
+	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", oneOff).Run() }) //nolint:errcheck // best-effort cleanup: a failure here is not the test's result
 
 	build := exec.Command("docker", "build", "-q", "-t", otherImage, "-")
 	build.Stdin = strings.NewReader("FROM " + updateTestImage + "\nLABEL capstan-it-fjd6=1\n")

@@ -64,14 +64,14 @@ func Test_UpdateContainer_Standalone_KeepsAnonymousVolumeData(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 		for v := range volumes {
-			_ = exec.Command("docker", "volume", "rm", v).Run()
+			_ = exec.Command("docker", "volume", "rm", v).Run() //nolint:errcheck // best-effort cleanup: a failure here is not the test's result
 		}
 	})
 	t.Cleanup(func() {
-		_ = exec.Command("docker", "rm", "-f", name).Run()
-		out, _ := exec.Command("docker", "ps", "-aq", "--filter", "name="+leftover).Output()
+		_ = exec.Command("docker", "rm", "-f", name).Run()                                   //nolint:errcheck // best-effort cleanup: a failure here is not the test's result
+		out, _ := exec.Command("docker", "ps", "-aq", "--filter", "name="+leftover).Output() //nolint:errcheck // best-effort: a failure here is not the test's result
 		for _, id := range strings.Fields(string(out)) {
-			_ = exec.Command("docker", "rm", "-f", id).Run()
+			_ = exec.Command("docker", "rm", "-f", id).Run() //nolint:errcheck // best-effort cleanup: a failure here is not the test's result
 		}
 	})
 
