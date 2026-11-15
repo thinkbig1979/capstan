@@ -168,6 +168,10 @@ func redactURLToken(tok string) string {
 	return redactEncodedNestedUserinfo(out)
 }
 
+// maxEncodedNestedURLs is how many percent-encoded nested URLs one token is
+// read for; no real URL nests more than a couple.
+const maxEncodedNestedURLs = 16
+
 // encodedSchemeSep is "://" percent-encoded, as a URL nested in a query
 // parameter carries it, compared ASCII case-insensitively.
 const encodedSchemeSep = "%3a%2f%2f"
@@ -180,12 +184,19 @@ func redactEncodedNestedUserinfo(tok string) string {
 	lower := asciiLower(tok)
 	var b strings.Builder
 	at := 0
-	for i := 0; i < len(tok); {
+	for i, n := 0, 0; i < len(tok); n++ {
 		j := strings.Index(lower[i:], encodedSchemeSep)
 		if j < 0 {
 			break
 		}
 		start := i + j + len(encodedSchemeSep)
+		if n == maxEncodedNestedURLs {
+			// Each nested URL reads on to its token's end, so this bounds
+			// the work (review of run/mask2, F1): fail closed on the rest.
+			b.WriteString(tok[at:start])
+			b.WriteString(userinfoPlaceholder)
+			return b.String()
+		}
 		end := len(tok)
 		if k := strings.IndexAny(tok[start:], "&#"); k >= 0 {
 			end = start + k
@@ -632,8 +643,8 @@ func sensitiveEnvValues(content string) []string {
 			}
 			if raw != "" && (raw[0] == '"' || raw[0] == '\'') && envQuoteEnd(raw, 1, raw[0]) < 0 {
 				// The value goes on past this line: up to its closing quote.
-				text := raw + "\n" + strings.Join(lines[i+1:], "\n")
-				if end := envQuoteEnd(text, 1, raw[0]); end >= 0 {
+				text, end := followQuotedValue(raw, lines[i+1:], 1, raw[0], false)
+				if end >= 0 {
 					text = text[:end+1]
 				}
 				add(text)
@@ -652,9 +663,10 @@ func sensitiveEnvValues(content string) []string {
 			}
 			if st.open {
 				// The value goes on past this line: up to its closing quote.
-				v = line[st.start:] + "\n" + strings.Join(lines[i+1:], "\n")
-				if end := envClosingQuote(v, 0, st.quote); end >= 0 {
-					v = v[:end]
+				text, end := followQuotedValue(line[st.start:], lines[i+1:], 0, st.quote, true)
+				v = text
+				if end >= 0 {
+					v = text[:end]
 				}
 			}
 			add(v)
@@ -664,6 +676,36 @@ func sensitiveEnvValues(content string) []string {
 		}
 	}
 	return values
+}
+
+// followQuotedValue is head followed by "\n" and each of rest in turn, read
+// only up to the line holding the quote q that closes a value opened just
+// before from in head, and that quote's index in the text (-1 when it never
+// closes, and the text is all of it). A backslash escapes the next byte, a
+// newline included, inside double quotes, and inside single quotes too when
+// escapeSingle: envQuoteEnd's and envClosingQuote's rules on the joined text.
+// Joining every later line for each open value made a file of them
+// quadratic (review of run/mask2, F2).
+func followQuotedValue(head string, rest []string, from int, q byte, escapeSingle bool) (string, int) {
+	var b strings.Builder
+	b.WriteString(head)
+	pos := from
+	for k := 0; ; k++ {
+		s := b.String()
+		for ; pos < len(s); pos++ {
+			switch c := s[pos]; {
+			case c == '\\' && (q == '"' || escapeSingle):
+				pos++
+			case c == q:
+				return s, pos
+			}
+		}
+		if k == len(rest) {
+			return s, -1
+		}
+		b.WriteByte('\n')
+		b.WriteString(rest[k])
+	}
 }
 
 // envUnescaped is v with each backslash escape replaced by the byte it

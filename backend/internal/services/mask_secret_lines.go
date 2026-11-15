@@ -604,9 +604,14 @@ func (m *lineMasker) envQuotePass(orig []string) {
 		if n := len(sts); n > 0 && sts[n-1].open {
 			last := sts[n-1]
 			inBody, q = true, last.quote
-			sensitive = IsSensitiveEnvKey(last.key) || HasURLUserinfo(orig[i][last.start:])
+			// The env views' rule (review of run/mask2, F4): a quoted JSON
+			// value holding a password is a secret whatever its key.
+			sensitive = IsSensitiveEnvVar(last.key, orig[i][last.start:])
 			if sensitive {
 				m.count++
+				if !m.masked[i] && m.lines[i] == orig[i] {
+					m.maskFrom(i, last.start)
+				}
 			}
 		}
 	}
