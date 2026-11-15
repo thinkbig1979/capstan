@@ -153,8 +153,8 @@ func TestEnvAfterQuote_zpbi_TailOpensMultilineHiddenOnLockedGlobalPage(t *testin
 //
 // The check is how the time grows, not a clock: each shape is parsed and
 // redacted at n and 8n, the fastest of 3 interleaved runs each, and the time
-// may grow less than linearGrowthBound times. Linear code grows about 8x, a
-// quadratic one about 64x. A loaded machine or the race detector slows both
+// may grow less than its shape's bound (growthBounds). Linear code grows
+// about 8x, a quadratic one about 64x. A loaded machine or the race detector slows both
 // sizes, so the ratio holds where a 2 s bound did not (agent-os-yzmh: a loaded
 // -race run took 18.9 s on the sensitive chain). An allocation bound, as in
 // services' n30e test, would not do here: the no-watermark mutant (pass 1
@@ -184,6 +184,7 @@ func TestEnvAfterQuote_zpbi_LongTailParsesInLinearTime(t *testing.T) {
 		}},
 	}
 	sizes := map[string]int{"plain tail": 16400, "sensitive tail": 16400, "chain": 10300, "sensitive chain": 40000}
+	require.Len(t, growthBounds, len(shapes))
 	run := func(content string) time.Duration {
 		start := time.Now()
 		resp := EnvResponse{Raw: content, Entries: (&EnvHandler{}).parseEnvFile(content)}
@@ -212,16 +213,30 @@ func TestEnvAfterQuote_zpbi_LongTailParsesInLinearTime(t *testing.T) {
 			}
 			growth := float64(tLarge) / float64(max(tSmall, time.Microsecond))
 			t.Logf("%d bytes in %s, %d bytes in %s: %.1fx", len(small), tSmall, len(large), tLarge, growth)
-			assert.Less(t, growth, linearGrowthBound, "8x the input took %.1fx the time (%s against %s): not linear", growth, tLarge, tSmall)
+			bound, ok := growthBounds[sh.name]
+			require.True(t, ok, "no growth bound for %s", sh.name)
+			assert.Less(t, growth, bound, "8x the input took %.1fx the time (%s against %s): not linear", growth, tLarge, tSmall)
 		})
 	}
 }
 
-// linearGrowthBound is the growth TestEnvAfterQuote_zpbi_LongTailParsesInLinearTime
-// allows for 8x the input. Measured 2026-11-15 on cce3cd0's code: the fix grew
-// 8.1x to 10.7x per shape plain and 6.6x to 10.3x under -race; the
-// no-watermark mutant's sensitive chain grew 72.6x plain and 41.7x under -race.
-const linearGrowthBound = 20.0
+// growthBounds is the growth TestEnvAfterQuote_zpbi_LongTailParsesInLinearTime
+// allows each shape for 8x the input, measured 2026-11-15.
+//
+// The sensitive chain is the shape the no-watermark mutant fails on (51x to
+// 72x plain, 39x to 42x under -race), and its loaded maximum was 13.3x, so it
+// keeps 20. The two tail shapes' small input runs in microseconds to
+// milliseconds, inside one scheduler slice, while the large one loses CPU
+// share under load: the sensitive tail reached 23.5x with 12 CPU hogs on 8
+// cores (review of agent-os-yzmh). Those three get 32, still half the 64x a
+// quadratic pass gives. Taking the fastest of more runs did not help (22.0x
+// with 9).
+var growthBounds = map[string]float64{
+	"plain tail":      32,
+	"sensitive tail":  32,
+	"chain":           32,
+	"sensitive chain": 20,
+}
 
 // Review round 3 (R1, P3, R2, P1, P2): every statement compose reads on a
 // line is checked with its own value, and a body that a later statement
