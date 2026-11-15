@@ -33,8 +33,10 @@
  */
 import { describe, it, expect } from 'vitest'
 import ts from 'typescript'
+import { readSourceFiles } from '@/test/sourceFiles'
 
-const sources = import.meta.glob<string>('/src/**/*.{ts,tsx}', { query: '?raw', import: 'default', eager: true })
+// Read from disk at run time, not import.meta.glob: see src/test/sourceFiles.ts (agent-os-3j4i).
+const sources = readSourceFiles()
 const production = Object.entries(sources).filter(
   ([path]) => !path.includes('/__tests__/') && !/\.test\.tsx?$/.test(path) && !path.startsWith('/src/test/'),
 )

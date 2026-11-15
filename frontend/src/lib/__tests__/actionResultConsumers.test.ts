@@ -49,6 +49,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import ts from 'typescript'
+import { readSourceFiles } from '@/test/sourceFiles'
 
 const ACTIONS = new Set(['start', 'stop', 'restart', 'pull'])
 const ROUTE = /\/stacks\/[^'"`]*\/(start|stop|restart|pull)\b/
@@ -78,7 +79,8 @@ type FnLike = ts.ArrowFunction | ts.FunctionExpression | ts.FunctionDeclaration 
 const isFn = (n: ts.Node): n is FnLike =>
   ts.isArrowFunction(n) || ts.isFunctionExpression(n) || ts.isFunctionDeclaration(n) || ts.isMethodDeclaration(n)
 
-const sources = import.meta.glob<string>('/src/**/*.{ts,tsx}', { query: '?raw', import: 'default', eager: true })
+// Read from disk at run time, not import.meta.glob: see src/test/sourceFiles.ts (agent-os-3j4i).
+const sources = readSourceFiles()
 const API_PATH = '/src/lib/api.ts'
 
 // Parsed once per (file, source): a planted row re-scans the whole tree with one file
