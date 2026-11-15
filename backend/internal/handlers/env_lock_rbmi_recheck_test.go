@@ -91,6 +91,7 @@ func shortRecheck(t *testing.T) {
 type liveTerminal struct {
 	conn   *websocket.Conn
 	closed chan *websocket.CloseError
+	output chan []byte
 }
 
 func dialLiveTerminal(t *testing.T, unlock gin.HandlerFunc) *liveTerminal {
@@ -116,14 +117,19 @@ func dialLiveTerminal(t *testing.T, unlock gin.HandlerFunc) *liveTerminal {
 	resp.Body.Close()
 	t.Cleanup(func() { conn.Close() })
 
-	lt := &liveTerminal{conn: conn, closed: make(chan *websocket.CloseError, 1)}
+	lt := &liveTerminal{conn: conn, closed: make(chan *websocket.CloseError, 1), output: make(chan []byte, 256)}
 	require.NoError(t, conn.SetReadDeadline(hangGuardDeadline(t)))
 	go func() {
 		for {
-			if _, _, err := conn.ReadMessage(); err != nil {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
 				ce, _ := err.(*websocket.CloseError)
 				lt.closed <- ce
 				return
+			}
+			select {
+			case lt.output <- data:
+			default:
 			}
 		}
 	}()
@@ -136,6 +142,26 @@ func (lt *liveTerminal) requireOpen(t *testing.T) {
 	case ce := <-lt.closed:
 		t.Fatalf("the terminal closed while its unlock was live: %v", ce)
 	default:
+	}
+}
+
+// requireOutputContains waits for want in the terminal's output.
+func (lt *liveTerminal) requireOutputContains(t *testing.T, want string) {
+	t.Helper()
+	var seen strings.Builder
+	guard := time.After(time.Until(hangGuardDeadline(t)))
+	for {
+		select {
+		case data := <-lt.output:
+			seen.Write(data)
+			if strings.Contains(seen.String(), want) {
+				return
+			}
+		case ce := <-lt.closed:
+			t.Fatalf("the terminal closed before %q came back (seen %q): %v", want, seen.String(), ce)
+		case <-guard:
+			t.Fatalf("%q never came back from the shell (seen %q)", want, seen.String())
+		}
 	}
 }
 

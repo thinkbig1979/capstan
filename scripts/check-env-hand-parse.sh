@@ -73,7 +73,7 @@ backend/internal/services/backup_rclone_redact.go|RedactRcloneRemote
 backend/internal/services/backup_rclone_redact.go|rcloneSecrets
 backend/internal/services/linter.go|processComposeEnv
 backend/internal/handlers/resources.go|maskContainerEnv
-backend/internal/services/mask_secret_lines.go|walk
+backend/internal/services/mask_secret_lines.go|walkSensitiveYAML
 backend/internal/services/mask_secret_lines.go|maskItemAfterEquals
 backend/internal/services/mask_secret_lines.go|envStatementsFrom
 "
@@ -117,9 +117,11 @@ backend/internal/services/mask_secret_lines.go|envStatementsFrom
 #     environment (dockerEnv), split as resolveComposeEnv splits it; no file.
 #   handlers/resources.go maskContainerEnv: Docker's Config.Env entries, the
 #     Engine API's KEY=VALUE strings, split to mask a value (agent-os-yvlh).
-#   services/mask_secret_lines.go walk, maskItemAfterEquals: find where a
-#     KEY=value list item's value starts so it can be masked for a locked
-#     view (agent-os-w6wx); they never resolve or return a value.
+#   services/mask_secret_lines.go walkSensitiveYAML, maskItemAfterEquals:
+#     find where a KEY=value list item's value starts so it can be masked for
+#     a locked view (agent-os-w6wx). walkSensitiveYAML also hands that value
+#     to the stack's secret list (composeYAMLSecretValues, agent-os-rbmi),
+#     where it is only a masking needle; neither resolves a value or shows one.
 #   services/mask_secret_lines.go envStatementsFrom: finds the statements
 #     compose reads on an env line, after a closing quote too, by compose's
 #     "=" or ":" rule, so maskEnvTail and envQuotePass can mask a sensitive
@@ -384,7 +386,7 @@ EOF
   cat > "$d/backend/internal/services/mask_secret_lines.go" <<'EOF'
 package services
 
-func (m *lineMasker) walk(n *yaml.Node) {
+func walkSensitiveYAML(n *yaml.Node) {
 	if key, val, ok := strings.Cut(c.Value, "="); ok {
 	}
 }

@@ -548,6 +548,28 @@ func StackSecretValues(stack models.Stack, globalPath string) []string {
 		}
 	}
 
+	// What the compose files write under a sensitive name, and the env files
+	// their services name, as the locked compose view hides them
+	// (agent-os-rbmi review F1). The env files join the per-file pass below.
+	inline, serviceEnvFiles := composeSecretSources(stack)
+	for _, v := range inline {
+		add(v)
+	}
+	for _, p := range serviceEnvFiles {
+		if read[p] {
+			continue
+		}
+		read[p] = true
+		data, ok := readServiceEnvFile(stack, p)
+		if !ok {
+			continue
+		}
+		files = append(files, p)
+		for _, v := range sensitiveEnvValues(string(data)) {
+			add(v)
+		}
+	}
+
 	// compose-go stops a chain at its first file that does not parse, so a
 	// broken global.env would hide the stack's own files from it. Each file
 	// is therefore also resolved alone (agent-os-0c9k); its ${VAR} references
