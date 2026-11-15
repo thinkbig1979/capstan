@@ -438,9 +438,11 @@ func TestBuildStackStatuses(t *testing.T) {
 	assert.Equal(t, "partial", got["api"].Status)
 	assert.Len(t, got["api"].Containers, 2)
 
-	// idle: only an exited container -> "partial" (mirrors Status(): non-empty,
-	// not all running; "stopped" is reserved for zero containers).
-	assert.Equal(t, "partial", got["idle"].Status)
+	// idle: only an exited container -> "stopped". This was "partial" ("stopped"
+	// reserved for zero containers); Edwin ruled 2026-11-15 (agent-os-rpbx D2)
+	// that a project with no container left running reads stopped, as Status
+	// now does since it lists exited containers.
+	assert.Equal(t, "stopped", got["idle"].Status)
 
 	// Field parity: every models.Container field is carried from the snapshot.
 	web1 := got["web"].Containers[0]
