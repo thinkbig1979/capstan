@@ -71,6 +71,13 @@ export function DiffViewer({ stackId, commitHash }: DiffViewerProps) {
       <div className="flex flex-col items-center justify-center gap-1 py-4 text-center text-muted-foreground">
         <p>Failed to load diff</p>
         {cause && <p>{cause}</p>}
+        {/* A diff hidden at a lock, after its refetch failed or never ran, can
+            be fetched again masked (agent-os-npxh review F7). */}
+        {stale && (
+          <Button type="button" variant="outline" size="sm" className="mt-1" onClick={() => void refetch()}>
+            Retry
+          </Button>
+        )}
       </div>
     )
   }

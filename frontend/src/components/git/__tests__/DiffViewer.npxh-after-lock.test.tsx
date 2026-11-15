@@ -5,7 +5,7 @@
  * until the lock's refetch lands, and for good if that refetch fails.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { screen, waitFor, act } from '@testing-library/react'
+import { screen, waitFor, act, fireEvent } from '@testing-library/react'
 import { renderWithProviders } from '../../../test/utils'
 import { useEnvUnlockStore } from '@/stores/envUnlockStore'
 import { useAuthStore } from '@/stores/authStore'
@@ -67,6 +67,38 @@ describe('DiffViewer after a lock (agent-os-npxh)', () => {
     await waitFor(() => expect(mockDiff).toHaveBeenCalledTimes(2))
 
     expect(screen.queryAllByText(SECRET, { exact: false })).toHaveLength(0)
+  })
+
+  it('after the lock refetch fails, Retry fetches the diff again and shows the masked one', async () => {
+    act(() => useEnvUnlockStore.getState().unlock('tok'))
+    mockDiff.mockResolvedValueOnce(result(diffOf(SECRET)))
+    const { queryClient } = renderWithProviders(<DiffViewer stackId="s1" commitHash="abc1234" />)
+    await waitFor(() => expect(screen.getAllByText(SECRET, { exact: false }).length).toBeGreaterThan(0))
+
+    mockDiff.mockImplementationOnce(() => Promise.reject(new Error('offline')))
+    act(() => useEnvUnlockStore.getState().lock())
+    await act(() => invalidateEnvUnlockQueries(queryClient))
+    await waitFor(() => expect(screen.getByText('Failed to load diff')).toBeInTheDocument())
+
+    mockDiff.mockResolvedValueOnce(result(diffOf('MASKEDVALUE')))
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(screen.getAllByText('MASKEDVALUE', { exact: false }).length).toBeGreaterThan(0))
+    expect(screen.queryAllByText(SECRET, { exact: false })).toHaveLength(0)
+  })
+
+  it('a lock while the unlocked request is in flight: the plaintext it brings back is not shown', async () => {
+    act(() => useEnvUnlockStore.getState().unlock('tok'))
+    let resolve: (v: unknown) => void = () => {}
+    mockDiff.mockImplementationOnce(() => new Promise((r) => (resolve = r)))
+    renderWithProviders(<DiffViewer stackId="s1" commitHash="abc1234" />)
+    await waitFor(() => expect(mockDiff).toHaveBeenCalledTimes(1))
+
+    act(() => useEnvUnlockStore.getState().lock())
+    await act(async () => resolve(result(diffOf(SECRET))))
+    await waitFor(() => expect(screen.queryByText(/Loading diff/)).toBeNull()) // the response has landed
+
+    expect(screen.queryAllByText(SECRET, { exact: false })).toHaveLength(0)
+    expect(screen.getByText('Failed to load diff')).toBeInTheDocument()
   })
 
   it('control: a diff fetched while locked stays on screen after the lock refetch fails', async () => {
