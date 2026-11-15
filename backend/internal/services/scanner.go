@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"maps"
 	"os"
@@ -1694,7 +1695,41 @@ func (s *ScannerService) scanDirectoryWithRoot(path string, rootDir string) erro
 		}
 	}
 
+	if len(seenNames) > 0 {
+		s.deleteRowsForRemovedComposeFiles(path)
+	}
+
 	return nil
+}
+
+// deleteRowsForRemovedComposeFiles removes the rows registered from path whose
+// compose file is gone (agent-os-epc5). The folder-level prune in
+// pruneStaleStacks only deletes rows for folders that are gone, so a compose
+// file removed from a folder that still holds another stack left a row
+// nothing could delete. The caller runs it only when this pass registered at
+// least one stack from path, so an empty folder (an unmounted disk's
+// mountpoint, a checkout half way) keeps every row, as the folder prune does.
+// Only a definite absence deletes: an Lstat that fails for any other reason,
+// and a dangling symlink (Lstat finds the link), keep the row. A file missing
+// only for a moment mid-pull loses its row until the next rescan, which
+// re-creates it under the same ID. Runs under mu, as both callers hold it.
+func (s *ScannerService) deleteRowsForRemovedComposeFiles(path string) {
+	rows, err := s.db.ListStacksByDirectory(path)
+	if err != nil {
+		slog.Warn("Failed to list stacks to drop rows for removed compose files", "directory", path, "error", err)
+		return
+	}
+	for _, row := range rows {
+		_, statErr := os.Lstat(filepath.Join(path, row.ComposeFile))
+		if !errors.Is(statErr, fs.ErrNotExist) {
+			continue
+		}
+		if delErr := s.db.DeleteStack(row.ID); delErr != nil {
+			slog.Warn("Failed to delete the row of a removed compose file", "stackID", row.ID, "directory", path, "file", row.ComposeFile, "error", delErr)
+			continue
+		}
+		slog.Info("Removed stack whose compose file is gone", "id", row.ID, "directory", path, "file", row.ComposeFile)
+	}
 }
 
 // composeFilePatterns are the compose file names the scanner registers a

@@ -941,3 +941,7 @@ func TestStacksHandler_StatusStaleDisclosure(t *testing.T) {
 		})
 	}
 }
+
+func (*fakeStackDocker) GetContainerList(string) ([]models.Container, error) { return nil, nil }
+
+func (*statusFakeDocker) GetContainerList(string) ([]models.Container, error) { return nil, nil }

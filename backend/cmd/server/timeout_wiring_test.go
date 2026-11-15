@@ -68,6 +68,9 @@ func (d *deadlineProbeDocker) PullVerified(stack models.Stack) (truth.ActionResu
 func (d *deadlineProbeDocker) DeleteVerified(stack models.Stack) (truth.ActionResult, string) {
 	return truth.ActionResult{}, ""
 }
+func (d *deadlineProbeDocker) GetContainerList(string) ([]models.Container, error) {
+	return nil, nil
+}
 
 // TestStacksGroupTimeoutAppliesToItsRoutes pins agent-os-qru.1: stacksGroup's
 // 120s timeout middleware was being registered with .Use() AFTER

@@ -244,3 +244,5 @@ func TestStacksHandler_Create_DeployFails_MultiStatus(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, stacks, 1, "the stack must be persisted even though the deploy failed")
 }
+
+func (failingStartStackDocker) GetContainerList(string) ([]models.Container, error) { return nil, nil }
