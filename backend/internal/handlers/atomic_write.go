@@ -32,9 +32,10 @@ const composeFileMode os.FileMode = 0644
 // directory is not fsynced: that only decides whether the rename itself
 // survives, and either outcome is a whole file.
 //
-// The rename creates a new inode owned by the process user (writeFileAtomic
-// does not chown it; the compose and env helpers below keep the old owner), and
-// needs write permission on the directory, not just on the file.
+// The rename creates a new inode owned by the process user, so an existing
+// file's owner and group are given to the temp file first, best effort, as the
+// compose and env helpers below do (agent-os-9deh, agent-os-b6u8). It needs
+// write permission on the directory, not just on the file.
 //
 // A path that is a symlink is written through: the rename lands on the file
 // the link resolves to and the link stays a link (agent-os-dwmz). Renaming
@@ -43,11 +44,11 @@ const composeFileMode os.FileMode = 0644
 // roots (the stacks directories, or DataDir for global.env), checked after the
 // link is resolved; the caller's own check came earlier (agent-os-3b2d).
 func writeFileAtomic(path string, content []byte, mode os.FileMode, roots []string) error {
-	target, _, err := resolveWriteTarget(path, roots)
+	target, info, err := resolveWriteTarget(path, roots)
 	if err != nil {
 		return err
 	}
-	return renameIntoPlace(target, content, mode)
+	return renameIntoPlaceOwned(target, content, mode, ownerToKeep(info, true))
 }
 
 // resolveWriteTarget returns the file a write to path must replace: path

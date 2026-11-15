@@ -275,8 +275,10 @@ func ImageRepoDigests(t *testing.T, ref string) []string {
 	return digests
 }
 
-// containerState returns the State string from `docker compose ps --format json`
+// containerState returns the State string from `docker compose ps -a --format json`
 // for the named service, or an empty string if the service/project is not found.
+// -a lists exited containers too, so a failed wait names their real state
+// ("exited") rather than "" (agent-os-b6u8); "not running" reads the same either way.
 func containerState(t *testing.T, dir, project, service string) string {
 	t.Helper()
 
@@ -285,7 +287,7 @@ func containerState(t *testing.T, dir, project, service string) string {
 		"docker", "compose",
 		"-p", project,
 		"-f", composePath,
-		"ps", "--format", "json",
+		"ps", "-a", "--format", "json",
 	)
 	cmd.Dir = dir
 

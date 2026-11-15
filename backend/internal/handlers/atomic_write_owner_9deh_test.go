@@ -30,6 +30,11 @@ func TestAtomicWrite_KeepsOwner_9deh(t *testing.T) {
 		"plain env": func(path string, roots []string) error {
 			return writeEnvFileAtomic(path, "A=2\n", roots)
 		},
+		// agent-os-b6u8 item 4: the base helper kept the owner too, so a
+		// future caller of it cannot hand a host user's file to Capstan's uid.
+		"writeFileAtomic": func(path string, roots []string) error {
+			return writeFileAtomic(path, []byte("x\n"), 0o644, roots)
+		},
 	}
 	for name, write := range writers {
 		t.Run(name+"/existing file is chowned to its owner", func(t *testing.T) {
