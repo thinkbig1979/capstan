@@ -214,7 +214,13 @@ FNR == 1 {
     # The ref may open a quote of its own: { image: 'nginx:alpine' } in .ts.
     while (match(r, /(image:|FROM)[[:space:]]+["'`]?[A-Za-z0-9._\/:@$-]+/)) {
       m = substr(r, RSTART, RLENGTH); sub(/^(image:|FROM)[[:space:]]+["'`]?/, "", m)
-      emit(m, ln); r = substr(r, RSTART + RLENGTH)
+      # An image: after a word and a space is prose ("pulling image: timeout"),
+      # not a YAML key, which follows a quote, an escaped newline, an indent,
+      # `{`, `,` or `- ` (agent-os-u38c).
+      pre = substr(r, 1, RSTART - 1)
+      prose = substr(r, RSTART, 6) == "image:" && pre ~ /[A-Za-z0-9][[:space:]]+$/ && pre !~ /\\[nt][[:space:]]*$/
+      if (!prose) emit(m, ln)
+      r = substr(r, RSTART + RLENGTH)
     }
     r = line
     while (match(r, /["'`][a-z0-9][a-z0-9._\/-]*(:[A-Za-z0-9][A-Za-z0-9._-]*|@sha256:[0-9a-f]+)["'`]/)) {
@@ -533,6 +539,13 @@ selftest() {
   selftest_case "Go literal" 1 "a_test.go:6: Docker Hub image alpine:3.21" "$d"
   d=$(fresh); sed -i 's|image: public.ecr.aws/docker/library/nginx:1\\n|image: docker.io/library/nginx:1\\n|' "$d/backend/it/a_test.go"
   selftest_case "Go image: in a string, explicit docker.io" 1 "a_test.go:7: Docker Hub image docker.io/library/nginx:1" "$d"
+  # Prose is not a YAML key: "pulling image: timeout" names no image (agent-os-u38c).
+  d=$(fresh); printf 'var errPull = fmt.Errorf("pulling image: timeout")\n' >> "$d/backend/it/a_test.go"
+  selftest_case "Go error text with image: in prose" 0 "0 violations" "$d"
+  d=$(fresh); printf 'const short = "services:\\n  web:\\n    image: nginx\\n"\n' >> "$d/backend/it/a_test.go"
+  selftest_case "Go image: after an escaped newline and indent, untagged" 1 "a_test.go:9: Docker Hub image nginx" "$d"
+  d=$(fresh); printf 'const flat = "image: nginx:1"\n' >> "$d/backend/it/a_test.go"
+  selftest_case "Go image: right after the quote" 1 "a_test.go:9: Docker Hub image nginx:1" "$d"
   d=$(fresh); sed -i "s|'public.ecr.aws/docker/library/nginx:1'|'docker.io/library/nginx:1'|" "$d/testing/tests/playwright/helpers/fixture.ts"
   selftest_case "Playwright .ts literal, explicit docker.io" 1 "fixture.ts:3: Docker Hub image docker.io/library/nginx:1" "$d"
   d=$(fresh); sed -i 's|image: public.ecr.aws/docker/library/nginx:1\\n`|image: nginx:alpine\\n`|' "$d/testing/tests/playwright/helpers/fixture.ts"
