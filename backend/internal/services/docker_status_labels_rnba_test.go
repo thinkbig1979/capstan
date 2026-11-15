@@ -120,3 +120,15 @@ func asComposePSFormat(ndjson string) string {
 	}
 	return strings.Join(lines, "\n")
 }
+
+// Review F2: a line carrying `"row":null` (a stderr JSON log line with a row
+// key) must not become a container: json.RawMessage holds the bytes "null",
+// so a nil check alone lets it through as an empty row.
+func TestParseComposePS_NullRowIsNotAContainer_Rnba(t *testing.T) {
+	status, containers, err := parseComposePSOutput([]byte(
+		`{"row":{"ID":"a","Name":"p-web-1","State":"running"},"oneoff":"False"}` + "\n" +
+			`{"row":null,"oneoff":"False"}` + "\n"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"p-web-1"}, containerNames(containers), "a null row is not a container")
+	assert.Equal(t, "running", status)
+}

@@ -685,9 +685,10 @@ func parseComposePSOutput(output []byte) (string, []models.Container, error) {
 		if err := json.Unmarshal([]byte(line), &psLine); err != nil {
 			continue
 		}
-		// Valid JSON with no row is not a compose ps row (a JSON log line on
-		// stderr, agent-os-sl9z).
-		if psLine.Row == nil {
+		// Valid JSON with no row, or a null one, is not a compose ps row (a
+		// JSON log line on stderr, agent-os-sl9z). RawMessage keeps a JSON null
+		// as the bytes "null", so a nil check alone misses it.
+		if len(psLine.Row) == 0 || string(psLine.Row) == "null" {
 			continue
 		}
 		if psLine.OneOff == "True" {
