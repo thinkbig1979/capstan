@@ -537,13 +537,15 @@ func (s *DockerService) findComposeContainer(ctx context.Context, projectName, s
 // last, so trimOutput's first-500-bytes cut would drop the diagnosis.
 func (s *DockerService) updateComposeContainer(ctx context.Context, stack models.Stack, serviceName string, wasRunning bool) error {
 	// Both built before anything runs, so a refusal leaves the service untouched.
+	// A refusal is typed so startedNothing sees it and the stack's stored
+	// status is left alone (agent-os-pusq).
 	pullArgs, err := s.mutatingComposeArgs(stack, "pull", []string{"--", serviceName})
 	if err != nil {
-		return err
+		return composeRefusedError{err}
 	}
 	upArgs, err := s.mutatingComposeArgs(stack, "up", []string{"-d", "--force-recreate", "--no-deps", "--", serviceName})
 	if err != nil {
-		return err
+		return composeRefusedError{err}
 	}
 	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
 	pullCmd, pullCtx, cancelPull := commandWithDeadline(ctx, s.composeTimeout(), "docker", pullArgs...)
@@ -1299,13 +1301,15 @@ func (s *DockerService) updateComposeContainerStreaming(
 	imageRef := serviceName
 
 	// Both built before anything runs, so a refusal leaves the service untouched.
+	// A refusal is typed so startedNothing sees it and the stack's stored
+	// status is left alone (agent-os-pusq).
 	pullArgs, err := s.mutatingComposeArgs(stack, "pull", []string{"--", serviceName})
 	if err != nil {
-		return err
+		return composeRefusedError{err}
 	}
 	upArgs, err := s.mutatingComposeArgs(stack, "up", []string{"-d", "--force-recreate", "--no-deps", "--", serviceName})
 	if err != nil {
-		return err
+		return composeRefusedError{err}
 	}
 
 	setStatus(StatusPulling)
