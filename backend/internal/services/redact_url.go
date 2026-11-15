@@ -692,7 +692,7 @@ func redactErrPath(err error, path string) error {
 	if err == nil || path == "" {
 		return err
 	}
-	redacted := RedactURLUserinfo(path)
+	redacted := redactURLForDisplay(path)
 	if redacted == path {
 		return err
 	}

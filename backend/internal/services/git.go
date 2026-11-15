@@ -218,7 +218,9 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 	// independently survives it (agent-os-57xj). RemoteURL carries a json tag,
 	// so redacting at the source keeps "the struct never holds a credential" an
 	// invariant instead of a per-caller duty.
-	remoteURL = RedactURLUserinfo(remoteURL)
+	// Display only (GitStatus.RemoteURL), so a nested URL's credential is
+	// starred too (agent-os-wlfc).
+	remoteURL = redactURLForDisplay(remoteURL)
 
 	// A bare repository has no work tree, so `status` below fails with "this
 	// operation must be run in a work tree" and the whole request used to

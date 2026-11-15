@@ -90,7 +90,8 @@ func hasOpaqueCredential(value string) bool {
 // jsonFieldNameRe is a JSON object field name and its colon, its quotes
 // optionally backslash-escaped: JSON written inside a double-quoted .env
 // value reads {\"password\":\"x\"} (review of run/mask2, D1).
-var jsonFieldNameRe = regexp.MustCompile(`\\?"([^"\\]{1,128})\\?"\s*:`)
+// A name may hold JSON unicode escapes, read decoded (agent-os-wlfc).
+var jsonFieldNameRe = regexp.MustCompile(`\\?"((?:[^"\\]|\\u[0-9a-fA-F]{4}){1,128})\\?"\s*:`)
 
 // hasSensitiveJSONField reports whether value holds a JSON field whose name
 // IsSensitiveEnvKey matches: {"password":"x"}, a service account's
@@ -100,11 +101,50 @@ func hasSensitiveJSONField(value string) bool {
 		return false
 	}
 	for _, m := range jsonFieldNameRe.FindAllStringSubmatch(value, -1) {
-		if IsSensitiveEnvKey(m[1]) {
+		name := jsonUnescapedName(m[1])
+		if IsSensitiveEnvKey(name) {
 			return true
 		}
 	}
 	return false
+}
+
+// jsonUnescapedName is a JSON field name with each \uXXXX escape decoded;
+// any other byte, a malformed escape included, is kept as written.
+func jsonUnescapedName(s string) string {
+	if !strings.Contains(s, `\u`) {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+6 <= len(s) && s[i+1] == 'u' {
+			if r, ok := hex4(s[i+2 : i+6]); ok {
+				b.WriteRune(r)
+				i += 5
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
+// hex4 is the value of four hex digits.
+func hex4(h string) (rune, bool) {
+	var r rune
+	for _, c := range []byte(h) {
+		switch {
+		case '0' <= c && c <= '9':
+			r = r*16 + rune(c-'0')
+		case 'a' <= c && c <= 'f':
+			r = r*16 + rune(c-'a'+10)
+		case 'A' <= c && c <= 'F':
+			r = r*16 + rune(c-'A'+10)
+		default:
+			return 0, false
+		}
+	}
+	return r, true
 }
 
 // HasURLUserinfo reports whether s, or any scheme://... token in it, carries a
@@ -158,12 +198,20 @@ func redactURLToken(tok string) string {
 		var b strings.Builder
 		b.Grow(len(out))
 		b.WriteString(out[:starts[1][0]])
-		for i := 1; i < len(starts); i++ {
+		for i := 1; i < len(starts); {
+			// A "scheme://" before which the piece has no "/?#@" sits inside
+			// its userinfo ("user:pw://rest@host", agent-os-wlfc): the piece
+			// runs on to the next one.
+			j := i + 1
+			for j < len(starts) && !strings.ContainsAny(out[starts[i][1]:starts[j][0]], "/?#@") {
+				j++
+			}
 			end := len(out)
-			if i+1 < len(starts) {
-				end = starts[i+1][0]
+			if j < len(starts) {
+				end = starts[j][0]
 			}
 			b.WriteString(redactUnparseableUserinfo(out[starts[i][0]:end]))
+			i = j
 		}
 		out = b.String()
 	}
@@ -174,24 +222,62 @@ func redactURLToken(tok string) string {
 // read for; no real URL nests more than a couple.
 const maxEncodedNestedURLs = 16
 
-// encodedSchemeSep is "://" percent-encoded, as a URL nested in a query
-// parameter carries it, compared ASCII case-insensitively.
-const encodedSchemeSep = "%3a%2f%2f"
+// nextEncodedSchemeSep is the end of the first "://" in lower (ASCII lower
+// case) from byte from on that is written with at least one part
+// percent-encoded: "%3a%2f%2f", Python quote()'s "%3a//", Go PathEscape's
+// ":%2f%2f", and their mixes (agent-os-wlfc); -1 when there is none. A plain
+// "://" is nestedSchemeRe's. Each "%" is looked at once.
+func nextEncodedSchemeSep(lower string, from int) int {
+	slash := func(i int) int {
+		switch {
+		case i < len(lower) && lower[i] == '/':
+			return 1
+		case strings.HasPrefix(lower[i:], "%2f"):
+			return 3
+		}
+		return 0
+	}
+	for p := from; p < len(lower); {
+		k := strings.IndexByte(lower[p:], '%')
+		if k < 0 {
+			return -1
+		}
+		q := p + k
+		s := -1 // where the two slashes start
+		switch {
+		case strings.HasPrefix(lower[q:], "%3a"):
+			s = q + 3
+		case strings.HasPrefix(lower[q:], "%2f") && q >= 1 && lower[q-1] == ':':
+			s = q
+		case strings.HasPrefix(lower[q:], "%2f") && q >= 2 && lower[q-2:q] == ":/":
+			s = q - 1
+		}
+		if s >= 0 {
+			if a := slash(s); a > 0 {
+				if b := slash(s + a); b > 0 {
+					return s + a + b
+				}
+			}
+		}
+		p = q + 1
+	}
+	return -1
+}
 
 // redactEncodedNestedUserinfo stars the userinfo of every percent-encoded
-// nested URL in tok ("?url=https%3A%2F%2Fuser%3Apw%40host%2Fx"), keeping
-// every other byte. One level of encoding only: "%253A" and a "+" are not
-// decoded. The nested URL runs to the next "&" or "#", or the token's end.
+// nested URL in tok ("?url=https%3A%2F%2Fuser%3Apw%40host%2Fx", and the
+// partly encoded forms nextEncodedSchemeSep reads), keeping every other
+// byte. One level of encoding only: "%253A" and a "+" are not decoded. The
+// nested URL runs to the next "&" or "#", or the token's end.
 func redactEncodedNestedUserinfo(tok string) string {
 	lower := asciiLower(tok)
 	var b strings.Builder
 	at := 0
 	for i, n := 0, 0; i < len(tok); n++ {
-		j := strings.Index(lower[i:], encodedSchemeSep)
-		if j < 0 {
+		start := nextEncodedSchemeSep(lower, i)
+		if start < 0 {
 			break
 		}
-		start := i + j + len(encodedSchemeSep)
 		if n == maxEncodedNestedURLs {
 			// Each nested URL reads on to its token's end, so this bounds
 			// the work (review of run/mask2, F1): fail closed on the rest.
@@ -238,22 +324,46 @@ func encodedAuthorityEnd(seg string) int {
 // userinfo holds no non-empty component, as spliceUserinfo reads it.
 func encodedUserinfoEnd(seg string) (int, bool) {
 	end := encodedAuthorityEnd(seg)
-	at := strings.LastIndex(seg[:end], "%40")
+	at, _ := lastAtSign(seg[:end])
 	if at < 0 {
 		if isParseableAuthority(percentDecoded(seg[:end])) {
 			return 0, false
 		}
-		at = strings.LastIndex(seg, "%40")
+		var atLen int
+		at, atLen = lastAtSign(seg)
 		if at < 0 {
 			return 0, false
 		}
-		host := seg[at+3:]
+		host := seg[at+atLen:]
 		if !isParseableAuthority(percentDecoded(host[:encodedAuthorityEnd(host)])) {
 			return 0, false
 		}
 	}
-	user, password, _ := strings.Cut(seg[:at], "%3a")
-	return at, user != "" || password != ""
+	// Empty, or only the user/password separator: no credential.
+	ui := seg[:at]
+	return at, ui != "" && ui != ":" && ui != "%3a"
+}
+
+// lastAtSign is the index and length of the last "@" or "%40" in s, or -1.
+func lastAtSign(s string) (int, int) {
+	enc, plain := strings.LastIndex(s, "%40"), strings.LastIndexByte(s, '@')
+	if plain > enc {
+		return plain, 1
+	}
+	if enc >= 0 {
+		return enc, 3
+	}
+	return -1, 0
+}
+
+// redactURLForDisplay is RedactURLUserinfo for a value that is only shown,
+// logged or put in an error, never written back: a URL nested in it has its
+// credential starred too (RedactURLUserinfoInText, agent-os-wlfc). The
+// second pass only adds placeholders, so it hides at least what the first
+// does. A settings field the UI seeds an input from stays on
+// RedactURLUserinfo: a placeholder in it refuses the save (agent-os-zzhs).
+func redactURLForDisplay(v string) string {
+	return RedactURLUserinfoInText(RedactURLUserinfo(v))
 }
 
 // percentDecoded is s with its percent-escapes decoded, or "" when one is

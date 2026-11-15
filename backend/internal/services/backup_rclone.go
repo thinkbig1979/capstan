@@ -193,7 +193,7 @@ func localRepoFiles(repoPath string) (map[string]struct{}, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("could not list the local repository %s: %w", RedactURLUserinfo(repoPath), err)
+		return nil, fmt.Errorf("could not list the local repository %s: %w", redactURLForDisplay(repoPath), err)
 	}
 	return files, nil
 }
@@ -296,7 +296,7 @@ func (m *RcloneManager) Sync(ctx context.Context, repoPath, remote, path string,
 	}
 
 	destination := fmt.Sprintf("%s:%s", remote, path)
-	m.logger.Info("Starting rclone sync", "source", RedactURLUserinfo(repoPath), "destination", rcloneTargetForDisplay(remote, path), "transfers", transfers, "remote_only", pf.RemoteOnly, "max_delete", limit)
+	m.logger.Info("Starting rclone sync", "source", redactURLForDisplay(repoPath), "destination", rcloneTargetForDisplay(remote, path), "transfers", transfers, "remote_only", pf.RemoteOnly, "max_delete", limit)
 
 	args := append([]string{"sync"}, syncOptions(transfers)...)
 	args = append(args, "--max-delete", strconv.Itoa(limit))
@@ -582,7 +582,7 @@ func (m *RcloneManager) RestoreRepo(ctx context.Context, remote, path, localPath
 	}
 
 	source := fmt.Sprintf("%s:%s", remote, path)
-	m.logger.Info("Starting rclone restore", "source", rcloneTargetForDisplay(remote, path), "destination", RedactURLUserinfo(localPath))
+	m.logger.Info("Starting rclone restore", "source", rcloneTargetForDisplay(remote, path), "destination", redactURLForDisplay(localPath))
 
 	args := append([]string{"sync"}, syncOptions(transfers)...)
 	if backupDir != "" {

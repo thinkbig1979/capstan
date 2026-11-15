@@ -492,7 +492,7 @@ func (m *ResticManager) EnsureRepository(ctx context.Context) error {
 		return fmt.Errorf("not initialising: the repository check failed for a reason other than a missing repository: %w", checkErr)
 	}
 
-	m.logger.Info("Initialising restic repository", "path", RedactURLUserinfo(m.cfg.ResticRepository))
+	m.logger.Info("Initialising restic repository", "path", redactURLForDisplay(m.cfg.ResticRepository))
 
 	pwFile, cleanup, err := m.withPasswordFile()
 	if err != nil {
