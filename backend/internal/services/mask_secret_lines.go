@@ -387,6 +387,12 @@ func (m *lineMasker) maskItemAfterEquals(n *yaml.Node) {
 			return
 		}
 	default:
+		// A plain item that goes on to the next line (agent-os-k14k): the
+		// rest of it is masked as the map form's is, every deeper line.
+		if continues(m.lines, li, indentOf(line)) {
+			m.maskFrom(li, start)
+			return
+		}
 		if e := strings.IndexAny(line[start:], ",]}#"); e >= 0 {
 			end = start + e
 			for end > start && line[end-1] == ' ' {
