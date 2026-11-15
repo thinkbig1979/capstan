@@ -103,6 +103,7 @@ func TestEnvValueUxfl_ValidationRefusalIs400(t *testing.T) {
 		w := s.put(t, composeEnvEntriesBody(t, []map[string]any{{"key": "", "value": "x"}}))
 		require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
 		assert.Contains(t, w.Body.String(), models.ErrValidation)
+		assert.Equal(t, s.original, s.composeOnDisk(t), "compose half written on a refused save")
 		assert.Equal(t, "K=old\n", readEnvQuoteFile(t, envPath))
 	})
 }
@@ -123,7 +124,51 @@ func composeEnvFixture(t *testing.T, envContent string) (noEnvStack, string) {
 
 func composeEnvEntriesBody(t *testing.T, entries []map[string]any) string {
 	t.Helper()
-	b, err := json.Marshal(map[string]any{"composeContent": noEnvOriginalCompose, "envEntries": entries})
+	b, err := json.Marshal(map[string]any{"composeContent": changedComposeF4, "envEntries": entries})
 	require.NoError(t, err)
 	return string(b)
+}
+
+// changedComposeF4 differs from the compose file on disk, so a refused save
+// that wrote the compose half anyway shows (review F4).
+const changedComposeF4 = "services:\n  web:\n    image: nginx\n"
+
+func (s noEnvStack) composeOnDisk(t *testing.T) string {
+	t.Helper()
+	return readEnvQuoteFile(t, filepath.Join(s.dir, "compose.yaml"))
+}
+
+// Review F4: every env refusal on PUT compose-env leaves both files as they
+// were, whether validateEnvEntries refuses before the lock or
+// serializeEnvFileOver refuses under it. The accepted control writes both.
+func TestComposeEnvUxflF4_RefusalLeavesComposeUnchanged(t *testing.T) {
+	cases := []struct {
+		name, env string
+		entries   []map[string]any
+	}{
+		{"empty key", "K=old\n", []map[string]any{{"key": "", "value": "x"}}},
+		{"key compose reads differently", "K=old\n", []map[string]any{{"key": "A B", "value": "x"}}},
+		{"value no quoting keeps", "K=old\n", []map[string]any{{"key": "K", "value": `'a" # b`, "line": 1}}},
+		{"row after a bare unterminated last line", "A=1\nFOO", []map[string]any{
+			{"key": "A", "value": "1", "line": 1},
+			{"key": "", "value": "FOO", "line": 2, "comment": true},
+			{"key": "N", "value": "v"},
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s, envPath := composeEnvFixture(t, c.env)
+			w := s.put(t, composeEnvEntriesBody(t, c.entries))
+			require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+			assert.Equal(t, s.original, s.composeOnDisk(t), "compose half written on a refused save")
+			assert.Equal(t, c.env, readEnvQuoteFile(t, envPath))
+		})
+	}
+	t.Run("control: accepted save writes both", func(t *testing.T) {
+		s, envPath := composeEnvFixture(t, "K=old\n")
+		w := s.put(t, composeEnvEntriesBody(t, []map[string]any{{"key": "K", "value": "new", "line": 1}}))
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		assert.Equal(t, changedComposeF4, s.composeOnDisk(t))
+		assert.Equal(t, "K=new\n", readEnvQuoteFile(t, envPath))
+	})
 }

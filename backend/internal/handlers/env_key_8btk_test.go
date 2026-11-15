@@ -47,6 +47,7 @@ func TestEnvKey_8btk_ComposeEnvRefusesKeysComposeReadsDifferently(t *testing.T) 
 			require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
 			assert8btkNamesKey(t, w.Body.String(), 1, key)
 			assert.Equal(t, content, readEnvQuoteFile(t, envPath))
+			assert.Equal(t, s.original, s.composeOnDisk(t), "compose half written on a refused save")
 		})
 	}
 }
