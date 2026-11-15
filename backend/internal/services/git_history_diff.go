@@ -228,7 +228,10 @@ func tokenSpanSentinel(diff, token string, secrets []string) (string, string, bo
 }
 
 // partlyCovered reports whether an occurrence of any of needles in s overlaps
-// an occurrence of sentinel without covering it whole.
+// an occurrence of sentinel without covering it whole. Each needle is found
+// in one scan (eachOccurrence), and an occurrence is judged by the spans that
+// hold its first and last byte, the only ones it can cover in part: linear
+// in s per needle (agent-os-ioy8).
 func partlyCovered(s, sentinel string, needles []string) bool {
 	var spans [][2]int
 	for i := 0; ; {
@@ -239,19 +242,37 @@ func partlyCovered(s, sentinel string, needles []string) bool {
 		spans = append(spans, [2]int{i + j, i + j + len(sentinel)})
 		i += j + len(sentinel)
 	}
+	if len(spans) == 0 {
+		return false
+	}
+	// spanAt[p] is 1 + the index of the span holding byte p, or 0.
+	spanAt := make([]int, len(s))
+	for k, sp := range spans {
+		for p := sp[0]; p < sp[1]; p++ {
+			spanAt[p] = k + 1
+		}
+	}
 	for _, v := range needles {
-		for i := 0; ; {
-			j := strings.Index(s[i:], v)
-			if j < 0 {
-				break
+		first := -1
+		if v != "" {
+			first = strings.Index(s, v)
+		}
+		if first < 0 {
+			continue
+		}
+		partly := false
+		eachOccurrence(s, v, first, func(a int) bool {
+			b := a + len(v)
+			if k := spanAt[a]; k > 0 && a > spans[k-1][0] {
+				partly = true
 			}
-			a, b := i+j, i+j+len(v)
-			for _, sp := range spans {
-				if a < sp[1] && b > sp[0] && (a > sp[0] || b < sp[1]) {
-					return true
-				}
+			if k := spanAt[b-1]; k > 0 && b < spans[k-1][1] {
+				partly = true
 			}
-			i = a + 1
+			return !partly
+		})
+		if partly {
+			return true
 		}
 	}
 	return false
@@ -261,43 +282,25 @@ func partlyCovered(s, sentinel string, needles []string) bool {
 // token and of secrets that contains at least one occurrence of token.
 // The secrets are read as MaskSecrets reads them (secretNeedles: too short
 // skipped, a multi-line one by its lines), so this masks nothing the masker
-// itself would leave.
+// itself would leave. The unions are needleUnionRuns', found in one scan per
+// needle (agent-os-ioy8); a union holds a token occurrence when a run of the
+// token's own occurrences lies in it.
 func maskTokenSpans(s, token, sentinel string, secrets []string) string {
 	if token == "" || !strings.Contains(s, token) {
 		return s
 	}
-	type span struct {
-		a, b int
-		tok  bool
-	}
-	var spans []span
-	find := func(v string, tok bool) {
-		for i := 0; i <= len(s)-len(v); {
-			j := strings.Index(s[i:], v)
-			if j < 0 {
-				return
-			}
-			spans = append(spans, span{i + j, i + j + len(v), tok})
-			i += j + 1
-		}
-	}
-	find(token, true)
-	for _, v := range secretNeedles(secrets) {
-		find(v, false)
-	}
-	sort.Slice(spans, func(i, j int) bool { return spans[i].a < spans[j].a })
+	all, _ := needleUnionRuns(s, append([]string{token}, secretNeedles(secrets)...))
+	tok, _ := needleUnionRuns(s, []string{token})
 	var b strings.Builder
-	at := 0
-	for i := 0; i < len(spans); {
-		cur := spans[i]
-		for i++; i < len(spans) && spans[i].a < cur.b; i++ {
-			cur.b = max(cur.b, spans[i].b)
-			cur.tok = cur.tok || spans[i].tok
+	at, k := 0, 0
+	for _, r := range all {
+		for k < len(tok) && tok[k][1] <= r[0] {
+			k++
 		}
-		if cur.tok {
-			b.WriteString(s[at:cur.a])
+		if k < len(tok) && tok[k][0] < r[1] {
+			b.WriteString(s[at:r[0]])
 			b.WriteString(sentinel)
-			at = cur.b
+			at = r[1]
 		}
 	}
 	b.WriteString(s[at:])

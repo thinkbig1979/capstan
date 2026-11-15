@@ -168,14 +168,15 @@ func (s *DockerService) LockedSecretValues(ctx context.Context, stack models.Sta
 // trimmed too; and every span the masker hides in an env value (a URL
 // credential under any name, a KEY=value inside it) or in the container's
 // argv, Cmd, Entrypoint, Args and Healthcheck.Test, through MaskArgs, its
-// after-flag rule included (maskedSpans). Labels are not read.
+// after-flag rule included (maskedSpans). Config.Labels are read as Env is
+// (agent-os-oh7q): a label set from the image or an interpolated value.
 func containerSecretValues(inspect container.InspectResponse) []string {
 	var out []string
 	addSpans := func(orig, masked string) {
 		out = append(out, spanValues(orig, masked, spanValuesDepth)...)
 	}
 	argv := func(args []string) {
-		masked := MaskArgs(args, nil)
+		masked := maskArgs(args, nil, IsSensitiveEnvKey)
 		for i := range args {
 			addSpans(args[i], masked[i])
 		}
@@ -189,7 +190,14 @@ func containerSecretValues(inspect container.InspectResponse) []string {
 			if IsSensitiveEnvVar(k, v) {
 				out = append(out, v, strings.TrimSpace(v))
 			}
-			masked, _ := MaskSecrets(v, "", nil)
+			masked := maskSecretsForList(v)
+			addSpans(v, masked)
+		}
+		for k, v := range cfg.Labels {
+			if IsSensitiveEnvVar(k, v) {
+				out = append(out, v, strings.TrimSpace(v))
+			}
+			masked := maskSecretsForList(v)
 			addSpans(v, masked)
 		}
 		argv(cfg.Cmd)
@@ -214,10 +222,18 @@ func containerSecretValues(inspect container.InspectResponse) []string {
 // each sensitive KEY=value on such a line hides the rest of it again.
 func spanValues(orig, masked string, depth int) []string {
 	var out []string
+	// A span cut inside a quoted value keeps one of its quotes ("x from
+	// {"k":"x"}): the value is printed without it (agent-os-w4p2).
+	add := func(v string) {
+		out = append(out, v)
+		if t := strings.Trim(v, `"'`); t != v {
+			out = append(out, t)
+		}
+	}
 	for _, sp := range maskedSpans(orig, masked) {
-		out = append(out, sp)
+		add(sp)
 		if _, pw, ok := strings.Cut(sp, ":"); ok {
-			out = append(out, pw)
+			add(pw)
 		}
 		words := strings.Fields(sp)
 		if len(words) > 0 {
@@ -230,11 +246,13 @@ func spanValues(orig, masked string, depth int) []string {
 		}
 		if len(words) > 1 {
 			out = append(out, words[0])
-			// Only on text shorter than orig, so it always ends.
-			if depth > 0 && len(sp) < len(orig) {
-				inner, _ := MaskSecrets(sp, "", nil)
-				out = append(out, spanValues(sp, inner, depth-1)...)
-			}
+		}
+		// What the masker hides inside the span itself: a compact JSON
+		// field is one word (agent-os-w4p2). Only on text shorter than orig,
+		// so it always ends.
+		if depth > 0 && len(sp) < len(orig) {
+			inner := maskSecretsForList(sp)
+			out = append(out, spanValues(sp, inner, depth-1)...)
 		}
 	}
 	return out
@@ -265,7 +283,31 @@ func urlUserinfoPassword(word string) []string {
 	if !ok || pw == "" {
 		return nil
 	}
-	return []string{pw}
+	out := []string{pw}
+	// The password as written too: an app can print it percent-encoded
+	// (agent-os-w4p2, R4-1).
+	if raw := rawUserinfoPassword(word); raw != "" && raw != pw {
+		out = append(out, raw)
+	}
+	return out
+}
+
+// rawUserinfoPassword is the password text of word's first scheme://
+// authority as written, before any decoding; "" when there is none.
+func rawUserinfoPassword(word string) string {
+	_, rest, ok := strings.Cut(word, "://")
+	if !ok {
+		return ""
+	}
+	if e := strings.IndexAny(rest, "/?#"); e >= 0 {
+		rest = rest[:e]
+	}
+	at := strings.LastIndex(rest, "@")
+	if at < 0 {
+		return ""
+	}
+	_, pw, _ := strings.Cut(rest[:at], ":")
+	return pw
 }
 
 // spanValuesDepth bounds spanValues' look into a span: one level per

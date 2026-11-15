@@ -67,13 +67,33 @@ const SecretMask = secretMask
 // An alias under a sensitive key masks its anchor's value where the anchor
 // is defined, whatever that key is.
 func MaskSecrets(text, filePath string, secrets []string) (string, int) {
+	return maskSecrets(text, filePath, secrets, isSensitiveFlagName)
+}
+
+// maskSecretsForList is MaskSecrets as the stack's secret list reads a
+// value's spans (containerSecretValues): a flag counts as sensitive only by
+// the env key rule. A value only the wider flag rule finds is masked in place
+// by MaskSecrets but is not made a needle for every line (review round 2 F2:
+// "true", "none", "trust" were starred everywhere).
+func maskSecretsForList(text string) string {
+	out, _ := maskSecrets(text, "", nil, IsSensitiveEnvKey)
+	return out
+}
+
+func maskSecrets(text, filePath string, secrets []string, flagRule func(string) bool) (string, int) {
 	if text == "" {
 		return text, 0
 	}
-	m := &lineMasker{lines: strings.Split(text, "\n")}
+	m := &lineMasker{lines: strings.Split(text, "\n"), flagRule: flagRule}
 	m.masked = make([]bool, len(m.lines))
 	orig := append([]string(nil), m.lines...)
+	m.orig = orig
 
+	// Every needle is found on the line as the passes below left it and the
+	// overlapping ones are masked as one (agent-os-buwq). The count is one
+	// per needle a line holds.
+	needles := maskedNeedleForms(secretNeedles(secrets))
+	m.needles = needles
 	ext := strings.ToLower(path.Ext(filePath))
 	isYAML := ext == ".yml" || ext == ".yaml"
 	if isYAML {
@@ -86,10 +106,6 @@ func MaskSecrets(text, filePath string, secrets []string) (string, int) {
 			m.count++
 		}
 	}
-	// Every needle is found on the line as the passes above left it and the
-	// overlapping ones are masked as one (agent-os-buwq). The count is one
-	// per needle a line holds.
-	needles := maskedNeedleForms(secretNeedles(secrets))
 	for i, line := range m.lines {
 		if out, n := maskNeedleUnion(line, needles, secretMask); n > 0 {
 			m.lines[i] = out
@@ -160,6 +176,14 @@ type lineMasker struct {
 	// later pass does not count it again.
 	masked []bool
 	count  int
+	// orig is the text before any pass, line by line, when known.
+	orig []string
+	// flagRule judges a long flag's name; nil is isSensitiveFlagName.
+	flagRule func(string) bool
+	// needles are the secret-list values MaskSecrets looks for. A pass that
+	// masks part of one masks all of it (splice): the part left would no
+	// longer match the needle and showed.
+	needles []string
 	// anchorsMasked are the anchors an alias under a sensitive key has
 	// already masked.
 	anchorsMasked map[*yaml.Node]bool
@@ -199,6 +223,56 @@ func (m *lineMasker) maskDeeper(i, indent int) bool {
 	return any
 }
 
+// splice replaces line i's bytes [a, b) with repl, widened to cover every
+// occurrence of a needle the span overlaps; a widened span loses repl's
+// quotes. Masking a part of a secret-list value made the rest of it unmatched
+// by the needle pass that follows, and shown (agent-os-81k9, found by the
+// superset corpus once the line maskers read the value rule).
+func (m *lineMasker) splice(i, a, b int, repl string) {
+	line := m.lines[i]
+	if wa, wb, widened := widenForMask(line, m.needleRuns(line), a, b); widened {
+		a, b, repl = wa, wb, secretMask
+	}
+	m.lines[i] = line[:a] + repl + line[b:]
+}
+
+// needleRuns is where the needles occur on line (needleUnionRuns).
+func (m *lineMasker) needleRuns(line string) [][2]int {
+	if len(m.needles) == 0 {
+		return nil
+	}
+	runs, _ := needleUnionRuns(line, m.needles)
+	return runs
+}
+
+// widenToRuns is [a, b) grown to cover each of runs (sorted, disjoint) it
+// overlaps, and whether it grew.
+func widenToRuns(runs [][2]int, a, b int) (int, int, bool) {
+	wa, wb := a, b
+	for _, r := range runs {
+		if r[0] < b && r[1] > a {
+			wa, wb = min(wa, r[0]), max(wb, r[1])
+		}
+	}
+	return wa, wb, wa != a || wb != b
+}
+
+// valueStops are the bytes that end a line masker's value or key.
+const valueStops = " \t\"',;&?#[]{}()"
+
+// widenForMask is widenToRuns for a mask of [a, b) on line, failing closed
+// when a needle runs on past b into the next token: the mask then runs to
+// the line's end. What the needle swallowed may be that token's key or the
+// separator before it, and with it gone no later pass can find the key, so
+// its value showed (agent-os-ns7f).
+func widenForMask(line string, runs [][2]int, a, b int) (int, int, bool) {
+	wa, wb, widened := widenToRuns(runs, a, b)
+	if wb > b && wb < len(line) && strings.ContainsAny(line[b:wb], valueStops) {
+		wb = len(line)
+	}
+	return wa, wb, widened
+}
+
 // maskFrom replaces line i from byte col to its end, then fails closed on the
 // lines below it.
 func (m *lineMasker) maskFrom(i, col int) {
@@ -206,7 +280,7 @@ func (m *lineMasker) maskFrom(i, col int) {
 	if col > len(l) {
 		col = len(l)
 	}
-	m.lines[i] = l[:col] + secretMask
+	m.splice(i, col, len(l), secretMask)
 	m.masked[i] = true
 	m.maskDeeper(i, indentOf(l))
 	m.count++
@@ -223,7 +297,11 @@ func (m *lineMasker) yamlPass(text string) {
 }
 
 func (m *lineMasker) walk(n *yaml.Node) {
-	walkSensitiveYAML(n, m.maskNode, func(c *yaml.Node, _ string) { m.maskItemAfterEquals(c) })
+	walkSensitiveYAML(n, m.maskNode, func(c *yaml.Node, val string) {
+		if !isSecretReference(val) {
+			m.maskItemAfterEquals(c)
+		}
+	})
 }
 
 // walkSensitiveYAML is the YAML pass's rule for what is a secret, kept in one
@@ -233,7 +311,7 @@ func (m *lineMasker) walk(n *yaml.Node) {
 // (agent-os-rbmi). onValue gets the value v of sensitive key k, or the
 // argument after a sensitive long flag; onItem gets a `KEY=value` sequence
 // item c whose KEY is sensitive, with its value val (the text after the first
-// "="), which is not a reference.
+// "="), a reference included: the list resolves one (agent-os-oh7q).
 func walkSensitiveYAML(n *yaml.Node, onValue func(v, k *yaml.Node), onItem func(c *yaml.Node, val string)) {
 	switch n.Kind {
 	case yaml.DocumentNode:
@@ -243,7 +321,9 @@ func walkSensitiveYAML(n *yaml.Node, onValue func(v, k *yaml.Node), onItem func(
 	case yaml.MappingNode:
 		for i := 0; i+1 < len(n.Content); i += 2 {
 			k, v := n.Content[i], n.Content[i+1]
-			if IsSensitiveEnvKey(k.Value) {
+			// The value counts too, as in the env views (agent-os-81k9): a
+			// URL, opaque or JSON credential under any key.
+			if IsSensitiveEnvKey(k.Value) || (v.Kind == yaml.ScalarNode && IsSensitiveEnvVar(k.Value, v.Value)) {
 				onValue(v, k)
 			} else {
 				walkSensitiveYAML(v, onValue, onItem)
@@ -252,7 +332,7 @@ func walkSensitiveYAML(n *yaml.Node, onValue func(v, k *yaml.Node), onItem func(
 	case yaml.SequenceNode:
 		for i, c := range n.Content {
 			if c.Kind == yaml.ScalarNode {
-				if key, val, ok := strings.Cut(c.Value, "="); ok && IsSensitiveEnvVar(strings.TrimSpace(key), val) && !isSecretReference(val) {
+				if key, val, ok := strings.Cut(c.Value, "="); ok && IsSensitiveEnvVar(strings.TrimSpace(key), val) {
 					onItem(c, val)
 				}
 				// An exec-form argv: "--password", "x" (sec D5).
@@ -271,8 +351,42 @@ func walkSensitiveYAML(n *yaml.Node, onValue func(v, k *yaml.Node), onItem func(
 // its own whose name IsSensitiveEnvKey matches: --password, --db-token. Short
 // flags never are: -p is usually a port.
 func isSensitiveLongFlag(tok string) bool {
+	return isSensitiveLongFlagBy(tok, isSensitiveFlagName)
+}
+
+// isSensitiveLongFlagBy is isSensitiveLongFlag with the name judged by rule.
+func isSensitiveLongFlagBy(tok string, rule func(string) bool) bool {
 	name, ok := strings.CutPrefix(tok, "--")
-	return ok && longFlagNameRe.MatchString(name) && IsSensitiveEnvKey(name)
+	return ok && longFlagNameRe.MatchString(name) && rule(name)
+}
+
+// flagName is the masker's flag rule.
+func (m *lineMasker) flagName(name string) bool {
+	if m.flagRule == nil {
+		return isSensitiveFlagName(name)
+	}
+	return m.flagRule(name)
+}
+
+// isSensitiveFlagName is IsSensitiveEnvKey for a command-line flag's name,
+// plus the names servers give a password flag that the env rule leaves out
+// (agent-os-w4p2): a word ending in PASS (--requirepass, --db-pass), and
+// --auth / --masterauth. Flags only: widening IsSensitiveEnvKey would hide
+// COMPASS_URL in every env view.
+func isSensitiveFlagName(name string) bool {
+	if IsSensitiveEnvKey(name) {
+		return true
+	}
+	// The flag's last word only (review round 2 F2): --pass-host-header and
+	// --auth-host name no password.
+	words := strings.FieldsFunc(strings.ToUpper(name), func(r rune) bool {
+		return (r < 'A' || r > 'Z') && (r < '0' || r > '9')
+	})
+	if len(words) == 0 {
+		return false
+	}
+	w := strings.TrimRight(words[len(words)-1], "0123456789")
+	return strings.HasSuffix(w, "PASS") || w == "AUTH" || w == "MASTERAUTH"
 }
 
 var longFlagNameRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.\-]*$`)
@@ -350,14 +464,14 @@ func (m *lineMasker) maskScalar(n, k *yaml.Node) {
 			m.maskFrom(li, col)
 			return
 		}
-		m.lines[li] = line[:col+1] + secretMask + line[end:]
+		m.splice(li, col+1, end, secretMask)
 		m.count++
 		m.maskDeeper(li, keyIndent)
 		return
 	}
 	// Plain: single-line when the source holds the value verbatim.
 	if strings.HasPrefix(line[col:], n.Value) && !continues(m.lines, li, keyIndent) {
-		m.lines[li] = line[:col] + secretMask + line[col+len(n.Value):]
+		m.splice(li, col, col+len(n.Value), secretMask)
 		m.count++
 		return
 	}
@@ -387,6 +501,12 @@ func (m *lineMasker) maskItemAfterEquals(n *yaml.Node) {
 			return
 		}
 	default:
+		// A plain item that goes on to the next line (agent-os-k14k): the
+		// rest of it is masked as the map form's is, every deeper line.
+		if continues(m.lines, li, indentOf(line)) {
+			m.maskFrom(li, start)
+			return
+		}
 		if e := strings.IndexAny(line[start:], ",]}#"); e >= 0 {
 			end = start + e
 			for end > start && line[end-1] == ' ' {
@@ -394,7 +514,7 @@ func (m *lineMasker) maskItemAfterEquals(n *yaml.Node) {
 			}
 		}
 	}
-	m.lines[li] = line[:start] + secretMask + line[end:]
+	m.splice(li, start, end, secretMask)
 	m.count++
 }
 
@@ -432,10 +552,19 @@ func continues(lines []string, li, keyIndent int) bool {
 
 // leadKeyRe is a line that starts with a key: optional comment marker, list
 // dash and "export", an optionally quoted key, then = or a YAML colon.
-var leadKeyRe = regexp.MustCompile(`^(\s*(?:#\s*)?(?:-\s+)?(?:export\s+)?)(["']?)([A-Za-z_][A-Za-z0-9_.\-]*)(["']?)(\s*=\s*|\s*:(?:\s+|$))`)
+// A bare ":" with no space after it counts only after a quoted key, the
+// compact JSON form `"api_key":"x"` (agent-os-w4p2): unquoted, it is
+// `image:tag`. The callers check it (quotedKeyColon).
+var leadKeyRe = regexp.MustCompile(`^(\s*(?:#\s*)?(?:-\s+)?(?:export\s+)?)(["']?)([A-Za-z_][A-Za-z0-9_.\-]*)(["']?)(\s*=\s*|\s*:(?:\s+|$)|:)`)
 
 // flowKeyRe is a KEY=value or KEY: value token inside { } or [ ].
-var flowKeyRe = regexp.MustCompile(`([\{\[,]\s*)(["']?)([A-Za-z_][A-Za-z0-9_.\-]*)(["']?)(\s*=\s*|\s*:\s+)`)
+var flowKeyRe = regexp.MustCompile(`([\{\[,]\s*)(["']?)([A-Za-z_][A-Za-z0-9_.\-]*)(["']?)(\s*=\s*|\s*:\s+|:)`)
+
+// bareColonUnquoted reports whether a leadKeyRe or flowKeyRe match ended in
+// a bare ":" after an unquoted key, which is not a key.
+func bareColonUnquoted(line string, loc []int) bool {
+	return line[loc[10]:loc[11]] == ":" && loc[8] == loc[9]
+}
 
 // blockIndicatorRe is a YAML block scalar header: |, >, with chomping and
 // indentation indicators.
@@ -456,7 +585,49 @@ func (m *lineMasker) linePass() {
 		if !m.masked[i] {
 			m.maskFlagNextToken(i)
 		}
+		if !m.masked[i] {
+			m.maskAuthHeader(i)
+		}
 	}
+}
+
+// authHeaderRe is an Authorization or Proxy-Authorization header in free
+// text, up to where its value starts; group 1 is the quote before it, if any.
+var authHeaderRe = regexp.MustCompile(`(?i)([\s"'\[\{,(])(?:proxy-)?authorization\s*[:=]\s*`)
+
+// authSchemeRe is the scheme word at the start of a header value.
+var authSchemeRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9\-]*\s+`)
+
+// maskAuthHeader masks the credential of every Authorization header on line
+// i (agent-os-w4p2): what follows the scheme word (Bearer, Basic, ...), up to
+// the quote that opened the header, or to the line's end, since a Digest
+// value runs over several tokens. One pass along the line.
+func (m *lineMasker) maskAuthHeader(i int) {
+	line := m.lines[i]
+	w := m.newLineWalk(line)
+	forwardMatches(authHeaderRe, line, func(loc []int) (int, bool) {
+		start := loc[1]
+		if sc := authSchemeRe.FindString(line[start:]); sc != "" && strings.TrimSpace(line[start+len(sc):]) != "" {
+			start += len(sc)
+		}
+		end := len(line)
+		if loc[2] >= 0 {
+			if q := line[loc[2]]; q == '"' || q == '\'' {
+				if e := strings.IndexByte(line[start:], q); e >= 0 {
+					end = start + e
+				}
+			}
+		}
+		for end > start && (line[end-1] == ' ' || line[end-1] == '\t') {
+			end--
+		}
+		v := line[start:end]
+		if v == "" || v == secretMask || isSecretReference(v) {
+			return loc[1], false
+		}
+		return w.mask(start, end, secretMask), false
+	})
+	w.apply(m, i)
 }
 
 func (m *lineMasker) maskLeadKey(i int) {
@@ -465,12 +636,24 @@ func (m *lineMasker) maskLeadKey(i int) {
 	if loc == nil {
 		return
 	}
+	if bareColonUnquoted(line, loc) {
+		return
+	}
 	key := line[loc[6]:loc[7]]
 	openQ, closeQ := line[loc[4]:loc[5]], line[loc[8]:loc[9]]
 	start := loc[1]
 	rest := line[start:]
 	value, _ := splitTrailingComment(rest)
-	if !IsSensitiveEnvKey(key) && !HasURLUserinfo(value) {
+	// A URL credential anywhere in the rest of the line marks the value, as
+	// before agent-os-81k9; the original line counts too, since the YAML
+	// pass may have masked that URL already. Otherwise the value rule
+	// (IsSensitiveEnvVar) judges the span that is replaced, not the rest of
+	// the line: a JSON password in a trailing comment would otherwise mask a
+	// quoted value beside it and break the match of the whole-line secret
+	// that hid both (found by the superset corpus).
+	urlCue := HasURLUserinfo(value) || HasURLUserinfo(m.origLeadValue(i))
+	sensitive := func(span string) bool { return urlCue || IsSensitiveEnvVar(key, span) }
+	if !sensitive(value) {
 		return
 	}
 	trimmed := strings.TrimSpace(value)
@@ -479,10 +662,10 @@ func (m *lineMasker) maskLeadKey(i int) {
 	if openQ != "" && closeQ == "" {
 		if e := closingQuote(line, start, openQ[0]); e >= 0 {
 			v := line[start:e]
-			if isSecretReference(v) || v == secretMask {
+			if isSecretReference(v) || v == secretMask || !sensitive(v) {
 				return
 			}
-			m.lines[i] = line[:start] + secretMask + line[e:]
+			m.splice(i, start, e, secretMask)
 			m.count++
 			return
 		}
@@ -508,19 +691,33 @@ func (m *lineMasker) maskLeadKey(i int) {
 			m.maskFrom(i, vs)
 			return
 		}
-		if v := line[vs+1 : e]; isSecretReference(v) || v == secretMask {
+		if v := line[vs+1 : e]; isSecretReference(v) || v == secretMask || !sensitive(v) {
 			return
 		}
-		m.lines[i] = line[:vs+1] + secretMask + line[e:]
+		m.splice(i, vs+1, e, secretMask)
 		m.count++
 		m.maskDeeper(i, indentOf(line))
 	default:
 		vs := start + strings.Index(rest, trimmed)
 		ve := vs + len(trimmed)
-		m.lines[i] = line[:vs] + secretMask + line[ve:]
+		m.splice(i, vs, ve, secretMask)
 		m.count++
 		m.maskDeeper(i, indentOf(line))
 	}
+}
+
+// origLeadValue is the value maskLeadKey reads on line i of the text before
+// any pass, when an earlier pass changed the line; "" otherwise.
+func (m *lineMasker) origLeadValue(i int) string {
+	if m.orig == nil || m.orig[i] == m.lines[i] {
+		return ""
+	}
+	loc := leadKeyRe.FindStringSubmatchIndex(m.orig[i])
+	if loc == nil {
+		return ""
+	}
+	v, _ := splitTrailingComment(m.orig[i][loc[1]:])
+	return v
 }
 
 // maskEnvTail masks each sensitive statement compose reads on an env line
@@ -540,20 +737,33 @@ func (m *lineMasker) maskStatements(i int, sts []envStatement) {
 	// The line is built once, left to right: a splice per statement made a
 	// long line of statements quadratic.
 	var b strings.Builder
+	runs := m.needleRuns(line)
 	last, masked, openAt := 0, 0, -1
+	endsInMask := false
 	for _, st := range sts {
 		v := line[st.start:st.end]
-		if v == "" || v == secretMask || isSecretReference(v) || (!IsSensitiveEnvKey(st.key) && !HasURLUserinfo(v)) {
+		if v == "" || v == secretMask || isSecretReference(v) || !IsSensitiveEnvVar(st.key, v) {
 			continue
 		}
-		b.WriteString(line[last:st.start])
+		start, end, _ := widenForMask(line, runs, st.start, st.end)
+		if start < last {
+			// Widened into the mask before it: one mask for both.
+			start = last
+		}
+		if start > last {
+			b.WriteString(line[last:start])
+			endsInMask = false
+		}
 		if st.open {
 			// Always the last statement on the line.
-			openAt, last = b.Len(), st.start
+			openAt, last = b.Len(), start
 			break
 		}
-		b.WriteString(secretMask)
-		last = st.end
+		if !endsInMask {
+			b.WriteString(secretMask)
+			endsInMask = true
+		}
+		last = max(last, end)
 		masked++
 	}
 	if masked == 0 && openAt == -1 {
@@ -584,16 +794,18 @@ func (m *lineMasker) envQuotePass(orig []string) {
 		if inBody {
 			c := envClosingQuote(orig[i], 0, q)
 			if c < 0 {
-				if sensitive && !m.masked[i] && strings.TrimSpace(orig[i]) != "" {
+				// Every byte of a body line is the value, whatever an earlier
+				// pass masked of it.
+				if sensitive && strings.TrimSpace(orig[i]) != "" {
 					m.lines[i], m.masked[i] = secretMask, true
 				}
 				continue
 			}
 			inBody = false
-			if sensitive && !m.masked[i] {
+			if sensitive && m.lines[i] != secretMask {
 				// The line as it stands may have lost the quote to a mask.
 				if cc := envClosingQuote(cur, 0, q); cc >= 0 {
-					m.lines[i] = secretMask + cur[cc:]
+					m.splice(i, 0, cc, secretMask)
 				} else {
 					m.lines[i], m.masked[i] = secretMask, true
 				}
@@ -619,8 +831,9 @@ func (m *lineMasker) envQuotePass(orig []string) {
 			// The env views' rule (review of run/mask2, F4): a quoted JSON
 			// value holding a password is a secret whatever its key.
 			sensitive = IsSensitiveEnvVar(last.key, orig[i][last.start:])
+			// maskFrom counts the value; a pass before this one that changed
+			// the line already did.
 			if sensitive {
-				m.count++
 				if !m.masked[i] && m.lines[i] == orig[i] {
 					m.maskFrom(i, last.start)
 				}
@@ -708,142 +921,246 @@ func envClosingQuote(s string, from int, q byte) int {
 	return -1
 }
 
-// maskFlowTokens masks the values of sensitive KEY=value / KEY: value tokens
-// inside { } or [ ] on line i.
-func (m *lineMasker) maskFlowTokens(i int) {
-	for {
-		line := m.lines[i]
-		changed := false
-		for _, loc := range flowKeyRe.FindAllStringSubmatchIndex(line, -1) {
-			key := line[loc[6]:loc[7]]
-			start := loc[1]
-			end := start
-			if start < len(line) && (line[start] == '"' || line[start] == '\'') {
-				e := closingQuote(line, start+1, line[start])
-				if e < 0 {
-					if IsSensitiveEnvKey(key) {
-						m.maskFrom(i, start)
-					}
-					return
-				}
-				end = e + 1
-			} else {
-				for end < len(line) && !strings.ContainsRune(",}]", rune(line[end])) {
-					end++
-				}
-				// The token's own closing quote ("KEY=v", in a list).
-				if q := line[loc[4]:loc[5]]; q != "" {
-					if e := strings.LastIndex(line[start:end], q); e >= 0 {
-						end = start + e
-					}
-				}
-			}
-			value := strings.TrimSpace(line[start:end])
-			v := strings.Trim(value, `"'`)
-			if (!IsSensitiveEnvKey(key) && !HasURLUserinfo(v)) || v == secretMask || v == "" || isSecretReference(v) {
-				continue
-			}
-			for end > start && line[end-1] == ' ' {
-				end--
-			}
-			repl := secretMask
-			if len(value) >= 2 && (value[0] == '"' || value[0] == '\'') {
-				repl = value[:1] + secretMask + value[:1]
-			}
-			m.lines[i] = line[:start] + repl + line[end:]
-			m.count++
-			changed = true
-			break // indices moved; scan the new line again
-		}
-		if !changed {
+// forwardMatches calls fn with each match of re in line, left to right, as a
+// scan that starts again after each match finds them: fn returns the index
+// in line where the next match's first byte may sit (a match's end, or the
+// end of the value it masked), or stop. The line maskers rescanned the whole
+// line from its start after every value they masked, n*k on one long line
+// (review round 2 of run/maskfu, HIGH). A space before the line stands for
+// its start, so a regexp's leading separator class matches there as "^" did.
+// Each loc is in line's indices; a separator that is the virtual space
+// reads -1.
+func forwardMatches(re *regexp.Regexp, line string, fn func(loc []int) (next int, stop bool)) {
+	l2 := " " + line
+	for q := 0; q < len(l2); {
+		loc := re.FindStringSubmatchIndex(l2[q:])
+		if loc == nil {
 			return
 		}
+		for k := range loc {
+			if loc[k] >= 0 {
+				loc[k] += q - 1
+			}
+		}
+		next, stop := fn(loc)
+		if stop {
+			return
+		}
+		// next is a line index; its byte is l2[next+1]. Always move on.
+		q = max(next+1, q+1)
+	}
+}
+
+// lineWalk collects the masks one pass along a line makes and writes them
+// once (apply). Each is widened to the needles it overlaps when it is
+// recorded (splice's rule), on the needle runs of the line as the pass
+// found it: an earlier mask of the same pass only ever covered whole runs.
+type lineWalk struct {
+	line  string
+	runs  [][2]int
+	spans []lineSpan
+}
+
+type lineSpan struct {
+	a, b int
+	repl string
+}
+
+func (m *lineMasker) newLineWalk(line string) *lineWalk {
+	return &lineWalk{line: line, runs: m.needleRuns(line)}
+}
+
+// mask records [a, b) as replaced by repl and returns where the scan goes
+// on: b, the end of the value as matched, not of the span widened to a
+// needle. A needle can run on into the next token, and resuming at its end
+// skipped that token's key, so a sensitive value after it showed (review
+// round 3 of run/maskfu, N1). A span that overlaps the one before it (only
+// a widened one can reach that far) is merged into it, so apply still sees
+// sorted, disjoint spans.
+func (w *lineWalk) mask(a, b int, repl string) int {
+	end := b
+	if wa, wb, widened := widenForMask(w.line, w.runs, a, b); widened {
+		a, b, repl = wa, wb, secretMask
+		if b == len(w.line) {
+			end = b // nothing after it is left to find
+		}
+	}
+	for n := len(w.spans); n > 0 && a < w.spans[n-1].b; n = len(w.spans) {
+		last := w.spans[n-1]
+		a, b, repl = min(a, last.a), max(b, last.b), secretMask
+		w.spans = w.spans[:n-1]
+	}
+	w.spans = append(w.spans, lineSpan{a, b, repl})
+	return end
+}
+
+// cutFrom drops the recorded spans that reach past col and returns where a
+// mask to the line's end must start to cover them too: col, or the start of
+// the first span dropped.
+func (w *lineWalk) cutFrom(col int) int {
+	for n := len(w.spans); n > 0 && w.spans[n-1].b > col; n = len(w.spans) {
+		col = min(col, w.spans[n-1].a)
+		w.spans = w.spans[:n-1]
+	}
+	return col
+}
+
+// apply writes the recorded masks into line i, counts one per mask, and
+// returns how far a position after the last one moved.
+func (w *lineWalk) apply(m *lineMasker, i int) int {
+	if len(w.spans) == 0 {
+		return 0
+	}
+	line := m.lines[i]
+	var b strings.Builder
+	b.Grow(len(line))
+	at := 0
+	for _, sp := range w.spans {
+		b.WriteString(line[at:sp.a])
+		b.WriteString(sp.repl)
+		at = sp.b
+	}
+	b.WriteString(line[at:])
+	m.lines[i] = b.String()
+	m.count += len(w.spans)
+	return len(m.lines[i]) - len(line)
+}
+
+// maskFlowTokens masks the values of sensitive KEY=value / KEY: value tokens
+// inside { } or [ ] on line i, in one pass along it.
+func (m *lineMasker) maskFlowTokens(i int) {
+	line := m.lines[i]
+	w := m.newLineWalk(line)
+	openAt := -1
+	forwardMatches(flowKeyRe, line, func(loc []int) (int, bool) {
+		if bareColonUnquoted(line, loc) {
+			return loc[1], false
+		}
+		key := line[loc[6]:loc[7]]
+		start := loc[1]
+		end := start
+		if start < len(line) && (line[start] == '"' || line[start] == '\'') {
+			e := closingQuote(line, start+1, line[start])
+			if e < 0 {
+				if IsSensitiveEnvVar(key, line[start:]) {
+					openAt = start
+				}
+				return 0, true
+			}
+			end = e + 1
+		} else {
+			for end < len(line) && !strings.ContainsRune(",}]", rune(line[end])) {
+				end++
+			}
+			// The token's own closing quote ("KEY=v", in a list).
+			if q := line[loc[4]:loc[5]]; q != "" {
+				if e := strings.LastIndex(line[start:end], q); e >= 0 {
+					end = start + e
+				}
+			}
+		}
+		value := strings.TrimSpace(line[start:end])
+		v := strings.Trim(value, `"'`)
+		if !IsSensitiveEnvVar(key, v) || v == secretMask || v == "" || isSecretReference(v) {
+			return loc[1], false
+		}
+		for end > start && line[end-1] == ' ' {
+			end--
+		}
+		repl := secretMask
+		if len(value) >= 2 && (value[0] == '"' || value[0] == '\'') {
+			repl = value[:1] + secretMask + value[:1]
+		}
+		return w.mask(start, end, repl), false
+	})
+	// An open quote is masked to the line's end, after the masks before it.
+	// A mask widened to a needle can reach past it: the mask to the end then
+	// starts where that one did.
+	if openAt >= 0 {
+		openAt = w.cutFrom(openAt)
+	}
+	delta := w.apply(m, i)
+	if openAt >= 0 {
+		m.maskFrom(i, openAt+delta)
 	}
 }
 
 // inlineKVRe is a KEY=value token anywhere in free text, a command-line flag
 // included (--db-password=x): after a line start, space, quote, bracket,
 // brace, comma or parenthesis.
-var inlineKVRe = regexp.MustCompile(`(?:^|[\s"'\[\{,(])-{0,2}([A-Za-z_][A-Za-z0-9_.\-]*)=`)
+// A key after "?", "&" or ";" is a URL or connection-string parameter
+// (agent-os-w4p2): its value also ends at the next "&", ";" or "#".
+var inlineKVRe = regexp.MustCompile(`[\s"'\[\{,(?&;]-{0,2}([A-Za-z_][A-Za-z0-9_.\-]*)=`)
 
 // maskInlineKV masks the value of every sensitive KEY=value token on line i,
-// up to the next space, quote, comma or closing bracket.
+// up to the next space, quote, comma or closing bracket, in one pass.
 func (m *lineMasker) maskInlineKV(i int) {
-	for {
-		line := m.lines[i]
-		changed := false
-		for _, loc := range inlineKVRe.FindAllStringSubmatchIndex(line, -1) {
-			key := line[loc[2]:loc[3]]
-			start := loc[1]
-			end := start
-			if strings.HasPrefix(line[start:], "${") {
-				// A reference ends at its own brace, not at the first stop.
-				if e := strings.IndexByte(line[start:], '}'); e >= 0 {
-					end = start + e + 1
-				}
+	line := m.lines[i]
+	w := m.newLineWalk(line)
+	forwardMatches(inlineKVRe, line, func(loc []int) (int, bool) {
+		key := line[loc[2]:loc[3]]
+		start := loc[1]
+		end := start
+		if strings.HasPrefix(line[start:], "${") {
+			// A reference ends at its own brace, not at the first stop.
+			if e := strings.IndexByte(line[start:], '}'); e >= 0 {
+				end = start + e + 1
 			}
-			for end < len(line) && !strings.ContainsRune(" \t\"',]})", rune(line[end])) {
-				end++
-			}
-			v := line[start:end]
-			if v == "" || v == secretMask || isSecretReference(v) || (!IsSensitiveEnvKey(key) && !HasURLUserinfo(v)) {
-				continue
-			}
-			m.lines[i] = line[:start] + secretMask + line[end:]
-			m.count++
-			changed = true
-			break
 		}
-		if !changed {
-			return
+		stops := " \t\"',]})"
+		if loc[0] >= 0 && strings.ContainsRune("?&;", rune(line[loc[0]])) {
+			stops += "&;#"
 		}
-	}
+		for end < len(line) && !strings.ContainsRune(stops, rune(line[end])) {
+			end++
+		}
+		v := line[start:end]
+		flag := loc[2] >= 2 && line[loc[2]-2:loc[2]] == "--"
+		if v == "" || v == secretMask || isSecretReference(v) || (!IsSensitiveEnvVar(key, v) && (!flag || !m.flagName(key))) {
+			return loc[1], false
+		}
+		return w.mask(start, end, secretMask), false
+	})
+	w.apply(m, i)
 }
 
 // flagNextTokenRe is a long flag followed by its value as a separate token on
 // the same line: `--password x` in free text, or `"--password", "x"` in a
 // flow sequence. Group 1 is the flag name; the match ends where the value
 // starts.
-var flagNextTokenRe = regexp.MustCompile(`(?:^|[\s"'\[,(])--([A-Za-z][A-Za-z0-9_.\-]*)["']?(?:\s*,\s*|\s+)`)
+var flagNextTokenRe = regexp.MustCompile(`[\s"'\[,(]--([A-Za-z][A-Za-z0-9_.\-]*)["']?(?:\s*,\s*|\s+)`)
 
 // maskFlagNextToken masks the value token after every sensitive long flag on
 // line i (sec D5): up to the next space, quote, comma, bracket or #, the
 // value's own quotes kept. A reference, or a next token that is itself a
-// flag, stays visible.
+// flag, stays visible. One pass along the line.
 func (m *lineMasker) maskFlagNextToken(i int) {
-	for {
-		line := m.lines[i]
-		changed := false
-		for _, loc := range flagNextTokenRe.FindAllStringSubmatchIndex(line, -1) {
-			if !IsSensitiveEnvKey(line[loc[2]:loc[3]]) {
-				continue
-			}
-			start := loc[1]
-			if start < len(line) && (line[start] == '"' || line[start] == '\'') {
-				start++
-			}
-			end := start
-			if strings.HasPrefix(line[start:], "${") {
-				if e := strings.IndexByte(line[start:], '}'); e >= 0 {
-					end = start + e + 1
-				}
-			}
-			for end < len(line) && !strings.ContainsRune(" \t\"',]})#", rune(line[end])) {
-				end++
-			}
-			v := line[start:end]
-			if v == "" || v == secretMask || isSecretReference(v) || strings.HasPrefix(v, "-") {
-				continue
-			}
-			m.lines[i] = line[:start] + secretMask + line[end:]
-			m.count++
-			changed = true
-			break
+	line := m.lines[i]
+	w := m.newLineWalk(line)
+	forwardMatches(flagNextTokenRe, line, func(loc []int) (int, bool) {
+		if !m.flagName(line[loc[2]:loc[3]]) {
+			return loc[1], false
 		}
-		if !changed {
-			return
+		start := loc[1]
+		if start < len(line) && (line[start] == '"' || line[start] == '\'') {
+			start++
 		}
-	}
+		end := start
+		if strings.HasPrefix(line[start:], "${") {
+			if e := strings.IndexByte(line[start:], '}'); e >= 0 {
+				end = start + e + 1
+			}
+		}
+		for end < len(line) && !strings.ContainsRune(" \t\"',]})#", rune(line[end])) {
+			end++
+		}
+		v := line[start:end]
+		if v == "" || v == secretMask || isSecretReference(v) || strings.HasPrefix(v, "-") {
+			return loc[1], false
+		}
+		return w.mask(start, end, secretMask), false
+	})
+	w.apply(m, i)
 }
 
 // MaskArgs masks an argv for a locked session (container inspect's Cmd,
@@ -851,6 +1168,12 @@ func (m *lineMasker) maskFlagNextToken(i int) {
 // line, URL and value passes, and the element after a sensitive long flag
 // (isSensitiveLongFlag) whole. nil stays nil.
 func MaskArgs(args, secrets []string) []string {
+	return maskArgs(args, secrets, isSensitiveFlagName)
+}
+
+// maskArgs is MaskArgs with a flag's name judged by flagRule (see
+// maskSecretsForList).
+func maskArgs(args, secrets []string, flagRule func(string) bool) []string {
 	if args == nil {
 		return nil
 	}
@@ -860,10 +1183,10 @@ func MaskArgs(args, secrets []string) []string {
 		if afterFlag && a != "" && !strings.HasPrefix(a, "-") && !isSecretReference(a) {
 			out = append(out, secretMask)
 		} else {
-			masked, _ := MaskSecrets(a, "", secrets)
+			masked, _ := maskSecrets(a, "", secrets, flagRule)
 			out = append(out, masked)
 		}
-		afterFlag = isSensitiveLongFlag(a)
+		afterFlag = isSensitiveLongFlagBy(a, flagRule)
 	}
 	return out
 }

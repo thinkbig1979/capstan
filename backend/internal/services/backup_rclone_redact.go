@@ -53,7 +53,7 @@ func RedactRcloneRemote(remote string) string {
 // rcloneTargetForDisplay is "remote:path" with the remote's credentials
 // masked, for logs, errors and stream lines. The argv keeps the raw value.
 func rcloneTargetForDisplay(remote, path string) string {
-	return RedactRcloneRemote(remote) + ":" + path
+	return redactURLForDisplay(RedactRcloneRemote(remote) + ":" + path)
 }
 
 // cutRcloneParam splits off the first comma-separated parameter, honouring '

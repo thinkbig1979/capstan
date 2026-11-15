@@ -28,9 +28,12 @@ import (
 // alone, the rest still counts (agent-os-rbmi round-2 review F1), and is
 // warned about once (warnSecretSourceOnce) by path, never by value: its
 // values cannot be masked, which is the recorded residual.
-func composeSecretSources(stack models.Stack) (values []string, files []namedSecretFile) {
+//
+// refs are the variables a sensitive value names only by reference
+// (composeYAMLSecrets), for the caller to resolve.
+func composeSecretSources(stack models.Stack) (values, refs []string, files []namedSecretFile) {
 	if stack.Directory == "" || stack.ComposeFile == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 	src := diskComposeSource(stack.Directory)
 	root := stackRelativePath(stack.Directory, stack.ComposeFile)
@@ -47,7 +50,8 @@ func composeSecretSources(stack models.Stack) (values []string, files []namedSec
 			continue
 		}
 		if found {
-			values = append(values, composeYAMLSecretValues(content)...)
+			v, r := composeYAMLSecrets(content)
+			values, refs = append(values, v...), append(refs, r...)
 		}
 	}
 	for _, f := range named {
@@ -64,7 +68,17 @@ func composeSecretSources(stack models.Stack) (values []string, files []namedSec
 		}
 		files = append(files, f)
 	}
-	return values, files
+	return values, refs, files
+}
+
+// referenceName is the variable a reference (isSecretReference) names.
+func referenceName(ref string) string {
+	n := strings.TrimPrefix(strings.TrimSpace(ref), "$")
+	n = strings.TrimSuffix(strings.TrimPrefix(n, "{"), "}")
+	if i := strings.IndexAny(n, ":?"); i >= 0 {
+		n = n[:i]
+	}
+	return n
 }
 
 // readServiceEnvFile reads one file a service names, through the compose
@@ -105,13 +119,23 @@ func warnSecretSourceOnce(stack models.Stack, source, msg string, args ...any) {
 // Every YAML document counts, as compose merges them. A file that does not
 // parse is read line by line instead, as the view masks it.
 func composeYAMLSecretValues(content []byte) []string {
-	var out []string
+	values, _ := composeYAMLSecrets(content)
+	return values
+}
+
+// composeYAMLSecrets is composeYAMLSecretValues plus the name of every
+// variable a sensitive value is only a reference to (${PW}, $PW, ${PW?msg}):
+// a build arg leaves no trace in the container, so `DB_PASSWORD: ${PW}` with
+// PW under an ordinary name was masked nowhere (agent-os-oh7q).
+func composeYAMLSecrets(content []byte) (out, refs []string) {
 	aliased := map[*yaml.Node]bool{}
 	var collect func(v *yaml.Node)
 	collect = func(v *yaml.Node) {
 		switch v.Kind {
 		case yaml.ScalarNode:
-			if v.Value != "" && !isSecretReference(v.Value) {
+			if isSecretReference(v.Value) {
+				refs = append(refs, referenceName(v.Value))
+			} else if v.Value != "" {
 				// Both forms, as onItem adds them: an app prints the value it
 				// got, which compose may hand it trimmed (round-2 review F5).
 				out = append(out, v.Value, strings.TrimSpace(v.Value))
@@ -132,8 +156,19 @@ func composeYAMLSecretValues(content []byte) []string {
 			}
 		}
 	}
-	onValue := func(v, _ *yaml.Node) { collect(v) }
+	onValue := func(v, k *yaml.Node) {
+		// The argument of a flag only the wider flag rule finds is masked in
+		// place but not listed (review round 2 F2).
+		if name, ok := strings.CutPrefix(k.Value, "--"); ok && k.Kind == yaml.ScalarNode && !IsSensitiveEnvKey(name) {
+			return
+		}
+		collect(v)
+	}
 	onItem := func(_ *yaml.Node, val string) {
+		if isSecretReference(val) {
+			refs = append(refs, referenceName(val))
+			return
+		}
 		out = append(out, val, strings.TrimSpace(val))
 	}
 
@@ -142,10 +177,10 @@ func composeYAMLSecretValues(content []byte) []string {
 		var doc yaml.Node
 		err := dec.Decode(&doc)
 		if errors.Is(err, io.EOF) {
-			return out
+			return out, refs
 		}
 		if err != nil {
-			return append(out, sensitiveEnvValues(string(content))...)
+			return append(out, sensitiveEnvValues(string(content))...), refs
 		}
 		walkSensitiveYAML(&doc, onValue, onItem)
 	}
