@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/handlers"
@@ -129,7 +130,8 @@ func TestEnv_Put_EmptyKey_Rejected(t *testing.T) {
 			{"key": "", "value": "bad-value", "line": 2, "comment": false},
 		},
 	}
-	body, _ := json.Marshal(reqBody)
+	body, err := json.Marshal(reqBody)
+	require.NoError(t, err)
 	req := httptest.NewRequest(http.MethodPut, "/stacks/"+stack.ID+"/env", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -139,14 +141,15 @@ func TestEnv_Put_EmptyKey_Rejected(t *testing.T) {
 	if w.Code == http.StatusOK {
 		// Check if the response says "success" — that would be the bug.
 		var resp map[string]interface{}
-		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		if resp["outcome"] == "success" {
 			t.Errorf("FAIL: empty-key entry was silently accepted as success (finding #15 not fixed)\nbody: %s", w.Body.String())
 		}
 	}
 
 	// Verify the file on disk was not silently corrupted.
-	persisted, _ := os.ReadFile(envPath)
+	persisted, err := os.ReadFile(envPath)
+	require.NoError(t, err)
 	if bytes.Contains(persisted, []byte("=bad-value")) {
 		t.Errorf("FAIL: corrupt '=bad-value' line written to disk (finding #15)\ncontent: %s", string(persisted))
 	}
@@ -179,7 +182,8 @@ func TestEnv_Put_RoundTrip(t *testing.T) {
 		{"key": "BAZ", "value": "qux", "line": 2, "comment": false},
 	}
 	reqBody := map[string]interface{}{"entries": intended}
-	body, _ := json.Marshal(reqBody)
+	body, err := json.Marshal(reqBody)
+	require.NoError(t, err)
 
 	req := httptest.NewRequest(http.MethodPut, "/stacks/"+stack.ID+"/env", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -238,7 +242,8 @@ func TestEnv_Put_NewlineInKey_Rejected(t *testing.T) {
 			{"key": "BAD\nKEY", "value": "bad-value", "line": 2, "comment": false},
 		},
 	}
-	body, _ := json.Marshal(reqBody)
+	body, err := json.Marshal(reqBody)
+	require.NoError(t, err)
 	req := httptest.NewRequest(http.MethodPut, "/stacks/"+stack.ID+"/env", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -246,14 +251,15 @@ func TestEnv_Put_NewlineInKey_Rejected(t *testing.T) {
 
 	if w.Code == http.StatusOK {
 		var resp map[string]interface{}
-		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		if resp["outcome"] == "success" {
 			t.Errorf("FAIL: entry with newline in key was silently accepted as success\nbody: %s", w.Body.String())
 		}
 	}
 
 	// Verify the file on disk was not corrupted with a split line.
-	persisted, _ := os.ReadFile(envPath)
+	persisted, err := os.ReadFile(envPath)
+	require.NoError(t, err)
 	if bytes.Contains(persisted, []byte("BAD\nKEY")) || bytes.Contains(persisted, []byte("KEY=bad-value")) {
 		t.Errorf("FAIL: corrupt split key line written to disk\ncontent: %s", string(persisted))
 	}
@@ -286,7 +292,8 @@ func TestEnv_Put_CarriageReturnInValue_Rejected(t *testing.T) {
 			{"key": "BAD", "value": "bad\rvalue", "line": 2, "comment": false},
 		},
 	}
-	body, _ := json.Marshal(reqBody)
+	body, err := json.Marshal(reqBody)
+	require.NoError(t, err)
 	req := httptest.NewRequest(http.MethodPut, "/stacks/"+stack.ID+"/env", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -294,14 +301,15 @@ func TestEnv_Put_CarriageReturnInValue_Rejected(t *testing.T) {
 
 	if w.Code == http.StatusOK {
 		var resp map[string]interface{}
-		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		if resp["outcome"] == "success" {
 			t.Errorf("FAIL: entry with carriage return in value was silently accepted as success\nbody: %s", w.Body.String())
 		}
 	}
 
 	// Verify the file on disk was not corrupted.
-	persisted, _ := os.ReadFile(envPath)
+	persisted, err := os.ReadFile(envPath)
+	require.NoError(t, err)
 	if bytes.Contains(persisted, []byte("bad\rvalue")) {
 		t.Errorf("FAIL: corrupt carriage-return value written to disk\ncontent: %s", string(persisted))
 	}
@@ -337,7 +345,8 @@ func TestEnv_Put_SetsFileMode0600(t *testing.T) {
 			{"key": "NEW", "value": "value", "line": 1, "comment": false},
 		},
 	}
-	body, _ := json.Marshal(reqBody)
+	body, err := json.Marshal(reqBody)
+	require.NoError(t, err)
 	req := httptest.NewRequest(http.MethodPut, "/stacks/"+stack.ID+"/env", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -376,7 +385,8 @@ func TestEnv_Create_WhenAbsent(t *testing.T) {
 	router, _ := setupEnvHandlerRouter(t, stacksDir, db)
 
 	reqBody := map[string]interface{}{"content": "MY_VAR=hello\n"}
-	body, _ := json.Marshal(reqBody)
+	body, err := json.Marshal(reqBody)
+	require.NoError(t, err)
 
 	req := httptest.NewRequest(http.MethodPost, "/stacks/"+stack.ID+"/env", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -400,7 +410,8 @@ func TestEnv_Create_WhenAbsent(t *testing.T) {
 	if _, err := os.Stat(envPath); err != nil {
 		t.Errorf("expected .env to exist on disk after create: %v", err)
 	}
-	content, _ := os.ReadFile(envPath)
+	content, err := os.ReadFile(envPath)
+	require.NoError(t, err)
 	if !bytes.Contains(content, []byte("MY_VAR=hello")) {
 		t.Errorf("expected content 'MY_VAR=hello' in .env, got: %s", string(content))
 	}
@@ -444,7 +455,8 @@ func TestEnv_Create_WhenPresent_Returns409(t *testing.T) {
 	}
 
 	// Original file must be untouched.
-	content, _ := os.ReadFile(envPath)
+	content, err := os.ReadFile(envPath)
+	require.NoError(t, err)
 	if !bytes.Contains(content, []byte("EXISTING=yes")) {
 		t.Errorf("existing file was modified: %s", string(content))
 	}
@@ -480,7 +492,8 @@ func TestComposeEnv_Atomic_Success(t *testing.T) {
 		"composeContent": composeNew,
 		"envRaw":         envNew,
 	}
-	body, _ := json.Marshal(reqBody)
+	body, err := json.Marshal(reqBody)
+	require.NoError(t, err)
 
 	req := httptest.NewRequest(http.MethodPut, "/stacks/"+stack.ID+"/compose-env", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -499,11 +512,13 @@ func TestComposeEnv_Atomic_Success(t *testing.T) {
 		t.Errorf("expected outcome=success, got %v: %s", resp["outcome"], w.Body.String())
 	}
 
-	composePersisted, _ := os.ReadFile(filepath.Join(stackDir, "compose.yaml"))
+	composePersisted, err := os.ReadFile(filepath.Join(stackDir, "compose.yaml"))
+	require.NoError(t, err)
 	if string(composePersisted) != composeNew {
 		t.Errorf("compose not updated: got %q", string(composePersisted))
 	}
-	envPersisted, _ := os.ReadFile(filepath.Join(stackDir, ".env"))
+	envPersisted, err := os.ReadFile(filepath.Join(stackDir, ".env"))
+	require.NoError(t, err)
 	if string(envPersisted) != envNew {
 		t.Errorf("env not updated: got %q", string(envPersisted))
 	}
@@ -537,7 +552,8 @@ func TestComposeEnv_Atomic_EnvValidationFails_ComposeUnchanged(t *testing.T) {
 			{"key": "", "value": "corrupt", "line": 1, "comment": false},
 		},
 	}
-	body, _ := json.Marshal(reqBody)
+	body, err := json.Marshal(reqBody)
+	require.NoError(t, err)
 	req := httptest.NewRequest(http.MethodPut, "/stacks/"+stack.ID+"/compose-env", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -546,14 +562,15 @@ func TestComposeEnv_Atomic_EnvValidationFails_ComposeUnchanged(t *testing.T) {
 	// Should fail — not 200 success.
 	if w.Code == http.StatusOK {
 		var resp map[string]interface{}
-		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		if resp["outcome"] == "success" {
 			t.Errorf("FAIL: atomic endpoint reported success with bad env entries (finding #11)")
 		}
 	}
 
 	// Compose must be unchanged.
-	composePersisted, _ := os.ReadFile(filepath.Join(stackDir, "compose.yaml"))
+	composePersisted, err := os.ReadFile(filepath.Join(stackDir, "compose.yaml"))
+	require.NoError(t, err)
 	if string(composePersisted) != composeOrig {
 		t.Errorf("compose was modified when env validation failed (atomicity broken): got %q want %q",
 			string(composePersisted), composeOrig)
@@ -608,13 +625,14 @@ func TestComposeEnv_Atomic_EnvRestoredOnComposeWriteFailure(t *testing.T) {
 		t.Fatalf("chmod compose read-only: %v", err)
 	}
 	// Restore compose permissions on cleanup so t.TempDir() can clean up.
-	t.Cleanup(func() { os.Chmod(composePath, 0644) })
+	t.Cleanup(func() { os.Chmod(composePath, 0644) }) //nolint:errcheck // best-effort cleanup: a failure here is not the test's result
 
 	reqBody := map[string]interface{}{
 		"composeContent": "services:\n  web:\n    image: public.ecr.aws/docker/library/alpine:3.21\n  # new\n",
 		"envRaw":         "UPDATED=yes\nPORT=9090\n",
 	}
-	body, _ := json.Marshal(reqBody)
+	body, err := json.Marshal(reqBody)
+	require.NoError(t, err)
 	req := httptest.NewRequest(http.MethodPut, "/stacks/"+stack.ID+"/compose-env", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -623,7 +641,7 @@ func TestComposeEnv_Atomic_EnvRestoredOnComposeWriteFailure(t *testing.T) {
 	// The request must fail (compose write error).
 	if w.Code == http.StatusOK {
 		var resp map[string]interface{}
-		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		if resp["outcome"] == "success" {
 			t.Errorf("FAIL: reported success when compose write should have failed (permissions test setup issue?)\nbody: %s", w.Body.String())
 		}
@@ -689,7 +707,8 @@ func TestComposeEnv_Atomic_EnvKeeps0600Mode(t *testing.T) {
 		"composeContent": composeOrig,
 		"envRaw":         "PORT=9090\n",
 	}
-	body, _ := json.Marshal(reqBody)
+	body, err := json.Marshal(reqBody)
+	require.NoError(t, err)
 	req := httptest.NewRequest(http.MethodPut, "/stacks/"+stack.ID+"/compose-env", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()

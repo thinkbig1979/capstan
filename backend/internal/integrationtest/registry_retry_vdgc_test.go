@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/thinkbig1979/capstan/backend/internal/registryretry"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
 
@@ -68,7 +69,7 @@ func TestRegistryTransient(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, registryTransient(tc.err, tc.log), "%v / log %q", tc.err, tc.log)
+			assert.Equal(t, tc.want, registryretry.Transient(tc.err, tc.log), "%v / log %q", tc.err, tc.log)
 		})
 	}
 }
@@ -105,7 +106,7 @@ func TestRetryUpdateAtPull(t *testing.T) {
 	t.Run("attempts are bounded", func(t *testing.T) {
 		ar, calls := run(bg, one(pullTimeout), false)
 		assert.Equal(t, truth.OutcomeFailed, ar.Outcome)
-		assert.Equal(t, registryAttempts, calls)
+		assert.Equal(t, registryretry.Attempts, calls)
 	})
 	t.Run("a permanent pull failure is not retried", func(t *testing.T) {
 		_, calls := run(bg, one(truth.Failed("update apply failed", errors.New("pulling image x: manifest unknown"))), false)
@@ -115,6 +116,30 @@ func TestRetryUpdateAtPull(t *testing.T) {
 		ar, calls := run(bg, []attempt{{ar: composeFailed, log: composeLogTimeout}, {ar: ok}}, false)
 		assert.Equal(t, truth.OutcomeNoChange, ar.Outcome)
 		assert.Equal(t, 2, calls)
+	})
+	// UpdateComposeServiceStreaming names the step in the Reason, and its
+	// Err is only streamComposeCmd's exit status (agent-os-18uw).
+	serviceComposeFailed := truth.Failed("compose pull failed", errors.New("command failed: exit status 18"))
+	t.Run("a compose-service pull whose log says timeout is retried", func(t *testing.T) {
+		ar, calls := run(bg, []attempt{{ar: serviceComposeFailed, log: composeLogTimeout}, {ar: ok}}, false)
+		assert.Equal(t, truth.OutcomeNoChange, ar.Outcome)
+		assert.Equal(t, 2, calls)
+	})
+	t.Run("a compose-service up failure is not retried", func(t *testing.T) {
+		_, calls := run(bg, []attempt{{ar: truth.Failed("compose up failed", errors.New("command failed: exit status 1")), log: composeLogTimeout}}, false)
+		assert.Equal(t, 1, calls)
+	})
+	// agent-os-sgqy, accepted as is: at a failure RetryUpdateAtPull may retry,
+	// the attempt's log holds only the pull step's lines (no update path
+	// emits a line before "==> Pulling" but the 64me refusal, which is not a
+	// pull error), so the regex has nothing else to match. A pull that failed
+	// for another reason with a transient word in its own lines (a service
+	// named "timeout-web") is retried to the bound and still reported failed.
+	t.Run("a non-network pull failure naming timeout is retried to the bound and stays failed", func(t *testing.T) {
+		log := "==> Pulling timeout-web\n timeout-web Pulling\n timeout-web Error no space left on device"
+		ar, calls := run(bg, []attempt{{ar: composeFailed, log: log}}, false)
+		assert.Equal(t, truth.OutcomeFailed, ar.Outcome)
+		assert.Equal(t, registryretry.Attempts, calls)
 	})
 	t.Run("a compose pull whose log says manifest unknown is not retried", func(t *testing.T) {
 		_, calls := run(bg, []attempt{{ar: composeFailed, log: composeLogManifest}}, false)

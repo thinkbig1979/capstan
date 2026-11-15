@@ -79,7 +79,7 @@ func runStandaloneContainer(t *testing.T, name string) string {
 	t.Cleanup(func() {
 		// The apply path recreates the container under the same name, so remove
 		// by name rather than by the original id.
-		_ = exec.Command("docker", "rm", "-f", name).Run()
+		_ = exec.Command("docker", "rm", "-f", name).Run() //nolint:errcheck // best-effort cleanup: a failure here is not the test's result
 	})
 
 	return id

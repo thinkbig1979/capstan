@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/thinkbig1979/capstan/backend/internal/registryretry"
 )
 
 // TestRemoteRegistryDigestMatchesLocal is the integration test that would have
@@ -58,7 +60,7 @@ func TestRemoteRegistryDigestMatchesLocal(t *testing.T) {
 
 	// Step 4: Fetch remote digest using the real (non-stubbed) implementation.
 	var remoteDigest string
-	err = retryRegistry(t, "RemoteRegistryDigest", func() (err error) {
+	err = registryretry.Retry(t, "RemoteRegistryDigest", func() (err error) {
 		remoteDigest, err = RemoteRegistryDigest(ctx, ref)
 		return err
 	})
@@ -86,7 +88,7 @@ func TestRemoteRegistryDigestMatchesLocal(t *testing.T) {
 func pullWithRetry(ctx context.Context, t *testing.T, ref string) {
 	t.Helper()
 
-	err := retryRegistry(t, "docker pull "+ref, func() error {
+	err := registryretry.Retry(t, "docker pull "+ref, func() error {
 		out, err := exec.CommandContext(ctx, "docker", "pull", ref).CombinedOutput()
 		if err != nil {
 			// The output says why (a 429 reads "toomanyrequests").
@@ -97,26 +99,4 @@ func pullWithRetry(ctx context.Context, t *testing.T, ref string) {
 	if err != nil {
 		t.Fatalf("docker pull %s: %v", ref, err)
 	}
-}
-
-// retryRegistry runs op, a call that reaches the image registry, up to five
-// times with a growing pause (at most 2+4+6+8 s), and returns the last error.
-// Only the transport is retried: callers still assert on what op produced.
-// integrationtest.RetryRegistry is the same helper; this package cannot import
-// it (integrationtest imports truth).
-func retryRegistry(t *testing.T, what string, op func() error) error {
-	t.Helper()
-
-	const attempts = 5
-	var err error
-	for attempt := 1; attempt <= attempts; attempt++ {
-		if err = op(); err == nil {
-			return nil
-		}
-		t.Logf("%s: attempt %d/%d: %v", what, attempt, attempts, err)
-		if attempt < attempts {
-			time.Sleep(time.Duration(2*attempt) * time.Second)
-		}
-	}
-	return err
 }

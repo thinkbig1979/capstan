@@ -80,11 +80,6 @@ func dockerTagLocal(t *testing.T, src, dst string) {
 	require.NoError(t, err, "docker tag %s %s: %s", src, dst, out)
 }
 
-// dockerRmiBestEffort removes an image tag (best-effort, ignores errors).
-func dockerRmiBestEffort(tag string) {
-	exec.Command("docker", "rmi", "--no-prune", tag).Run() //nolint:errcheck
-}
-
 // dockerRmiForce removes an image forcefully (best-effort).
 func dockerRmiForce(tag string) {
 	exec.Command("docker", "rmi", "-f", tag).Run() //nolint:errcheck
@@ -239,14 +234,14 @@ func Test_Resource_ImagePrune_CountsUntaggedEntries(t *testing.T) {
 	outC, errC := exec.Command("docker", "create", "--name", ctr,
 		"public.ecr.aws/docker/library/alpine:3.21", "true").CombinedOutput()
 	require.NoError(t, errC, "create container: %s", outC)
-	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", ctr).Run() })
+	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", ctr).Run() }) //nolint:errcheck // best-effort cleanup: a failure here is not the test's result
 
 	outM, errM := exec.Command("docker", "commit", "-m", "capstan-prune-"+ts, ctr).CombinedOutput()
 	require.NoError(t, errM, "commit untagged image: %s", outM)
 
 	// Fail here, not in the prune assertion, if the fixture stops producing a
 	// dangling image: a broken setup must not read as a prune defect.
-	danglingOut, _ := exec.Command("docker", "images", "--filter", "dangling=true", "--format", "{{.ID}}").Output()
+	danglingOut, _ := exec.Command("docker", "images", "--filter", "dangling=true", "--format", "{{.ID}}").Output() //nolint:errcheck // a failed listing is empty, which the NotEmpty below fails on
 	t.Logf("dangling images before prune: %s", strings.TrimSpace(string(danglingOut)))
 	require.NotEmpty(t, strings.TrimSpace(string(danglingOut)),
 		"fixture must leave a dangling image before the prune")

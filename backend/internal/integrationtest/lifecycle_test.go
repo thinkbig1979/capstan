@@ -318,7 +318,7 @@ func Test_Lifecycle_TempStackCleanupRemovesStartedStack(t *testing.T) {
 			"-f", filepath.Join(stack.Directory, "compose.yaml"),
 			"down", "-v", "--remove-orphans")
 		down.Dir = stack.Directory
-		_ = down.Run()
+		_ = down.Run() //nolint:errcheck // best-effort cleanup: a failure here is not the test's result
 	})
 
 	RunCompose(t, stack.Directory, stack.ProjectName, "up", "-d")

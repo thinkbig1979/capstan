@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
 
 // Test_UpdateContainer_Standalone_60vd_VolumesFrom (agent-os-60vd): a --rm
@@ -34,16 +35,16 @@ func Test_UpdateContainer_Standalone_60vd_VolumesFrom(t *testing.T) {
 	// Cleanups run last-registered first: containers, then their volumes.
 	t.Cleanup(func() {
 		for v := range volumes {
-			_ = exec.Command("docker", "volume", "rm", v).Run()
+			_ = exec.Command("docker", "volume", "rm", v).Run() //nolint:errcheck // best-effort cleanup: a failure here is not the test's result
 		}
 	})
 	t.Cleanup(func() {
-		_ = exec.Command("docker", "rm", "-f", name).Run()
-		out, _ := exec.Command("docker", "ps", "-aq", "--filter", "name=^/"+name+"-capstan-old-").Output()
+		_ = exec.Command("docker", "rm", "-f", name).Run()                                                 //nolint:errcheck // best-effort cleanup: a failure here is not the test's result
+		out, _ := exec.Command("docker", "ps", "-aq", "--filter", "name=^/"+name+"-capstan-old-").Output() //nolint:errcheck // best-effort: a failure here is not the test's result
 		for _, id := range strings.Fields(string(out)) {
-			_ = exec.Command("docker", "rm", "-f", id).Run()
+			_ = exec.Command("docker", "rm", "-f", id).Run() //nolint:errcheck // best-effort cleanup: a failure here is not the test's result
 		}
-		_ = exec.Command("docker", "rm", "-f", src).Run()
+		_ = exec.Command("docker", "rm", "-f", src).Run() //nolint:errcheck // best-effort cleanup: a failure here is not the test's result
 	})
 
 	docker := func(args ...string) string {
@@ -63,7 +64,11 @@ func Test_UpdateContainer_Standalone_60vd_VolumesFrom(t *testing.T) {
 
 	svc := newDockerService(t, t.TempDir())
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	_, ar := svc.UpdateContainer(ctx, id, nil)
+	ar := RetryUpdateAtPull(ctx, t, func() (truth.ActionResult, bool, string) {
+		_, ar := svc.UpdateContainer(ctx, id, nil)
+		// UpdateContainer streams nothing; its pull error carries the reason.
+		return ar, false, ""
+	})
 	cancel()
 
 	require.NotEqual(t, "failed", string(ar.Outcome), "%s (%v)", ar.Reason, ar.Err)
