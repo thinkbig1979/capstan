@@ -114,9 +114,13 @@ func TestEnvKeepLines_omzj_EachWrittenFieldBreaksTheMatch(t *testing.T) {
 		t.Run(c.field, func(t *testing.T) {
 			rows := (&EnvHandler{}).parseEnvFile(c.file)
 			require.Len(t, rows, 1)
-			require.Equal(t, c.file, serializeEnvFileOver(c.file, rows), "unchanged: the file's own text")
+			out, err := serializeEnvFileOver(c.file, rows)
+			require.NoError(t, err)
+			require.Equal(t, c.file, out, "unchanged: the file's own text")
 			c.change(&rows[0])
-			assert.Equal(t, c.want, serializeEnvFileOver(c.file, rows))
+			out, err = serializeEnvFileOver(c.file, rows)
+			require.NoError(t, err)
+			assert.Equal(t, c.want, out)
 		})
 	}
 }

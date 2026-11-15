@@ -137,7 +137,9 @@ func TestEnv_Put_EmptyKey_Rejected(t *testing.T) {
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	// Must NOT be 200 success — should be 500 (failed) due to validation error.
+	// A validation refusal is a client error: 400, not a logged 500
+	// (agent-os-uxfl).
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
 	if w.Code == http.StatusOK {
 		// Check if the response says "success" — that would be the bug.
 		var resp map[string]interface{}

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/compose-spec/compose-go/v2/dotenv"
 	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
@@ -175,6 +176,9 @@ func redactEnvResponse(resp *EnvResponse) {
 	for i := range resp.Entries {
 		e := &resp.Entries[i]
 		switch {
+		case e.Comment && e.Key == "" && e.Sensitive:
+			// An unkeyed line that looked secret (agent-os-qdnb): hidden.
+			e.Value = ""
 		case e.Comment && e.Key == "":
 			redactEnvCommentRow(e)
 		case e.Sensitive:
@@ -284,6 +288,33 @@ func hideMultilineBodies(entries []EnvEntry, raw string) {
 		if tailSensitive || looksBefore[end+1]-looksBefore[i+1] > 0 {
 			hide[i+1]++
 			hide[end+1]--
+			// The opener's own line is the value's first line, so it is
+			// hidden too (agent-os-1nqr round 2: TZ="a\npostgres://u:pw@db" X=1
+			// showed "a"). Marked sensitive, the masking below applies.
+			entries[i].Sensitive = true
+		}
+	}
+	// A span that is secret only as compose reads it whole, such as a URL
+	// credential split across its lines (review R2-1): its first row is marked
+	// sensitive, so the masking applies, and the rest of its rows are hidden.
+	if raw != "" {
+		rowOf := make([]int, len(lines))
+		for r, e := range entries {
+			next := len(lines)
+			if r+1 < len(entries) {
+				next = min(entries[r+1].Line-1, len(lines))
+			}
+			for l := max(e.Line-1, 0); l < next; l++ {
+				rowOf[l] = r
+			}
+		}
+		for _, sp := range sensitiveSpans(lines) {
+			first, last := rowOf[sp[0]], rowOf[sp[1]]
+			entries[first].Sensitive = true
+			if last > first {
+				hide[first+1]++
+				hide[last+1]--
+			}
 		}
 	}
 	for k, n := 0, 0; k < len(entries); k++ {
@@ -291,6 +322,51 @@ func hideMultilineBodies(entries []EnvEntry, raw string) {
 			blank(k, k)
 		}
 	}
+}
+
+// sensitiveSpans returns the first and last line of every quoted value
+// compose reads across lines whose text holds a sensitive variable
+// (agent-os-1nqr round 3, review R2-1): judged line by line, a URL credential
+// split across a span's lines (TZ="postgres://u:<NL>pw@db/app" X=1) looked
+// like nothing on each line. Lines are walked as compose reads them: a span
+// runs from where its statement starts to the first line holding its closing
+// quote, the lines between are its body and start no statement, and the text
+// after the close is read on (it can open the next span). Each span is parsed
+// once with compose-go, so this is linear in the file. A span compose cannot
+// parse counts as sensitive (fail closed); a quote that never closes is a file
+// compose rejects, so no value is read from it.
+func sensitiveSpans(lines []string) [][2]int {
+	var spans [][2]int
+	for k := 0; k < len(lines); k++ {
+		cur := lines[k]
+		for {
+			q, open := opensMultilineTail(cur)
+			if !open {
+				break
+			}
+			end, at := -1, -1
+			for j := k + 1; j < len(lines); j++ {
+				if c, _ := closingQuote(lines[j], q); c != -1 {
+					end, at = j, c
+					break
+				}
+			}
+			if end == -1 {
+				return spans
+			}
+			parts := append(append([]string{cur}, lines[k+1:end]...), lines[end][:at+1])
+			vars, err := dotenv.UnmarshalWithLookup(strings.Join(parts, "\n")+"\n", func(string) (string, bool) { return "", false })
+			sensitive := err != nil
+			for key, v := range vars {
+				sensitive = sensitive || services.IsSensitiveEnvVar(key, v)
+			}
+			if sensitive {
+				spans = append(spans, [2]int{k, end})
+			}
+			cur, k = lines[end][at+1:], end
+		}
+	}
+	return spans
 }
 
 // bodyWalks holds, for every row and each quote kind, where a quoted value
@@ -550,7 +626,7 @@ func (h *EnvHandler) Put(c *gin.Context) {
 		// Validate before serialising: reject entries with a non-comment, non-blank
 		// key that is empty — they would produce a corrupt "=value" line (#15).
 		if err := validateEnvEntries(req.Entries); err != nil {
-			renderResult(c, truth.Failed("env validation failed: "+err.Error(), err))
+			renderEnvValidationFailure(c, err)
 			return
 		}
 		// Read under the lock, so the rows kept verbatim are the file's
@@ -561,7 +637,11 @@ func (h *EnvHandler) Put(c *gin.Context) {
 			handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "READ_ERROR", "Failed to read env file", err))
 			return
 		}
-		content = serializeEnvFileOver(string(current), req.Entries)
+		content, err = serializeEnvFileOver(string(current), req.Entries)
+		if err != nil {
+			renderEnvValidationFailure(c, err)
+			return
+		}
 	} else {
 		c.JSON(http.StatusBadRequest, models.NewAppError(
 			http.StatusBadRequest,
@@ -736,12 +816,23 @@ func (h *EnvHandler) Create(c *gin.Context) {
 	))
 }
 
+// renderEnvValidationFailure answers a refused env save (validateEnvEntries,
+// serializeEnvFileOver) as the client error it is: 400 VALIDATION_ERROR, not a
+// 500 logged as a server fault (agent-os-uxfl).
+func renderEnvValidationFailure(c *gin.Context, err error) {
+	c.JSON(http.StatusBadRequest, models.NewAppError(
+		http.StatusBadRequest,
+		models.ErrValidation,
+		"env validation failed: "+err.Error(),
+	))
+}
+
 // validateEnvEntries returns an error when an entry would not serialise back
 // as the one line it stands for: a non-blank entry with an empty key would
 // produce a corrupt "=value" line (finding #15), and a comment row must be one
 // parseEnvFile itself would produce (validateEnvCommentRow). Errors name the
-// index or key, never a value, which
-// may be a secret: a failure here is a logged 500 on the stack env routes.
+// index or key, never a value, which may be a secret: the message is the
+// response body (renderEnvValidationFailure).
 func validateEnvEntries(entries []EnvEntry) error {
 	for i, e := range entries {
 		if e.Comment {
@@ -768,11 +859,37 @@ func validateEnvEntries(entries []EnvEntry) error {
 		if strings.ContainsAny(e.Value, "\r\n") {
 			return fmt.Errorf("entry at index %d (key %q) has a value containing a newline; this would corrupt the env file", i, e.Key)
 		}
-		if err := validateEnvQuoting(e); err != nil {
+		if err := validateEnvKey(e); err != nil {
+			return fmt.Errorf("entry at index %d (key %q) %w", i, e.Key, err)
+		}
+		// The value against its quote is composeSafeRow's to settle when the
+		// row is written fresh (review F1); an unchanged row is the file's text.
+		if err := validateEnvQuoteFields(e); err != nil {
 			return fmt.Errorf("entry at index %d (key %q) %w", i, e.Key, err)
 		}
 	}
 	return nil
+}
+
+// validateEnvKey refuses a key compose would read as another key or none
+// (agent-os-8btk): written as [export ]KEY=x, the line must be exactly the one
+// variable KEY to compose-go's dotenv parser, and the same row to
+// parseEnvFile. "A=B" and "A:B" are A to compose, "#A" is a comment, "A B" is
+// a file compose rejects, and a key typed as "export FOO" is FOO. Every row is
+// checked, edited or not: a file holding such a key is one compose already
+// reads differently, and is saved from its raw text.
+func validateEnvKey(e EnvEntry) error {
+	probe := EnvEntry{Key: e.Key, Value: "x", Export: e.Export}
+	line := serializeEnvFile([]EnvEntry{probe})
+	rows := (&EnvHandler{}).parseEnvFile(line)
+	if composeReadsValue(probe) && len(rows) == 1 && !rows[0].Comment &&
+		rows[0].Key == e.Key && rows[0].Export == e.Export {
+		return nil
+	}
+	if strings.ContainsRune(e.Key, ' ') {
+		return errors.New("has a space in its key; a key is one word, so rename it, or write the line in the Raw view (global env: in global.env)")
+	}
+	return errors.New("has a key compose reads as a different key or none (a key cannot hold =, :, # or an export prefix); rename it, or write the line in the Raw view (global env: in global.env)")
 }
 
 // validateEnvCommentRow accepts exactly the comment rows parseEnvFile produces
@@ -796,7 +913,15 @@ func validateEnvCommentRow(e EnvEntry) error {
 	// Ask the parser GET uses, so this accepts exactly the rows it produces.
 	// A "\n" passes only inside a multi-line value it reads back as this one
 	// row (agent-os-fw2q); one that would add a line does not.
-	back := (&EnvHandler{}).parseEnvFile(serializeEnvFile([]EnvEntry{e}))
+	line := serializeEnvFile([]EnvEntry{e})
+	back := (&EnvHandler{}).parseEnvFile(line)
+	// A bare name is unkeyed as an unterminated last line (agent-os-qdnb),
+	// which is that row read without its line end.
+	if len(back) == 1 && back[0].Key != e.Key && e.Key == "" {
+		if last := (&EnvHandler{}).parseEnvFile(strings.TrimSuffix(line, "\n")); len(last) == 1 && last[0].Key == "" {
+			back = last
+		}
+	}
 	if len(back) != 1 || !back[0].Comment || back[0].Value != e.Value {
 		if strings.Contains(e.Value, "\n") {
 			return errors.New("is a comment containing a newline; this would corrupt the env file")
@@ -809,13 +934,12 @@ func validateEnvCommentRow(e EnvEntry) error {
 	return nil
 }
 
-// validateEnvQuoting checks the quote fields a client sends back (agent-os-wcrq).
-// They are written into the file around and after the value, so unchecked they
-// could end the quotes early or add a line. Errors never carry the value.
+// validateEnvQuoting checks a row's value against its quote and its quote
+// fields (validateEnvQuoteFields): an unescaped quote inside the value, or a
+// trailing backslash, would end the quotes early or escape the closing one.
+// Errors never carry the value.
 func validateEnvQuoting(e EnvEntry) error {
-	switch e.Quote {
-	case "":
-	case "'", `"`:
+	if e.Quote == "'" || e.Quote == `"` {
 		idx, trailingEscape := closingQuote(e.Value, e.Quote[0])
 		if idx != -1 {
 			// compose reads \' and \" as the quote itself (compose-go v2
@@ -826,6 +950,17 @@ func validateEnvQuoting(e EnvEntry) error {
 		if trailingEscape {
 			return fmt.Errorf("has a value ending in a backslash, which would escape its closing quote; use the raw view")
 		}
+	}
+	return validateEnvQuoteFields(e)
+}
+
+// validateEnvQuoteFields checks the quote fields a client sends back
+// (agent-os-wcrq): the quote kind, and an inline comment that must stay one
+// "#" comment on the line. They are written into the file around and after
+// the value, so unchecked they could add a line. Errors never carry the value.
+func validateEnvQuoteFields(e EnvEntry) error {
+	switch e.Quote {
+	case "", "'", `"`:
 	default:
 		return errors.New("has an unsupported quote; use ', \" or none")
 	}
@@ -939,6 +1074,12 @@ func (h *EnvHandler) parseEnvFile(content string) []EnvEntry {
 					value = trimmedLine[colonIndex+1:]
 				}
 				entry.Sensitive = services.IsSensitiveEnvVar(key, value) || statementsLookSensitive(trimmedLine)
+				// A bare name compose does not define (agent-os-qdnb) is not
+				// keyed, and stays hidden while locked if it looked secret
+				// (redactEnvResponse).
+				if eqIndex == -1 && colonIndex == -1 && bareNameUndefined(trimmedLine, n == len(lines)-1 && !strings.HasSuffix(content, "\n")) {
+					entry.Key = ""
+				}
 			}
 			entries = append(entries, entry)
 			continue
@@ -1085,6 +1226,36 @@ func composeLineKey(line string) (key string, ok bool) {
 	return key, true
 }
 
+// bareNameUndefined reports whether a line holding only a name (the caller
+// has found no "=" or ":") is one compose's dotenv parser does not define
+// (agent-os-qdnb): a bare "export", whose line end the export prefix takes,
+// and any bare name on an unterminated last line, which compose reads as the
+// value of key "" because no '=', ':' or line end ends its name (compose-go
+// v2 dotenv/parser.go, locateKeyName).
+func bareNameUndefined(line string, unterminatedLast bool) bool {
+	return line == "export" || unterminatedLast
+}
+
+// unterminatedBareName reports whether e is a row parseEnvFile left unkeyed
+// because it is a bare name on an unterminated last line: the same text with
+// a line end is a variable, so written with one, or with any row after it,
+// compose would define that name.
+func unterminatedBareName(e EnvEntry) bool {
+	if !e.Comment || e.Key != "" {
+		return false
+	}
+	h := &EnvHandler{}
+	v := strings.TrimSpace(e.Value)
+	alone, ended := h.parseEnvFile(v), h.parseEnvFile(v+"\n")
+	return len(alone) == 1 && alone[0].Key == "" && len(ended) == 1 && ended[0].Key != ""
+}
+
+// errRowAfterBareLastLine refuses a save that would give the file's
+// unterminated bare last line a line end, and so define it (agent-os-qdnb).
+func errRowAfterBareLastLine(i int) error {
+	return fmt.Errorf("entry at index %d is a bare name on the file's last line, with no line end, which compose does not define; anything written after it would define it, so add the line end in the Raw view (global env: in global.env) first", i)
+}
+
 // splitEnvValue splits the text after "=" the way compose's dotenv parser
 // reads it (compose-go v2 dotenv/parser.go, extractVarValue): a quoted value
 // runs to its first unescaped closing quote and may be followed by a "#"
@@ -1200,8 +1371,10 @@ func closingQuote(s string, q byte) (idx int, trailingEscape bool) {
 // original text, byte for byte, and any other row as serializeEnvFile writes
 // it, with the file's line ending. The output keeps the file's final-newline
 // state. A row only matches when it is the same row, so a file changed since
-// the client read it falls back to the request's rows.
-func serializeEnvFileOver(current string, entries []EnvEntry) string {
+// the client read it falls back to the request's rows. A row written fresh
+// is first made one compose reads back as typed (composeSafeRow); one that
+// cannot be is an error naming its index and key, and nothing is written.
+func serializeEnvFileOver(current string, entries []EnvEntry) (string, error) {
 	eol := fileEOL(current)
 
 	// Each file row's original text: its line, or for a value spanning
@@ -1215,7 +1388,7 @@ func serializeEnvFileOver(current string, entries []EnvEntry) string {
 	}
 
 	var b strings.Builder
-	for _, e := range entries {
+	for i, e := range entries {
 		if k, ok := original[e.Line]; ok && e.Line > 0 && sameEnvRow(e, fileRows[k]) {
 			end := lineCount
 			if k+1 < len(fileRows) {
@@ -1233,7 +1406,11 @@ func serializeEnvFileOver(current string, entries []EnvEntry) string {
 			}
 			continue
 		}
-		b.WriteString(strings.ReplaceAll(serializeEnvFile([]EnvEntry{e}), "\n", eol))
+		safe, ok := composeSafeRow(e)
+		if !ok {
+			return "", fmt.Errorf("entry at index %d (key %q) has a value compose would read differently, and no quoting keeps it as typed; edit it in the Raw view", i, e.Key)
+		}
+		b.WriteString(strings.ReplaceAll(serializeEnvFile([]EnvEntry{safe}), "\n", eol))
 	}
 
 	out := b.String()
@@ -1244,7 +1421,51 @@ func serializeEnvFileOver(current string, entries []EnvEntry) string {
 	if current != "" && !strings.HasSuffix(current, "\n") && !lastBlank {
 		out = strings.TrimSuffix(out, eol)
 	}
-	return out
+	for i, e := range entries {
+		if unterminatedBareName(e) && (i != len(entries)-1 || strings.HasSuffix(out, "\n")) {
+			return "", errRowAfterBareLastLine(i)
+		}
+	}
+	return out, nil
+}
+
+// composeSafeRow returns a row to write fresh whose line compose reads back
+// as its value (agent-os-uxfl): the row as sent, else unquoted (review R2-2:
+// C:\dir\ ends in a backslash no quote keeps), else single-quoted, else
+// double-quoted, the first whose line validateEnvQuoting accepts and
+// compose-go reads back exactly; ok is false when none does. That holds for
+// a row the client sent with quotes too, since the client sends an edited
+// row's quote back as it got it (review F1: PW="old" edited to pa$word was
+// written "pa$word" and read as pa). A typed value is therefore literal: a
+// ${VAR} reference is written in the Raw view. Comment and blank rows are
+// returned as they are; validateEnvCommentRow checked the comments.
+func composeSafeRow(e EnvEntry) (EnvEntry, bool) {
+	if e.Comment || (e.Key == "" && e.Value == "") {
+		return e, true
+	}
+	for i, q := range []string{e.Quote, "", "'", `"`} {
+		if i > 0 && q == e.Quote {
+			continue // already tried as sent
+		}
+		candidate := e
+		candidate.Quote = q
+		if validateEnvQuoting(candidate) == nil && composeReadsValue(candidate) {
+			return candidate, true
+		}
+	}
+	return e, false
+}
+
+// composeReadsValue reports whether compose-go's dotenv parser reads the line
+// serializeEnvFile writes for e as exactly the one variable e.Key with value
+// e.Value. Nothing is defined for it, so an interpolated value differs.
+func composeReadsValue(e EnvEntry) bool {
+	vars, err := dotenv.UnmarshalWithLookup(serializeEnvFile([]EnvEntry{e}), func(string) (string, bool) { return "", false })
+	if err != nil {
+		return false // compose cannot read the line: it does not read back
+	}
+	v, ok := vars[e.Key]
+	return len(vars) == 1 && ok && v == e.Value
 }
 
 // sameEnvRow reports whether two rows write the same text: every field

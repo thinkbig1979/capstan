@@ -231,12 +231,10 @@ func TestEnvQuote_HTTP_RejectsUnsafeQuoteFields(t *testing.T) {
 		{"inlineComment with no space before # on an unquoted value", "NOTE", func(e map[string]any) { e["inlineComment"] = "#x" }},
 		{"unknown quote", "PW", func(e map[string]any) { e["quote"] = "`" }},
 		{"multi-character quote", "PW", func(e map[string]any) { e["quote"] = "''" }},
-		{"bare single quote inside single quotes", "PW", func(e map[string]any) { e["value"] = "it's" }},
-		{"trailing backslash inside single quotes", "PW", func(e map[string]any) { e["value"] = `abc\` }},
-		{"bare double quote inside double quotes", "PW", func(e map[string]any) {
-			e["quote"] = `"`
-			e["value"] = `say "hi"`
-		}},
+		// A value the row's quote cannot hold is written with another quoting
+		// instead of refused (review F1, R2-2): it's in '' as "it's", a
+		// trailing backslash unquoted (TestEnvQuote_HTTP_RequotesAnEditedValue,
+		// TestEnvValueUxfl_R22_EditedQuotedRowMayBeWrittenUnquoted).
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -269,7 +267,34 @@ func TestEnvQuote_HTTP_AcceptsEscapedQuotes(t *testing.T) {
 
 	w := putEntries(t, router, stackID, token, entries)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	assert.Equal(t, "PW='it\\'s'\t# note\n", readEnvQuoteFile(t, envPath))
+	// The typed text is the value (D5): compose reads it\'s inside '' as it's,
+	// so the row is double-quoted, where compose keeps the backslash (F1).
+	assert.Equal(t, "PW=\"it\\'s\"\t# note\n", readEnvQuoteFile(t, envPath))
+	assert.Equal(t, `it\'s`, composeReadsFile(t, readEnvQuoteFile(t, envPath))["PW"])
+}
+
+// Review F1: an edited value holding its own row's quote is written with the
+// other quote, which compose reads back as typed, instead of being refused.
+func TestEnvQuote_HTTP_RequotesAnEditedValue(t *testing.T) {
+	cases := []struct{ quote, typed, want string }{
+		// Unquoted is tried before the other quote (review R2-2), and compose
+		// reads both of these as typed unquoted.
+		{"'", "it's", `PW=it's` + "\n"},
+		{`"`, `say "hi"`, `PW=say "hi"` + "\n"},
+		{"'", "it's # x", `PW="it's # x"` + "\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.typed, func(t *testing.T) {
+			router, stackID, token, envPath := envQuoteFixture(t, "PW="+c.quote+"old"+c.quote+"\n")
+			entries := getEntriesAsJSON(t, router, stackID, token)
+			e := entryByKey(t, entries, "PW")
+			e["value"] = c.typed
+			w := putEntries(t, router, stackID, token, entries)
+			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+			assert.Equal(t, c.want, readEnvQuoteFile(t, envPath))
+			assert.Equal(t, c.typed, composeReadsFile(t, readEnvQuoteFile(t, envPath))["PW"])
+		})
+	}
 }
 
 // assertBodyOmits checks s is absent from a JSON body in every form an error

@@ -603,6 +603,12 @@ func mergeGlobalEnv(current string, req []EnvEntry) (string, error) {
 		if !globalValueReadsAsOne(e.Key, e.Value) {
 			return "", fmt.Errorf("entry at index %d (key %q) has a value whose quotes or comment do not read back as that one variable; check its quotes", i, e.Key)
 		}
+		// An unquoted value is the value as typed, so compose must read it
+		// as that text (review F2): "a # b" was read as a, ab$cd interpolated.
+		// A value the user quoted keeps compose's reading of its quotes.
+		if v := strings.TrimSpace(e.Value); (v == "" || (v[0] != '\'' && v[0] != '"')) && !composeReadsValue(EnvEntry{Key: e.Key, Value: v, Export: e.Export}) {
+			return "", fmt.Errorf("entry at index %d (key %q) has an unquoted value compose reads differently (a \" #\" comment or a $ reference); quote it, or edit global.env directly", i, e.Key)
+		}
 	}
 
 	// Each entry's original text: its line, or for a value spanning lines,
@@ -646,6 +652,11 @@ func mergeGlobalEnv(current string, req []EnvEntry) (string, error) {
 		}
 	}
 	added = slices.DeleteFunc(added, func(e EnvEntry) bool { return e.Key == "" && e.Value == "" })
+	// A row appended after an unterminated bare last line gives it a line
+	// end, and compose would then define it (agent-os-qdnb).
+	if len(added) > 0 && len(entries) > 0 && !strings.HasSuffix(current, "\n") && unterminatedBareName(entries[len(entries)-1]) {
+		return "", errRowAfterBareLastLine(len(entries) - 1)
+	}
 	if len(added) > 0 {
 		b.WriteString(strings.ReplaceAll(serializeEnvFile(added), "\n", eol))
 		endsVerbatim = false
