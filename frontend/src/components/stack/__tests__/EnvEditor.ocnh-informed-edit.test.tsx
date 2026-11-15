@@ -143,4 +143,22 @@ describe('EnvEditor: an informed edit lifts the blind-edit refusal for its row (
     await waitFor(() => expect(input(3).value).toBe(''))
     await expectSaveRefused()
   })
+
+  // Review F3: the lock window. The lock (here an expiry) re-masks every row
+  // that was ever masked in the same render that turns lockedNow on
+  // (useEnvUnlockRemask), so no edit can reach a blind row while it shows its
+  // value and the session is locked. This pins that: typing after the lock is
+  // a masked edit, and the next unlock still refuses.
+  it('ocnh: a value typed after the session locks is not informed, even if the row was revealed', async () => {
+    await blindEditThenUnlock()
+    reveal(3)
+    await waitFor(() => expect(input(3).type).toBe('text'))
+
+    act(() => useEnvUnlockStore.getState().lock())
+    expect(input(3).type).toBe('password')
+    fireEvent.change(input(3), { target: { value: 'chosen' } })
+    act(() => useEnvUnlockStore.getState().unlock('tok'))
+
+    await expectSaveRefused()
+  })
 })

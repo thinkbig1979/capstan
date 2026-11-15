@@ -367,6 +367,10 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   // or a change to anything else (the visibility flag) leaves the guard as is.
   const onEntryChange: typeof handleEntryChange = (index, field, value) => {
     const row = entries[index]
+    // `!locked && !lockedNow` cannot change the result today: a lock re-masks
+    // every row ever masked in the render that turns lockedNow on
+    // (useEnvUnlockRemask), and a blind row came in masked. It stays so the gate
+    // does not lean on that (review F3; pinned by the ocnh lock-window test).
     const visible = row !== undefined && !row.sensitive && !locked && !lockedNow
     if (blindGuard?.ids.has(row?._rowId) && visible && (field === 'key' || field === 'value')) {
       const typed = { key: row.key, value: row.value, [field]: value as string }
