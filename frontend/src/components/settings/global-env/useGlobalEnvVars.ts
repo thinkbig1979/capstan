@@ -14,6 +14,7 @@ import {
 import { useNextRowId } from '@/components/stack/env-editor/useRowId'
 import { isSensitiveKey } from '@/components/stack/env-editor/sensitiveKey'
 import { useEnvLockedNow } from '@/hooks/useEnvLockedNow'
+import { searchable } from '@/components/stack/env-editor/envSearch'
 import type { EditableField, EnvRow, EnvVar, IndexedEnvVar } from './types'
 
 /** The fields of a variable the locked view can hide, so an unlock can put them back. */
@@ -190,9 +191,8 @@ export function useGlobalEnvVars(
   // by: a match would tell a locked user what it contains (agent-os-sopw, f3am).
   const searchFields = useMemo(
     () => [
-      (e: IndexedEnvVar) => (e.keyHidden ? '' : e.key),
-      (e: IndexedEnvVar) =>
-        (e.sensitive === true || isSensitiveKey(e.key)) && !visible[e._rowId] ? '' : e.value,
+      (e: IndexedEnvVar) => searchable(e.key, e.keyHidden),
+      (e: IndexedEnvVar) => searchable(e.value, (e.sensitive === true || isSensitiveKey(e.key)) && !visible[e._rowId]),
     ],
     [visible],
   )
