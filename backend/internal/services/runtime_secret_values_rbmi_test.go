@@ -42,6 +42,17 @@ func (f *rtSecretsFake) ContainerList(ctx context.Context, opts container.ListOp
 	if !opts.All {
 		return nil, errors.New("fake: the lookup must list stopped containers too")
 	}
+	// As the daemon does: a oneoff=False label filter leaves out
+	// `docker compose run` containers.
+	if opts.Filters.ExactMatch("label", "com.docker.compose.oneoff=False") {
+		var kept []container.Summary
+		for _, c := range f.list {
+			if c.Labels["com.docker.compose.oneoff"] != "True" {
+				kept = append(kept, c)
+			}
+		}
+		return kept, f.listErr
+	}
 	return f.list, f.listErr
 }
 
@@ -244,4 +255,26 @@ func TestMaskedSpans_HidesWhatTheMaskerHides(t *testing.T) {
 		require.Equal(t, []string{"aa***b88qq", "aa", "b88qq"}, maskedSpans("aa***b88qq", "***"))
 		require.Nil(t, maskedSpans("same99qq", "same99qq"), "nothing masked, nothing returned")
 	})
+}
+
+// A `docker compose run` one-off of the stack prints into the same logs and
+// holds the same kind of secrets, so its values are masked too: the lookup
+// keeps one-offs (fail closed; orch-dm-62, against the agent-os-febs rule
+// that stack-scoped lists leave them out).
+func TestRuntimeSecretValues_KeepsOneOffContainers(t *testing.T) {
+	oneoff := map[string]string{"com.docker.compose.project": "rtoneoff", "com.docker.compose.oneoff": "True"}
+	fake := &rtSecretsFake{
+		list: []container.Summary{
+			{ID: "svc", Created: 1, Labels: map[string]string{"com.docker.compose.project": "rtoneoff", "com.docker.compose.oneoff": "False"}},
+			{ID: "run", Created: 1, Labels: oneoff},
+		},
+		inspects: map[string]container.InspectResponse{
+			"svc": rtInspect([]string{"API_TOKEN=serviceTok71qq"}, nil, nil, nil),
+			"run": rtInspect([]string{"API_TOKEN=oneOffTok72qq"}, nil, nil, nil),
+		},
+	}
+	got, err := (&DockerService{updateClient: fake}).RuntimeSecretValues(context.Background(), models.Stack{ProjectName: "rtoneoff"})
+	require.NoError(t, err)
+	require.Contains(t, got, "serviceTok71qq", "CONTROL: the service container is read")
+	require.Contains(t, got, "oneOffTok72qq", "a one-off container's secret is missing from the runtime list")
 }
