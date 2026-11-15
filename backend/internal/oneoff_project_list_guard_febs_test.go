@@ -26,12 +26,20 @@ var countingListCallers = map[string]string{
 	"handlers/monitoring.go|getStackContainers":       "PENDING follow-up (agent-os-febs report): must move to GetServiceContainerList, a one-off is not in the stack",
 }
 
+// keepingProjectLists are the functions allowed to build a compose project's
+// container list WITH its one-offs, with the reason. An entry that no longer
+// holds a project filter fails as stale.
+var keepingProjectLists = map[string]string{
+	"services/runtime_secret_values.go|RuntimeSecretValues": "masks with what every container of the project holds: a `docker compose run` one-off's env and argv secrets are masked too, which only masks more (fail closed, agent-os-rbmi)",
+}
+
 // TestProjectContainerListsLeaveOneOffsOut_febs keeps one-offs out of every
 // stack-scoped container list. Two arms:
 //
 //   - PRODUCER: a function holding a "com.docker.compose.project=" filter
 //     literal also holds "com.docker.compose.oneoff=False" or calls
-//     isOneOffContainer, so the list it builds can leave one-offs out.
+//     isOneOffContainer, so the list it builds can leave one-offs out, or
+//     is on keepingProjectLists.
 //   - CONSUMER: a call to GetContainerList or GetContainerListCtx, which keep
 //     one-offs, sits only in a function on countingListCallers.
 //
@@ -45,6 +53,7 @@ func TestProjectContainerListsLeaveOneOffsOut_febs(t *testing.T) {
 	var offenders []string
 	producers := 0
 	seenCallers := map[string]bool{}
+	seenKeeping := map[string]bool{}
 
 	err := fs.WalkDir(internalSources, ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -101,7 +110,9 @@ func TestProjectContainerListsLeaveOneOffsOut_febs(t *testing.T) {
 			})
 			if filterAt != token.NoPos {
 				producers++
-				if !excludes {
+				if _, keeps := keepingProjectLists[key]; keeps {
+					seenKeeping[key] = true
+				} else if !excludes {
 					offenders = append(offenders, fset.Position(filterAt).String()+" in "+fn.Name.Name+" lists a compose project's containers with no one-off exclusion (oneoff=False filter or isOneOffContainer)")
 				}
 			}
@@ -127,6 +138,11 @@ func TestProjectContainerListsLeaveOneOffsOut_febs(t *testing.T) {
 	sort.Strings(stale)
 	for _, k := range stale {
 		t.Errorf("countingListCallers entry %q matches no call any more: remove it", k)
+	}
+	for k := range keepingProjectLists {
+		if !seenKeeping[k] {
+			t.Errorf("keepingProjectLists entry %q holds no project filter any more: remove it", k)
+		}
 	}
 	for _, o := range offenders {
 		t.Errorf("%s (agent-os-febs)", o)

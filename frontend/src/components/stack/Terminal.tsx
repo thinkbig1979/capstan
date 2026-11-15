@@ -1,14 +1,18 @@
+import { useState } from 'react'
 import { Button } from '@/components/ui/button'
+import { EnvUnlockDialog } from '@/components/EnvUnlockDialog'
 import { TerminalToolbar } from '@/components/stack/TerminalToolbar'
 import { TerminalSearchBar } from '@/components/stack/TerminalSearchBar'
 import { EmptyState } from '@/components/EmptyState'
-import { TerminalSquare } from 'lucide-react'
+import { Lock, TerminalSquare } from 'lucide-react'
 import { useTerminalSession } from './terminal/useTerminalSession'
 import { MAX_FONT_SIZE, MIN_FONT_SIZE } from './terminal/constants'
 import type { TerminalProps } from './terminal/types'
 
 export function TerminalComponent({ stack, initialContainer }: TerminalProps) {
+  const [unlockOpen, setUnlockOpen] = useState(false)
   const {
+    locked,
     selectedContainer,
     isConnected,
     isConnecting,
@@ -65,6 +69,18 @@ export function TerminalComponent({ stack, initialContainer }: TerminalProps) {
       {showSearch && isConnected && (
         <TerminalSearchBar searchAddon={searchAddonInstance} onClose={handleCloseSearch} />
       )}
+      {hasRunningContainers && locked && (
+        <div className="flex items-center justify-between gap-4 rounded-lg border bg-muted/50 p-4 text-sm">
+          <div className="flex items-center gap-2">
+            <Lock className="h-4 w-4 text-muted-foreground" />
+            <span>A shell shows the container's environment variables. Re-enter your password to open a terminal.</span>
+          </div>
+          <Button size="sm" onClick={() => setUnlockOpen(true)}>
+            Unlock
+          </Button>
+        </div>
+      )}
+      {unlockOpen && <EnvUnlockDialog open={unlockOpen} onOpenChange={setUnlockOpen} />}
       {!hasRunningContainers && (
         <EmptyState
           icon={<TerminalSquare className="h-12 w-12 text-muted-foreground" />}

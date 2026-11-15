@@ -223,34 +223,46 @@ func (m *lineMasker) yamlPass(text string) {
 }
 
 func (m *lineMasker) walk(n *yaml.Node) {
+	walkSensitiveYAML(n, m.maskNode, func(c *yaml.Node, _ string) { m.maskItemAfterEquals(c) })
+}
+
+// walkSensitiveYAML is the YAML pass's rule for what is a secret, kept in one
+// place for its two users: MaskSecrets masks what it finds, and the stack's
+// secret list collects it (composeYAMLSecretValues), so a value the locked
+// compose view hides is hidden wherever the list masks by value
+// (agent-os-rbmi). onValue gets the value v of sensitive key k, or the
+// argument after a sensitive long flag; onItem gets a `KEY=value` sequence
+// item c whose KEY is sensitive, with its value val (the text after the first
+// "="), which is not a reference.
+func walkSensitiveYAML(n *yaml.Node, onValue func(v, k *yaml.Node), onItem func(c *yaml.Node, val string)) {
 	switch n.Kind {
 	case yaml.DocumentNode:
 		for _, c := range n.Content {
-			m.walk(c)
+			walkSensitiveYAML(c, onValue, onItem)
 		}
 	case yaml.MappingNode:
 		for i := 0; i+1 < len(n.Content); i += 2 {
 			k, v := n.Content[i], n.Content[i+1]
 			if IsSensitiveEnvKey(k.Value) {
-				m.maskNode(v, k)
+				onValue(v, k)
 			} else {
-				m.walk(v)
+				walkSensitiveYAML(v, onValue, onItem)
 			}
 		}
 	case yaml.SequenceNode:
 		for i, c := range n.Content {
 			if c.Kind == yaml.ScalarNode {
 				if key, val, ok := strings.Cut(c.Value, "="); ok && IsSensitiveEnvVar(strings.TrimSpace(key), val) && !isSecretReference(val) {
-					m.maskItemAfterEquals(c)
+					onItem(c, val)
 				}
 				// An exec-form argv: "--password", "x" (sec D5).
 				if isSensitiveLongFlag(c.Value) && i+1 < len(n.Content) && n.Content[i+1].Kind == yaml.ScalarNode &&
 					!strings.HasPrefix(n.Content[i+1].Value, "-") {
-					m.maskNode(n.Content[i+1], c)
+					onValue(n.Content[i+1], c)
 				}
 				continue
 			}
-			m.walk(c)
+			walkSensitiveYAML(c, onValue, onItem)
 		}
 	}
 }

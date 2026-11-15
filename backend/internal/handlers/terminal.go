@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -61,6 +62,14 @@ type ResizeMessage struct {
 	Rows uint16 `json:"rows"`
 }
 
+// terminalUnlockMessage renews the env unlock an open terminal runs under: a
+// tab that re-entered its password sends its new token, so the shell outlives
+// the token it was opened with (agent-os-rbmi).
+type terminalUnlockMessage struct {
+	Type  string `json:"type"`
+	Token string `json:"token"`
+}
+
 func NewTerminalHandler(terminal *services.TerminalService, docker ContainerLister, db *database.DB, cm *ConnectionManager, actions *services.ActionLogger) *TerminalHandler {
 	return &TerminalHandler{
 		terminal: terminal,
@@ -79,6 +88,20 @@ func (h *TerminalHandler) handleTerminalWS(jwtSecret string, authDisabled bool) 
 	return func(c *gin.Context) {
 		stackID := c.Param("id")
 		containerName := c.Param("container")
+
+		// A shell in a container reads every env value it started with
+		// (`env`), so a session that has not unlocked env values gets no
+		// terminal. Refused before the upgrade: no socket, no shell
+		// (agent-os-rbmi).
+		if !envUnlocked(c) {
+			c.JSON(http.StatusForbidden, models.NewAppError(
+				http.StatusForbidden,
+				models.ErrForbidden,
+				"Re-enter your password to open a terminal",
+			))
+			return
+		}
+		watch := newUnlockWatch(c)
 
 		// After authentication, so the cap keys on a real user ID rather than an
 		// unauthenticated placeholder. Terminals get their own manager with a
@@ -101,6 +124,12 @@ func (h *TerminalHandler) handleTerminalWS(jwtSecret string, authDisabled bool) 
 		}
 		// release() closes the connection and deregisters it, in that order.
 		defer release()
+
+		// From the upgrade on, the unlock is re-checked: a token that expires
+		// or is revoked closes the terminal (safe-defaults rule 15).
+		watchCtx, stopWatch := context.WithCancel(context.Background())
+		defer stopWatch()
+		go closeWhenLocked(watchCtx, conn, watch)
 
 		// Split per agent-os-7lg1 (the same err/nil collapse at 22 other
 		// db.GetStack sites), WS-shaped: `if err != nil || stack == nil` used
@@ -177,7 +206,7 @@ func (h *TerminalHandler) handleTerminalWS(jwtSecret string, authDisabled bool) 
 		readDone := make(chan struct{})
 		writeDone := make(chan struct{})
 
-		go h.readFromWebSocket(conn, session, readDone, done)
+		go h.readFromWebSocket(conn, session, watch, readDone, done)
 		go h.writeToWebSocket(conn, session, writeDone, done)
 		go h.waitForProcessExit(session, conn, done)
 
@@ -248,7 +277,7 @@ func (h *TerminalHandler) assertContainerInStack(c *gin.Context, conn *Connectio
 	return deny("container_not_in_stack")
 }
 
-func (h *TerminalHandler) readFromWebSocket(conn *Connection, session *services.TerminalSession, done chan struct{}, stop chan struct{}) {
+func (h *TerminalHandler) readFromWebSocket(conn *Connection, session *services.TerminalSession, watch *unlockWatch, done chan struct{}, stop chan struct{}) {
 	defer close(done)
 
 	for {
@@ -278,6 +307,15 @@ func (h *TerminalHandler) readFromWebSocket(conn *Connection, session *services.
 					return
 				}
 			case websocket.TextMessage:
+				var renew terminalUnlockMessage
+				if err := json.Unmarshal(data, &renew); err == nil && renew.Type == "unlock" {
+					// The token is never logged; a rejected one changes
+					// nothing and the re-check closes on schedule.
+					if !watch.renew(renew.Token) {
+						slog.Debug("Terminal unlock renewal rejected", "session_id", session.ID)
+					}
+					continue
+				}
 				var resize ResizeMessage
 				if err := json.Unmarshal(data, &resize); err == nil && resize.Type == "resize" {
 					if err := h.terminal.ResizeSession(session.ID, resize.Cols, resize.Rows); err != nil {
@@ -333,5 +371,27 @@ func (h *TerminalHandler) waitForProcessExit(session *services.TerminalSession, 
 		}
 		slog.Info("Terminal process exited", "session_id", session.ID)
 		close(stop)
+	}
+}
+
+// closeWhenLocked closes conn with CloseCodeUnlockRequired once watch reads
+// locked, checking every unlockRecheckInterval until ctx ends. The close goes
+// through safeWriteCloseMessage (WriteControl), which is safe beside the
+// PTY writer; closing the socket then ends the read and write loops.
+func closeWhenLocked(ctx context.Context, conn *Connection, watch *unlockWatch) {
+	ticker := time.NewTicker(unlockRecheckInterval())
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if !watch.unlocked() {
+				slog.Info("Terminal closed: env unlock ended", "user_id", conn.UserID, "connection_id", conn.ID)
+				safeWriteCloseMessage(conn, CloseCodeUnlockRequired, "Unlock required")
+				conn.Conn.Close()
+				return
+			}
+		}
 	}
 }

@@ -515,16 +515,8 @@ func (s *DockerService) ComposeSecretValues(stack models.Stack) ([]string, error
 // the locked views mask these values wherever they appear verbatim
 // (agent-os-w6wx). globalPath "" reads no global.env.
 func StackSecretValues(stack models.Stack, globalPath string) []string {
-	seen := map[string]bool{}
-	var secrets []string
-	add := func(v string) {
-		for _, s := range append([]string{v}, secretLines(v)...) {
-			if len(s) >= composeSecretMinLen && !seen[s] {
-				seen[s] = true
-				secrets = append(secrets, s)
-			}
-		}
-	}
+	var set secretSet
+	add := set.add
 
 	dotEnv, envFile := stackEnvPaths(stack)
 	chains := supersetEnvFileChains(globalPath, dotEnv, envFile)
@@ -545,6 +537,35 @@ func StackSecretValues(stack models.Stack, globalPath string) []string {
 			for _, v := range sensitiveEnvValues(string(data)) {
 				add(v)
 			}
+		}
+	}
+
+	// What the compose files write under a sensitive name, and the env files
+	// their services name, as the locked compose view hides them
+	// (agent-os-rbmi review F1). The env files join the per-file pass below.
+	inline, serviceFiles := composeSecretSources(stack)
+	for _, v := range inline {
+		add(v)
+	}
+	for _, f := range serviceFiles {
+		p := f.path
+		if read[p] {
+			continue
+		}
+		read[p] = true
+		data, ok := readServiceEnvFile(stack, p)
+		if !ok {
+			continue
+		}
+		if f.secret {
+			// A secrets: file: holds one raw value, no KEY=value lines; the
+			// container reads it trimmed of its final newline (round-2
+			// review F6).
+			add(strings.TrimSpace(string(data)))
+		}
+		files = append(files, p)
+		for _, v := range sensitiveEnvValues(string(data)) {
+			add(v)
 		}
 	}
 
@@ -584,8 +605,33 @@ func StackSecretValues(stack models.Stack, globalPath string) []string {
 		}
 	}
 
-	sort.Slice(secrets, func(i, j int) bool { return len(secrets[i]) > len(secrets[j]) })
-	return secrets
+	return set.sorted()
+}
+
+// secretSet is the stack's secret list as it is built: each value, and each
+// line of a multi-line one, at least composeSecretMinLen long, once. Every
+// source of the list goes through add, so none can bring a shorter needle.
+type secretSet struct {
+	seen   map[string]bool
+	values []string
+}
+
+func (set *secretSet) add(v string) {
+	if set.seen == nil {
+		set.seen = map[string]bool{}
+	}
+	for _, s := range append([]string{v}, secretLines(v)...) {
+		if len(s) >= composeSecretMinLen && !set.seen[s] {
+			set.seen[s] = true
+			set.values = append(set.values, s)
+		}
+	}
+}
+
+// sorted is the list longest first.
+func (set *secretSet) sorted() []string {
+	sort.Slice(set.values, func(i, j int) bool { return len(set.values[i]) > len(set.values[j]) })
+	return set.values
 }
 
 // sensitiveEnvValues returns the values of sensitive keys in a dotenv file.
