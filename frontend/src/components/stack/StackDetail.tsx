@@ -70,25 +70,28 @@ function OverviewTabContent({
 
   return (
     <div className="grid items-start gap-4 min-[980px]:grid-cols-[minmax(0,1fr)_280px]">
-      <div className="min-w-0 overflow-hidden rounded-lg border bg-card">
-        <div className="border-b px-4 py-2.5 text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">
-          Services
+      <div className="flex min-w-0 flex-col gap-4">
+        <div className="min-w-0 overflow-hidden rounded-lg border bg-card">
+          <div className="border-b px-4 py-2.5 text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">
+            Services
+          </div>
+          <ContainerList
+            containers={stack.containers || []}
+            stackId={stack.id}
+            statusStale={stack.statusStale === true}
+            latestMetrics={latestMetrics}
+            metricNames={metricContainers}
+            onShowLogs={(name) => onTabChange(`logs?container=${encodeURIComponent(name)}`)}
+            onOpenShell={(containerId) => onTabChange(`terminal?container=${encodeURIComponent(containerId)}`)}
+          />
         </div>
-        <ContainerList
-          containers={stack.containers || []}
-          stackId={stack.id}
-          statusStale={stack.statusStale === true}
-          latestMetrics={latestMetrics}
-          metricNames={metricContainers}
-          onShowLogs={(name) => onTabChange(`logs?container=${encodeURIComponent(name)}`)}
-          onOpenShell={(containerId) => onTabChange(`terminal?container=${encodeURIComponent(containerId)}`)}
-        />
-        {/* agent-os-dn1z: `docker compose run` containers, listed apart and not
-            counted in the stack status (the server keeps them out of
-            stack.containers). */}
+        {/* agent-os-dn1z: `docker compose run` containers, in their own card
+            and not counted in the stack status (the server keeps them out of
+            stack.containers). No Logs or Shell action: compose logs skips run
+            containers, and the terminal picks from stack.containers. */}
         {!!stack.oneOffContainers?.length && (
-          <>
-            <div className="border-y px-4 py-2.5">
+          <div className="min-w-0 overflow-hidden rounded-lg border bg-card">
+            <div className="border-b px-4 py-2.5">
               <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">
                 One-off containers
               </div>
@@ -102,10 +105,8 @@ function OverviewTabContent({
               statusStale={stack.statusStale === true}
               latestMetrics={latestMetrics}
               metricNames={metricContainers}
-              onShowLogs={(name) => onTabChange(`logs?container=${encodeURIComponent(name)}`)}
-              onOpenShell={(containerId) => onTabChange(`terminal?container=${encodeURIComponent(containerId)}`)}
             />
-          </>
+          </div>
         )}
       </div>
 

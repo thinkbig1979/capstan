@@ -56,8 +56,8 @@ vi.mock('../ContainerList', () => ({
     onOpenShell?: (id: string) => void
   }) => (
     <div data-testid="container-list">
-      <button onClick={() => props.onShowLogs?.('web')}>row-logs</button>
-      <button onClick={() => props.onOpenShell?.('c1')}>row-shell</button>
+      {props.onShowLogs && <button onClick={() => props.onShowLogs?.('web')}>row-logs</button>}
+      {props.onOpenShell && <button onClick={() => props.onOpenShell?.('c1')}>row-shell</button>}
     </div>
   ),
 }))
@@ -462,6 +462,35 @@ describe('StackDetail — one-off containers', () => {
     expect(await screen.findByText('One-off containers')).toBeInTheDocument()
     expect(screen.getByText('Started with docker compose run. Not counted in the stack status.')).toBeInTheDocument()
     expect(screen.getAllByTestId('container-list')).toHaveLength(2)
+  })
+
+  // Review F6: Edwin approved "a second card under Services", so the one-off
+  // block is its own card, not a section of the Services card.
+  it('puts the one-offs in their own card, not inside the Services card', async () => {
+    renderDetail({ stack: stack({ oneOffContainers: [oneOff] as Stack['containers'] }) })
+
+    const oneOffHeader = await screen.findByText('One-off containers')
+    const servicesHeader = screen.getAllByText('Services')[0]
+    const servicesCard = servicesHeader.closest('.rounded-lg')
+    const oneOffCard = oneOffHeader.closest('.rounded-lg')
+    expect(servicesCard).not.toBeNull()
+    expect(oneOffCard).not.toBeNull()
+    expect(oneOffCard).not.toBe(servicesCard)
+    expect(servicesCard!.contains(oneOffHeader)).toBe(false)
+  })
+
+  // Review F2: compose logs skips run containers, so Logs would open an empty
+  // view; the terminal picker reads stack.containers, which has no one-offs,
+  // so Shell is hidden too.
+  it('offers no Logs or Shell action on one-off rows', async () => {
+    renderDetail({ stack: stack({ oneOffContainers: [oneOff] as Stack['containers'] }) })
+
+    const lists = await screen.findAllByTestId('container-list')
+    expect(lists).toHaveLength(2)
+    expect(within(lists[0]).getByText('row-logs')).toBeInTheDocument()
+    expect(within(lists[0]).getByText('row-shell')).toBeInTheDocument()
+    expect(within(lists[1]).queryByText('row-logs')).not.toBeInTheDocument()
+    expect(within(lists[1]).queryByText('row-shell')).not.toBeInTheDocument()
   })
 
   it('shows no One-off card when there are none', async () => {
