@@ -129,6 +129,14 @@ linters:
         - pattern: '^volume\.UsageData\.(Size|RefCount)$'
           pkg: '^github\.com/docker/docker/api/types/volume$'
           msg: 'read a volume''s UsageData through volumeUsageOf (services/docker_resources.go), so a -1 is unknown, not a value (agent-os-m84q)'
+        # agent-os-2geb: a stack's compose env files are read through
+        # resolveComposeEnv (services/compose_env.go), which picks the files and
+        # the seed env for each question. A direct GetEnvFromFile was a third
+        # resolver that chose its own (scanner.go stackDotEnv) and could
+        # disagree with compose. `pkg` pins the match to compose-go's dotenv.
+        - pattern: '^dotenv\.GetEnvFromFile$'
+          pkg: '^github\.com/compose-spec/compose-go/v2/dotenv$'
+          msg: 'resolve compose env files through resolveComposeEnv (services/compose_env.go), not GetEnvFromFile directly (agent-os-2geb)'
       analyze-types: true
   enable:
     - errcheck
@@ -208,6 +216,13 @@ linters:
       - path: 'internal/handlers/atomic_write\.go'
         linters: [forbidigo]
         text: 'writeFileAtomic'
+      # compose_env.go is resolveComposeEnv, the one GetEnvFromFile caller
+      # (agent-os-2geb). redact_compose.go's per-file resolve (agent-os-0c9k)
+      # is excluded only until PR #753, which edits that file, has merged; a
+      # follow-up bead folds it into resolveComposeEnv and drops this entry.
+      - path: 'internal/services/(compose_env|redact_compose)\.go'
+        linters: [forbidigo]
+        text: 'resolveComposeEnv'
       # docker_resources.go defines volumeUsageOf, the one raw reader.
       - path: 'internal/services/docker_resources\.go'
         linters: [forbidigo]
