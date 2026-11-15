@@ -265,7 +265,11 @@ func (m *lineMasker) yamlPass(text string) {
 }
 
 func (m *lineMasker) walk(n *yaml.Node) {
-	walkSensitiveYAML(n, m.maskNode, func(c *yaml.Node, _ string) { m.maskItemAfterEquals(c) })
+	walkSensitiveYAML(n, m.maskNode, func(c *yaml.Node, val string) {
+		if !isSecretReference(val) {
+			m.maskItemAfterEquals(c)
+		}
+	})
 }
 
 // walkSensitiveYAML is the YAML pass's rule for what is a secret, kept in one
@@ -275,7 +279,7 @@ func (m *lineMasker) walk(n *yaml.Node) {
 // (agent-os-rbmi). onValue gets the value v of sensitive key k, or the
 // argument after a sensitive long flag; onItem gets a `KEY=value` sequence
 // item c whose KEY is sensitive, with its value val (the text after the first
-// "="), which is not a reference.
+// "="), a reference included: the list resolves one (agent-os-oh7q).
 func walkSensitiveYAML(n *yaml.Node, onValue func(v, k *yaml.Node), onItem func(c *yaml.Node, val string)) {
 	switch n.Kind {
 	case yaml.DocumentNode:
@@ -296,7 +300,7 @@ func walkSensitiveYAML(n *yaml.Node, onValue func(v, k *yaml.Node), onItem func(
 	case yaml.SequenceNode:
 		for i, c := range n.Content {
 			if c.Kind == yaml.ScalarNode {
-				if key, val, ok := strings.Cut(c.Value, "="); ok && IsSensitiveEnvVar(strings.TrimSpace(key), val) && !isSecretReference(val) {
+				if key, val, ok := strings.Cut(c.Value, "="); ok && IsSensitiveEnvVar(strings.TrimSpace(key), val) {
 					onItem(c, val)
 				}
 				// An exec-form argv: "--password", "x" (sec D5).

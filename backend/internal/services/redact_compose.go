@@ -653,7 +653,7 @@ func StackSecretValues(stack models.Stack, globalPath string) []string {
 	// What the compose files write under a sensitive name, and the env files
 	// their services name, as the locked compose view hides them
 	// (agent-os-rbmi review F1). The env files join the per-file pass below.
-	inline, serviceFiles := composeSecretSources(stack)
+	inline, refs, serviceFiles := composeSecretSources(stack)
 	for _, v := range inline {
 		add(v)
 	}
@@ -684,8 +684,10 @@ func StackSecretValues(stack models.Stack, globalPath string) []string {
 	// is therefore also resolved alone (agent-os-0c9k); its ${VAR} references
 	// to another file may then resolve differently, which only adds values.
 	processEnv := processComposeEnv()
+	var maps []map[string]string
 	for _, p := range files {
 		env, err := dotenv.GetEnvFromFile(processEnv, []string{p})
+		maps = append(maps, env)
 		if err != nil {
 			// The partial map is still used. err is not logged: it can quote
 			// the offending line, which can be a secret.
@@ -708,8 +710,21 @@ func StackSecretValues(stack models.Stack, globalPath string) []string {
 			"stack", stack.ProjectName)
 	}
 	for _, env := range envs {
+		maps = append(maps, env)
 		for k, v := range env {
 			if IsSensitiveEnvVar(k, v) {
+				add(v)
+			}
+		}
+	}
+
+	// A sensitive value written as a reference holds the referenced
+	// variable's value, under whatever name that is (agent-os-oh7q). It may
+	// resolve from the compose child's own environment too (processEnv), so
+	// ${HOME} under a sensitive key masks the home path: fail closed.
+	for _, name := range refs {
+		for _, env := range maps {
+			if v, ok := env[name]; ok {
 				add(v)
 			}
 		}

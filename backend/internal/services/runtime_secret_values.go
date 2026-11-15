@@ -168,7 +168,8 @@ func (s *DockerService) LockedSecretValues(ctx context.Context, stack models.Sta
 // trimmed too; and every span the masker hides in an env value (a URL
 // credential under any name, a KEY=value inside it) or in the container's
 // argv, Cmd, Entrypoint, Args and Healthcheck.Test, through MaskArgs, its
-// after-flag rule included (maskedSpans). Labels are not read.
+// after-flag rule included (maskedSpans). Config.Labels are read as Env is
+// (agent-os-oh7q): a label set from the image or an interpolated value.
 func containerSecretValues(inspect container.InspectResponse) []string {
 	var out []string
 	addSpans := func(orig, masked string) {
@@ -186,6 +187,13 @@ func containerSecretValues(inspect container.InspectResponse) []string {
 	if cfg := inspect.Config; cfg != nil {
 		for _, kv := range cfg.Env {
 			k, v, _ := strings.Cut(kv, "=")
+			if IsSensitiveEnvVar(k, v) {
+				out = append(out, v, strings.TrimSpace(v))
+			}
+			masked, _ := MaskSecrets(v, "", nil)
+			addSpans(v, masked)
+		}
+		for k, v := range cfg.Labels {
 			if IsSensitiveEnvVar(k, v) {
 				out = append(out, v, strings.TrimSpace(v))
 			}
