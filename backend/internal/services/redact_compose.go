@@ -334,6 +334,15 @@ func redactComposeOutput(s string, secrets []string) string {
 // O(len(s) + len(v)) per needle v that occurs, and one strings.Index per
 // needle that does not; it allocates nothing for an s without a needle.
 func maskNeedleUnion(s string, needles []string, mask string) (string, int) {
+	runs, found := needleUnionRuns(s, needles)
+	return writeMaskedRuns(s, runs, func(string) string { return mask }), found
+}
+
+// needleUnionRuns returns, left to right, each maximal run [start, end) of
+// overlapping occurrences of needles in s, and how many needles occur.
+// maskNeedleUnion masks them; a caller that picks the mask per run
+// (scrubRclone) writes them with writeMaskedRuns.
+func needleUnionRuns(s string, needles []string) ([][2]int, int) {
 	var ends []int // ends[p] is the furthest end of an occurrence starting at p
 	found := 0
 	for _, v := range needles {
@@ -351,11 +360,9 @@ func maskNeedleUnion(s string, needles []string, mask string) (string, int) {
 		found++
 	}
 	if found == 0 {
-		return s, 0
+		return nil, 0
 	}
-	var b strings.Builder
-	b.Grow(len(s))
-	at := 0
+	var runs [][2]int
 	for p := 0; p < len(s); p++ {
 		if ends[p] == 0 {
 			continue
@@ -364,13 +371,27 @@ func maskNeedleUnion(s string, needles []string, mask string) (string, int) {
 		for q := p + 1; q < end; q++ {
 			end = max(end, ends[q])
 		}
-		b.WriteString(s[at:p])
-		b.WriteString(mask)
-		at = end
+		runs = append(runs, [2]int{p, end})
 		p = end - 1
 	}
+	return runs, found
+}
+
+// writeMaskedRuns is s with each of runs replaced by maskFor(the run's text).
+func writeMaskedRuns(s string, runs [][2]int, maskFor func(string) string) string {
+	if len(runs) == 0 {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	at := 0
+	for _, r := range runs {
+		b.WriteString(s[at:r[0]])
+		b.WriteString(maskFor(s[r[0]:r[1]]))
+		at = r[1]
+	}
 	b.WriteString(s[at:])
-	return b.String(), found
+	return b.String()
 }
 
 // markOccurrences records in ends every occurrence of v in s from first (an
