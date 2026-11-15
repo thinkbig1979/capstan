@@ -338,6 +338,8 @@ export const settingsApi = {
       pageSize: number
       // Omitted when the server could not read them (agent-os-7y0t).
       availableActions?: string[]
+      // True while env values are locked: every entry's detail is emptied (agent-os-3ajm).
+      detailsHidden?: boolean
     }>('/settings/audit-log', { params })
     return response.data
   },

@@ -1543,6 +1543,12 @@ func (h *SettingsHandler) GetAuditLog(c *gin.Context) {
 		}
 	}
 
+	// A search matches the entries' details, which a locked session does not
+	// see (below): hit or miss would tell it what a detail holds.
+	if filter.Search != "" && refuseLocked(c, "search the audit log", lockedAuditSearchReason) {
+		return
+	}
+
 	actions, total, err := h.db.ListActionLogsFiltered(pageSize, offset, filter)
 	if err != nil {
 		handleError(c, models.NewAppErrorWithCause(
@@ -1575,6 +1581,15 @@ func (h *SettingsHandler) GetAuditLog(c *gin.Context) {
 		"total":    total,
 		"page":     page,
 		"pageSize": pageSize,
+	}
+	// A detail is free text (a commit's file names, an operation's output)
+	// that can hold a secret, so a locked session gets the rows without it
+	// (agent-os-3ajm).
+	if !envUnlocked(c) {
+		for i := range actions {
+			actions[i].Detail = ""
+		}
+		response["detailsHidden"] = true
 	}
 
 	// agent-os-7y0t. OMITTED on a fault, never []: an empty list here renders

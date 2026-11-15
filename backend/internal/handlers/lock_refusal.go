@@ -71,6 +71,9 @@ const (
 	// lockedBlankedReason: a locked session was handed the env values blanked,
 	// so a save from that state would write the blanks (agent-os-d1ue).
 	lockedBlankedReason = "while locked, the values you see are blanked, so saving would overwrite every secret with them"
+	// lockedAuditSearchReason: an audit-log search matches the entries'
+	// details, hidden while locked (agent-os-3ajm).
+	lockedAuditSearchReason = "the search reads the entries' details, which are hidden while locked"
 	// lockedGitCredentialReason: the request changes the credential git uses
 	// to reach the remote (agent-os-mu4z).
 	lockedGitCredentialReason = "pushes and pulls use them"
