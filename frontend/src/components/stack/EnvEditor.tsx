@@ -293,7 +293,9 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
       // The raw text the user never touched follows the file, as the baseline
       // does; otherwise rawContent !== loadedEnv.raw would read as a raw edit.
       if (savedRaw !== undefined && rawContent === loadedEnv.raw) setRawContent(savedRaw)
-      setBlindGuard(null)
+      // Only a table save writes the rows, and it is refused while a blind edit
+      // is held. A raw save leaves them as they are, blind edit and all.
+      if (sent?.entries) setBlindGuard(null)
       setLoadedEnv((prev) => ({
         rows: sent?.entries ?? prev.rows,
         raw: savedRaw ?? prev.raw,
@@ -329,12 +331,17 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
     : blindGuard && holdsBlindEdit(entries, blindGuard.ids, blindGuard.aligned)
       ? 'blind'
       : null
+  // A raw save never reads the table rows, so a blind table edit cannot reach
+  // it (agent-os-2vyw). An unlock that could not be lined up refilled nothing,
+  // the raw text included (it is still the locked view's empty one), so that
+  // refusal holds for both.
+  const rawRefusal = refusal === 'unaligned' ? refusal : null
   // Refused in the handlers too, not only by the disabled buttons.
   const saveTable = () => {
     if (!refusal) handleSaveTable()
   }
   const saveRaw = () => {
-    if (!refusal) handleSaveRaw()
+    if (!rawRefusal) handleSaveRaw()
   }
   // A blind edit can be refused with nothing held back (the unlock lined up), so
   // Reload loads the payload on screen when no newer one is pending.
@@ -456,7 +463,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
           onSaveRaw={saveRaw}
           saving={saveMutation.isPending}
           hasUnsavedChanges={hasUnsavedChanges}
-          saveRefused={refusal !== null}
+          saveRefused={rawRefusal !== null}
         />
       )}
     </div>
