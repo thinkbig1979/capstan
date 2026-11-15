@@ -89,7 +89,7 @@ func MaskSecrets(text, filePath string, secrets []string) (string, int) {
 	// Every needle is found on the line as the passes above left it and the
 	// overlapping ones are masked as one (agent-os-buwq). The count is one
 	// per needle a line holds.
-	needles := secretNeedles(secrets)
+	needles := maskedNeedleForms(secretNeedles(secrets))
 	for i, line := range m.lines {
 		if out, n := maskNeedleUnion(line, needles, secretMask); n > 0 {
 			m.lines[i] = out
@@ -126,6 +126,31 @@ func secretNeedles(secrets []string) []string {
 		out = append(out, secretLines(v)...)
 	}
 	sort.SliceStable(out, func(i, j int) bool { return len(out[i]) > len(out[j]) })
+	return out
+}
+
+// maskedNeedleForms is needles plus each one as the line and URL passes
+// leave it on a line of its own. Those passes run before the needles are
+// looked for, so a value they mask a part of (a nested URL credential,
+// a KEY=value inside it) no longer matches as written, and the rest of it
+// showed (found by the agent-os-f3a5 superset corpus). Adding forms only
+// ever masks more; a form the passes leave different in context than alone
+// simply does not match.
+func maskedNeedleForms(needles []string) []string {
+	out := withURLRedactedForms(needles)
+	for _, v := range needles {
+		m := &lineMasker{lines: []string{v}, masked: []bool{false}}
+		m.linePass()
+		r := RedactURLUserinfoInText(m.lines[0])
+		// A form that is only placeholders would match every mask.
+		if r == v || strings.Count(r, secretMask)*len(secretMask) == len(r) {
+			continue
+		}
+		if len(out) == len(needles) {
+			out = append([]string(nil), out...)
+		}
+		out = append(out, r)
+	}
 	return out
 }
 

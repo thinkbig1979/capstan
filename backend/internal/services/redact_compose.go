@@ -321,8 +321,31 @@ func redactComposeOutput(s string, secrets []string) string {
 	if s == "" {
 		return s
 	}
-	s, _ = maskNeedleUnion(RedactURLUserinfoInText(s), secrets, userinfoPlaceholder)
+	s, _ = maskNeedleUnion(RedactURLUserinfoInText(s), withURLRedactedForms(secrets), userinfoPlaceholder)
 	return s
+}
+
+// withURLRedactedForms is needles plus, for each one RedactURLUserinfoInText
+// changes, that changed form. The needles are looked for in text the URL pass
+// has already starred, where a value holding a URL credential no longer
+// matches as written: `DB_PASSWORD="pw sftp:u:x@h:/p"` would show "pw" once
+// its sftp token is starred (found by the agent-os-caeh/vq3i superset corpus,
+// which starred more tokens than before). needles is not changed.
+func withURLRedactedForms(needles []string) []string {
+	out := needles
+	for i, v := range needles {
+		// Every credential the URL pass stars sits before an "@" or "%40".
+		if !strings.ContainsAny(v, "@%") {
+			continue
+		}
+		if r := RedactURLUserinfoInText(v); r != v {
+			if len(out) == len(needles) {
+				out = append(make([]string, 0, len(needles)+len(needles)-i), needles...)
+			}
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // maskNeedleUnion replaces with mask each run of overlapping occurrences of
