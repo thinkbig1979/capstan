@@ -6,7 +6,9 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"maps"
 	"math/rand"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -74,11 +76,15 @@ func TestEnvGuards_1nqr_SerializeEnvFileOnlyFromSafeEntryPoints(t *testing.T) {
 	assert.Empty(t, violations, "serializeEnvFile used outside its safe entry points; write env text with serializeEnvFileOver (stack) or mergeGlobalEnv (global)")
 }
 
-// agent-os-1nqr, check 2: every variable compose-go reads from a .env file as
-// sensitive is absent from the locked stack view and the locked global view,
-// over a seeded generated corpus of the line shapes the parser handles.
-func TestEnvGuards_1nqr_ComposeSensitiveValuesHiddenWhileLocked(t *testing.T) {
-	rng := rand.New(rand.NewSource(1)) //nolint:gosec // a seeded corpus, not a secret
+// genEnvCorpus is a seeded corpus of .env files over the line shapes the
+// parser handles: KEY=v, quoted both ways, export, KEY: v, an inline comment,
+// indentation, a second statement after a closing quote, a quoted value
+// across two lines (also with a statement after its close, review F3), a
+// commented-out assignment and a bare KEY; LF or CRLF, and a third of the
+// files with no final line end (the qdnb shape, review F3). Values are
+// unique, so a value found in a body is that variable's.
+func genEnvCorpus(n int, seed int64) []string {
+	rng := rand.New(rand.NewSource(seed)) //nolint:gosec // a seeded corpus, not a secret
 	keys := []string{"DB_PASSWORD", "API_TOKEN", "SECRET", "AWS_SECRET_ACCESS_KEY", "TZ", "PORT", "NOTES", "A", "DATABASE_URL"}
 	seq := 0
 	value := func() string {
@@ -95,7 +101,7 @@ func TestEnvGuards_1nqr_ComposeSensitiveValuesHiddenWhileLocked(t *testing.T) {
 	key := func() string { return keys[rng.Intn(len(keys))] }
 	line := func() string {
 		k, v := key(), value()
-		switch rng.Intn(12) {
+		switch rng.Intn(13) {
 		case 0:
 			return k + "=" + v
 		case 1:
@@ -118,20 +124,39 @@ func TestEnvGuards_1nqr_ComposeSensitiveValuesHiddenWhileLocked(t *testing.T) {
 			return k + `="` + v + "\n" + value() + `"`
 		case 10:
 			return "#" + k + "=" + v
+		case 11:
+			return k + `="` + v + "\n" + value() + `" ` + key() + "=" + value()
 		default:
 			return k
 		}
 	}
-
-	files, checked := 0, 0
-	for range 3000 {
+	files := make([]string, 0, n)
+	for range n {
 		var b strings.Builder
 		for range 1 + rng.Intn(5) {
 			b.WriteString(line())
 			b.WriteString([]string{"\n", "\r\n"}[rng.Intn(2)])
 		}
 		content := b.String()
-		vars, err := dotenv.UnmarshalWithLookup(content, func(string) (string, bool) { return "", false })
+		if rng.Intn(3) == 0 {
+			content = strings.TrimSuffix(strings.TrimSuffix(content, "\n"), "\r")
+		}
+		files = append(files, content)
+	}
+	return files
+}
+
+func composeReadsLenient(content string) (map[string]string, error) {
+	return dotenv.UnmarshalWithLookup(content, func(string) (string, bool) { return "", false })
+}
+
+// agent-os-1nqr, check 2: every variable compose-go reads from a .env file as
+// sensitive is absent from the locked stack view and the locked global view,
+// over the generated corpus.
+func TestEnvGuards_1nqr_ComposeSensitiveValuesHiddenWhileLocked(t *testing.T) {
+	files, checked := 0, 0
+	for _, content := range genEnvCorpus(3000, 1) {
+		vars, err := composeReadsLenient(content)
 		if err != nil {
 			continue // a file compose rejects defines nothing
 		}
@@ -171,4 +196,109 @@ func TestEnvGuards_1nqr_ComposeSensitiveValuesHiddenWhileLocked(t *testing.T) {
 	require.Greater(t, files, 1000)
 	require.Greater(t, checked, 1000)
 	t.Logf("files=%d sensitive values checked=%d", files, checked)
+}
+
+// editValues are typed values each needing a different quoting (or none) for
+// compose to read them as typed, and some no quoting keeps.
+var editValues = []string{"plain%d", "a # b%d", "'x%d", "p$y%d", "it's%d", `a"b%d`, `a\'b%d`, `'q"%d`, "  sp%d  "}
+
+// agent-os-1nqr review F3, write side: after a save that edits every
+// editable row, compose-go reads each edited variable as the typed text and
+// every other variable as before, or the save is refused. Stack table
+// (serializeEnvFileOver) and global page (mergeGlobalEnv, unquoted values).
+// Only files where compose and the table agree on which keys exist, each
+// once, are judged, so a key compose takes from a later duplicate or a second
+// statement cannot pass for an edit.
+func TestEnvGuards_1nqr_EditedSaveReadsBackAsTyped(t *testing.T) {
+	rng := rand.New(rand.NewSource(2)) //nolint:gosec // a seeded choice of edits
+	judged, stackSaved, globalSaved, droppedByRowText := 0, 0, 0, 0
+	droppedExample := ""
+	for n, content := range genEnvCorpus(3000, 3) {
+		before, err := composeReadsLenient(content)
+		if err != nil {
+			continue
+		}
+		rows := (&EnvHandler{}).parseEnvFile(content)
+		rowKeys := map[string]int{}
+		for _, r := range rows {
+			if r.Key != "" {
+				rowKeys[r.Key]++
+			}
+		}
+		agree := len(rowKeys) == len(before)
+		for k, c := range rowKeys {
+			if _, ok := before[k]; !ok || c != 1 {
+				agree = false
+			}
+		}
+		if !agree {
+			continue
+		}
+		// Each row's own text must define exactly its key to compose, or a
+		// key passes for one row while compose takes it from another (a
+		// second statement after a closing quote, say).
+		for _, r := range rows {
+			if r.Key == "" {
+				continue
+			}
+			own, oerr := composeReadsLenient(serializeEnvFile([]EnvEntry{r}))
+			if _, ok := own[r.Key]; oerr != nil || len(own) != 1 || !ok {
+				agree = false
+			}
+		}
+		if !agree {
+			droppedByRowText++
+			if droppedExample == "" {
+				droppedExample = content
+			}
+			continue
+		}
+		judged++
+
+		// Stack table: edit every editable row.
+		want := maps.Clone(before)
+		edited := slices.Clone(rows)
+		for i := range edited {
+			if edited[i].Comment || edited[i].Key == "" {
+				continue
+			}
+			v := fmt.Sprintf(editValues[rng.Intn(len(editValues))], n*10+i)
+			edited[i].Value = v
+			want[edited[i].Key] = v
+		}
+		if out, err := serializeEnvFileOver(content, edited); err == nil {
+			stackSaved++
+			after, cerr := composeReadsLenient(out)
+			if !assert.NoError(t, cerr, "stack save broke the file: %q -> %q", content, out) ||
+				!assert.Equal(t, want, after, "stack save: %q -> %q", content, out) {
+				return
+			}
+		}
+
+		// Global page: change every editable variable to a typed value.
+		vars := globalEnvResponseVars(content, false)
+		req := make([]EnvEntry, len(vars))
+		gwant := maps.Clone(before)
+		for i, v := range vars {
+			req[i] = EnvEntry{Key: v.Key, Value: v.Value}
+			if rows[i].Comment {
+				continue // a read-only line, whose change is refused
+			}
+			nv := fmt.Sprintf(editValues[rng.Intn(len(editValues))], n*10+i)
+			req[i].Value, gwant[v.Key] = nv, strings.TrimSpace(nv)
+		}
+		if out, err := mergeGlobalEnv(content, req); err == nil {
+			globalSaved++
+			after, cerr := composeReadsLenient(out)
+			if !assert.NoError(t, cerr, "global save broke the file: %q -> %q", content, out) ||
+				!assert.Equal(t, gwant, after, "global save: %q -> %q", content, out) {
+				return
+			}
+		}
+	}
+	// Positive side: enough files were judged and enough saves went through.
+	require.Greater(t, judged, 500)
+	require.Greater(t, stackSaved, 100)
+	require.Greater(t, globalSaved, 50)
+	t.Logf("judged=%d stack_saved=%d global_saved=%d dropped_by_row_text=%d first_dropped=%q", judged, stackSaved, globalSaved, droppedByRowText, droppedExample)
 }
