@@ -209,6 +209,9 @@ func TestPruneStaleStacks_HealthyRoot_PrunesGoneKeepsLive(t *testing.T) {
 	wbuSeedStack(t, db, root, goneDir, "root~gone:default")
 
 	service := NewScannerService(&config.Config{StacksDir: root}, db)
+	// Docker answers "no containers": a gone folder whose project still has
+	// containers is kept (agent-os-jny5), and this control is about the walk.
+	service.SetContainerLister(&fakeContainerLister{})
 	pruneErr := service.pruneStaleStacks()
 
 	dirPaths, stackIDs := wbuRowsFor(t, db)

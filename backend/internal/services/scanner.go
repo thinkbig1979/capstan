@@ -743,29 +743,44 @@ func (s *ScannerService) pruneStaleStacks() error {
 	if err != nil {
 		return err
 	}
-	for _, dir := range directories {
-		if !activeDirs[dir.Path] {
-			// The next scan re-evaluates and retries this delete, so a
-			// single failure isn't fatal to the sweep — but a delete that
-			// keeps failing drifts the DB from disk indefinitely with
-			// nothing to notice it, so surface it.
-			if delErr := s.db.DeleteDirectory(dir.Path); delErr != nil {
-				slog.Warn("Failed to delete stale directory row", "path", dir.Path, "error", delErr)
-			}
-		}
-	}
 
 	stacks, err := s.db.ListStacks()
 	if err != nil {
 		return err
 	}
 
+	// Stacks first: a gone folder whose project still has containers keeps
+	// its stack rows (agent-os-jny5, the same rule as a gone compose file),
+	// and its directory row with them, since deleting the directory row
+	// takes its stacks by cascade.
+	keptDirs := make(map[string]bool)
 	for _, stack := range stacks {
-		if !activeDirs[stack.Directory] {
-			// See the DeleteDirectory comment above: retried next scan, but
-			// a persistent failure should not go unnoticed.
-			if delErr := s.db.DeleteStack(stack.ID); delErr != nil {
-				slog.Warn("Failed to delete stale stack row", "stackID", stack.ID, "error", delErr)
+		if activeDirs[stack.Directory] {
+			continue
+		}
+		if keep := s.containersKeepRow(stack); keep != "" {
+			slog.Warn("Keeping stack whose folder is gone", "id", stack.ID, "directory", stack.Directory, "reason", keep)
+			if stErr := s.db.UpdateStackStatus(stack.ID, string(StackStatusError)); stErr != nil {
+				slog.Warn("Failed to mark stack whose folder is gone as error", "stackID", stack.ID, "error", stErr)
+			}
+			keptDirs[stack.Directory] = true
+			continue
+		}
+		// The next scan re-evaluates and retries this delete, so a single
+		// failure isn't fatal to the sweep — but a delete that keeps failing
+		// drifts the DB from disk indefinitely with nothing to notice it, so
+		// surface it.
+		if delErr := s.db.DeleteStack(stack.ID); delErr != nil {
+			slog.Warn("Failed to delete stale stack row", "stackID", stack.ID, "error", delErr)
+		}
+	}
+
+	for _, dir := range directories {
+		if !activeDirs[dir.Path] && !keptDirs[dir.Path] {
+			// See the DeleteStack comment above: retried next scan, but a
+			// persistent failure should not go unnoticed.
+			if delErr := s.db.DeleteDirectory(dir.Path); delErr != nil {
+				slog.Warn("Failed to delete stale directory row", "path", dir.Path, "error", delErr)
 			}
 		}
 	}
@@ -1738,7 +1753,7 @@ func (s *ScannerService) deleteRowsForRemovedComposeFiles(path string) {
 		if !errors.Is(statErr, fs.ErrNotExist) {
 			continue
 		}
-		if keep := s.containersKeepRow(row.ProjectName); keep != "" {
+		if keep := s.containersKeepRow(row); keep != "" {
 			// Deleting the row would hide containers Delete refuses to hide
 			// (handlers' composeDownForDelete), or ones nobody could check.
 			slog.Warn("Keeping stack whose compose file is missing", "id", row.ID, "directory", path, "file", row.ComposeFile, "reason", keep)
@@ -1771,13 +1786,33 @@ func (s *ScannerService) SetContainerLister(l projectContainerLister) {
 // under mu: bounded, and lookupTimedOut makes it one bound per pass.
 var containerLookupBound = 10 * time.Second
 
-// containersKeepRow returns why a row of project must be kept, or "" when the
-// project has no containers and the row can go. Every failure to find out
-// keeps it: no lister, a lookup error, or a lookup past containerLookupBound.
-// After a timeout the rest of the pass keeps its rows without asking. The
-// lookup runs on this goroutine with a deadline, so a hung daemon leaves
-// nothing behind once the bound passes (agent-os-tk2q).
-func (s *ScannerService) containersKeepRow(project string) string {
+// containersKeepRow returns why row, whose folder or compose file is gone,
+// must be kept, or "" when it can go: its project has no containers, or
+// another row whose compose file is on disk carries the same project, so the
+// containers stay visible through that row (a folder or file renamed under a
+// compose `name:`). Keeping the row then would only make the other row's
+// compose ops refuse the project name as shared. The project name compared is
+// the stored project_name column, written by ResolveComposeProjectName, the
+// one refuseSharedProjectName reads. Every failure to find out keeps the row:
+// the stacks table unreadable, no lister, a lookup error, or a lookup past
+// containerLookupBound. After a timeout the rest of the pass keeps its rows
+// without asking. The lookup runs on this goroutine with a deadline, so a
+// hung daemon leaves nothing behind once the bound passes (agent-os-tk2q).
+func (s *ScannerService) containersKeepRow(row models.Stack) string {
+	project := row.ProjectName
+	others, err := s.db.ListStacks()
+	if err != nil {
+		return "the other stacks could not be listed to see whether one shows the project: " + err.Error()
+	}
+	for _, other := range others {
+		if other.ID == row.ID || other.ProjectName != project {
+			continue
+		}
+		if _, statErr := os.Stat(filepath.Join(other.Directory, other.ComposeFile)); statErr == nil {
+			slog.Info("Stack row can go: another stack with its compose file on disk carries the same project", "id", row.ID, "project", project, "shownBy", other.ID)
+			return ""
+		}
+	}
 	if s.containers == nil {
 		return "no Docker access to check the project's containers"
 	}
