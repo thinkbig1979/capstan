@@ -1757,7 +1757,7 @@ func (s *ScannerService) deleteRowsForRemovedComposeFiles(path string) {
 
 // projectContainerLister is the one DockerService method the scanner needs.
 type projectContainerLister interface {
-	GetContainerList(projectName string) ([]models.Container, error)
+	GetContainerListCtx(ctx context.Context, projectName string) ([]models.Container, error)
 }
 
 // SetContainerLister installs the container lookup that lets a rescan delete a
@@ -1766,17 +1766,17 @@ func (s *ScannerService) SetContainerLister(l projectContainerLister) {
 	s.containers = l
 }
 
-// containerLookupBound caps one container lookup made while holding mu.
-// GetContainerList takes no context and the Docker client has no timeout, so
-// without it a hung daemon would block every scan and Delete's WithLock.
+// containerLookupBound caps one container lookup made while holding mu, so a
+// hung daemon cannot block every scan and Delete's WithLock. The lookup stays
+// under mu: bounded, and lookupTimedOut makes it one bound per pass.
 var containerLookupBound = 10 * time.Second
 
 // containersKeepRow returns why a row of project must be kept, or "" when the
 // project has no containers and the row can go. Every failure to find out
 // keeps it: no lister, a lookup error, or a lookup past containerLookupBound.
-// After a timeout the rest of the pass keeps its rows without asking. A timed
-// out lookup's goroutine finishes whenever the daemon answers; its send
-// cannot block (buffered, and a select).
+// After a timeout the rest of the pass keeps its rows without asking. The
+// lookup runs on this goroutine with a deadline, so a hung daemon leaves
+// nothing behind once the bound passes (agent-os-tk2q).
 func (s *ScannerService) containersKeepRow(project string) string {
 	if s.containers == nil {
 		return "no Docker access to check the project's containers"
@@ -1784,34 +1784,20 @@ func (s *ScannerService) containersKeepRow(project string) string {
 	if s.lookupTimedOut {
 		return "a container lookup earlier in this scan timed out"
 	}
-	type answer struct {
-		containers []models.Container
-		err        error
-	}
-	done := make(chan answer, 1)
-	lister := s.containers
-	go func() {
-		c, err := lister.GetContainerList(project)
-		select {
-		case done <- answer{c, err}:
-		default:
-		}
-	}()
-	timer := time.NewTimer(containerLookupBound)
-	defer timer.Stop()
-	select {
-	case a := <-done:
-		if a.err != nil {
-			return "the project's containers could not be listed: " + a.err.Error()
-		}
-		if len(a.containers) > 0 {
-			return fmt.Sprintf("project %s still has %d container(s)", project, len(a.containers))
-		}
-		return ""
-	case <-timer.C:
+	ctx, cancel := context.WithTimeout(context.Background(), containerLookupBound)
+	defer cancel()
+	containers, err := s.containers.GetContainerListCtx(ctx, project)
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		s.lookupTimedOut = true
 		return "the container lookup timed out after " + containerLookupBound.String()
 	}
+	if err != nil {
+		return "the project's containers could not be listed: " + err.Error()
+	}
+	if len(containers) > 0 {
+		return fmt.Sprintf("project %s still has %d container(s)", project, len(containers))
+	}
+	return ""
 }
 
 // composeFilePatterns are the compose file names the scanner registers a

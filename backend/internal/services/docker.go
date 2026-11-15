@@ -207,12 +207,25 @@ func (s *DockerService) Logs(stack models.Stack, tail int) (string, error) {
 	return stdout.String(), nil
 }
 
+// dockerListBound caps GetContainerList. The Docker client has no HTTP
+// timeout, so without a deadline a daemon that accepts the request and never
+// answers blocks the caller forever (agent-os-tk2q).
+var dockerListBound = 10 * time.Second
+
+// GetContainerList is GetContainerListCtx bounded by dockerListBound, for
+// callers with no operation context of their own.
 func (s *DockerService) GetContainerList(projectName string) ([]models.Container, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), dockerListBound)
+	defer cancel()
+	return s.GetContainerListCtx(ctx, projectName)
+}
+
+// GetContainerListCtx lists every container of a compose project, one-offs
+// included, honouring ctx's deadline.
+func (s *DockerService) GetContainerListCtx(ctx context.Context, projectName string) ([]models.Container, error) {
 	if s == nil {
 		return nil, ErrDockerUnavailable
 	}
-
-	ctx := context.Background()
 
 	filterArgs := filters.NewArgs()
 	filterArgs.Add("label", "com.docker.compose.project="+projectName)
