@@ -790,7 +790,9 @@ func validateEnvEntries(entries []EnvEntry) error {
 		if err := validateEnvKey(e); err != nil {
 			return fmt.Errorf("entry at index %d (key %q) %w", i, e.Key, err)
 		}
-		if err := validateEnvQuoting(e); err != nil {
+		// The value against its quote is composeSafeRow's to settle when the
+		// row is written fresh (review F1); an unchanged row is the file's text.
+		if err := validateEnvQuoteFields(e); err != nil {
 			return fmt.Errorf("entry at index %d (key %q) %w", i, e.Key, err)
 		}
 	}
@@ -860,13 +862,12 @@ func validateEnvCommentRow(e EnvEntry) error {
 	return nil
 }
 
-// validateEnvQuoting checks the quote fields a client sends back (agent-os-wcrq).
-// They are written into the file around and after the value, so unchecked they
-// could end the quotes early or add a line. Errors never carry the value.
+// validateEnvQuoting checks a row's value against its quote and its quote
+// fields (validateEnvQuoteFields): an unescaped quote inside the value, or a
+// trailing backslash, would end the quotes early or escape the closing one.
+// Errors never carry the value.
 func validateEnvQuoting(e EnvEntry) error {
-	switch e.Quote {
-	case "":
-	case "'", `"`:
+	if e.Quote == "'" || e.Quote == `"` {
 		idx, trailingEscape := closingQuote(e.Value, e.Quote[0])
 		if idx != -1 {
 			// compose reads \' and \" as the quote itself (compose-go v2
@@ -877,6 +878,17 @@ func validateEnvQuoting(e EnvEntry) error {
 		if trailingEscape {
 			return fmt.Errorf("has a value ending in a backslash, which would escape its closing quote; use the raw view")
 		}
+	}
+	return validateEnvQuoteFields(e)
+}
+
+// validateEnvQuoteFields checks the quote fields a client sends back
+// (agent-os-wcrq): the quote kind, and an inline comment that must stay one
+// "#" comment on the line. They are written into the file around and after
+// the value, so unchecked they could add a line. Errors never carry the value.
+func validateEnvQuoteFields(e EnvEntry) error {
+	switch e.Quote {
+	case "", "'", `"`:
 	default:
 		return errors.New("has an unsupported quote; use ', \" or none")
 	}
@@ -1346,22 +1358,23 @@ func serializeEnvFileOver(current string, entries []EnvEntry) (string, error) {
 }
 
 // composeSafeRow returns a row to write fresh whose line compose reads back
-// as its value (agent-os-uxfl). An unquoted value compose would read
-// differently ("a # b" as a, 'abc as a broken file, ab$cd interpolated) is
-// single-quoted, or double-quoted when it holds a "'", whichever compose-go
-// reads back exactly; ok is false when neither does. A typed value is
-// therefore literal: a ${VAR} reference is written in the Raw view. Quoted,
-// comment and blank rows are returned as they are: validateEnvQuoting checked
-// the quoted ones, whose value is the text between the quotes.
+// as its value (agent-os-uxfl): the row as sent, else single-quoted, else
+// double-quoted, the first whose line validateEnvQuoting accepts and
+// compose-go reads back exactly; ok is false when none does. That holds for
+// a row the client sent with quotes too, since the client sends an edited
+// row's quote back as it got it (review F1: PW="old" edited to pa$word was
+// written "pa$word" and read as pa). A typed value is therefore literal: a
+// ${VAR} reference is written in the Raw view. Comment and blank rows are
+// returned as they are; validateEnvCommentRow checked the comments.
 func composeSafeRow(e EnvEntry) (EnvEntry, bool) {
-	if e.Comment || e.Quote != "" || (e.Key == "" && e.Value == "") || composeReadsValue(e) {
+	if e.Comment || (e.Key == "" && e.Value == "") {
 		return e, true
 	}
-	for _, q := range []string{"'", `"`} {
-		quoted := e
-		quoted.Quote = q
-		if validateEnvQuoting(quoted) == nil && composeReadsValue(quoted) {
-			return quoted, true
+	for _, q := range []string{e.Quote, "'", `"`} {
+		candidate := e
+		candidate.Quote = q
+		if validateEnvQuoting(candidate) == nil && composeReadsValue(candidate) {
+			return candidate, true
 		}
 	}
 	return e, false
