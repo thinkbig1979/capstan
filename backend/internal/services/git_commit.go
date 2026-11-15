@@ -523,7 +523,7 @@ func (s *GitService) lockRepoStacks(top, kind string) ([]models.Stack, func(), e
 	}
 	var inRepo []models.Stack
 	for _, st := range stacks {
-		ok, err := pathutil.IsContained(top, st.Directory)
+		ok, err := stackInRepo(top, st.Directory)
 		if err != nil {
 			return nil, nil, &RepoStackPathError{Stack: st, Err: err}
 		}
@@ -686,6 +686,24 @@ func parsePorcelainV2(out, token string) ([]porcelainEntry, error) {
 		entries = append(entries, e)
 	}
 	return entries, nil
+}
+
+// stackInRepo reports whether a stack folder is a member of the repository at
+// top: it resolves inside top, or its own entry (the folder, or the link that
+// names it) lies inside top. git tracks a folder link as a link, so a pull can
+// retarget one that points outside today (agent-os-7xpm, agent-os-vysd). The
+// union over-locks rather than under-locks: a folder that IS top has its
+// parent outside, and a folder registered outside that links in reads the
+// repository's files.
+func stackInRepo(top, dir string) (bool, error) {
+	in, err := pathutil.IsContained(top, dir)
+	if err != nil {
+		return false, err
+	}
+	if in {
+		return true, nil
+	}
+	return inFolder(top, filepath.Clean(dir))
 }
 
 // inFolder reports whether abs lies inside dirPath. The PARENT is resolved,

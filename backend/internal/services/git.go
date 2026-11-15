@@ -1315,6 +1315,9 @@ type placedSibling struct {
 	err error
 	// links is what the stack read through before the pull (stackLinkDeps).
 	links linkSnapshot
+	// outside is a folder whose link lies inside the repository but resolves
+	// outside it when placed: it has no rel, only links (agent-os-vysd).
+	outside bool
 }
 
 // placeSiblings places stacks against top. It runs before the pull when it
@@ -1326,12 +1329,24 @@ func placeSiblings(top, dirPath string, stacks []models.Stack, token string) *si
 		if st.Directory == dirPath {
 			continue
 		}
-		in, err := pathutil.IsContained(top, st.Directory)
-		switch {
-		case err != nil:
+		unsure := func(err error) {
 			p.stacks = append(p.stacks, placedSibling{Stack: st, err: fmt.Errorf("could not tell whether %s is inside the repository: %w", boundedPath(redactToken(st.Directory, token)), err)})
+		}
+		in, err := pathutil.IsContained(top, st.Directory)
+		if err != nil {
+			unsure(err)
 			continue
-		case !in:
+		}
+		if !in {
+			// Not resolving inside, yet its link may be (agent-os-7xpm):
+			// placed by its links alone, so retargeting the link is seen.
+			linkIn, linkErr := stackInRepo(top, st.Directory)
+			switch {
+			case linkErr != nil:
+				unsure(linkErr)
+			case linkIn:
+				p.stacks = append(p.stacks, placedSibling{Stack: st, outside: true, links: snapshotLinks(top, st, token)})
+			}
 			continue
 		}
 		rel, ok, err := repoRel(top, st.Directory, token)
@@ -1359,7 +1374,7 @@ func (p *siblingPlacement) changed(top string, changedFiles []string, token stri
 	var failures []RedeployFailure
 	for _, st := range p.stacks {
 		var rels []string
-		if st.err == nil {
+		if st.err == nil && !st.outside {
 			rels = append(rels, st.rel)
 		}
 		after, ok, afterErr := repoRel(top, st.Directory, token)
@@ -1394,7 +1409,10 @@ func (p *siblingPlacement) changed(top string, changedFiles []string, token stri
 				reason = fmt.Sprintf("%v; %s", st.err, reason)
 			}
 			failures = append(failures, RedeployFailure{StackID: st.ID, Reason: reason})
-		case len(rels) == 0:
+		case len(rels) == 0 && st.err != nil:
+			// An outside folder with no hit is unchanged: a pull cannot
+			// change a file outside the repository, and its link is matched
+			// above.
 			failures = append(failures, RedeployFailure{StackID: st.ID, Reason: st.err.Error()})
 		}
 	}
