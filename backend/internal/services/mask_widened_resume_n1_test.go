@@ -25,3 +25,16 @@ func TestMaskSecrets_n1_WidenedMaskDoesNotSkipTheNextToken(t *testing.T) {
 		}
 	}
 }
+
+// Review round 4, P1: with the merge of overlapping spans in lineWalk.mask
+// off, a later value inside a widened span made apply slice backwards and
+// panic, and a panic in a log stream goroutine is not recovered.
+func TestMaskSecrets_n1_OverlappingSpansMergeWithoutPanic(t *testing.T) {
+	line := `;api_key=https://u:p@h/x&token=q;r ? {'a'=***},--requirepass u:p@h,api_key="qv",password=SEK1202`
+	needles := []string{"x&token=q;", "//u:p@h/x&toke"}
+	for _, path := range []string{"", ".env", "docker-compose.yml"} {
+		var out string
+		assert.NotPanics(t, func() { out, _ = MaskSecrets(line, path, needles) }, "path %q", path)
+		assert.NotContains(t, out, "SEK1202", "path %q", path)
+	}
+}
