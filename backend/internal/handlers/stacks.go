@@ -187,9 +187,17 @@ func composeUnreadable(s models.Stack) bool {
 // reconstructed container list; a container-less project is "error" when its
 // compose file is unreadable (what `docker compose ps` surfaced as "unknown") or
 // "stopped" otherwise.
+//
+// A live project whose compose file is unreadable is "error" too, with its
+// containers still listed: the scanner keeps such a row while containers run
+// (agent-os-epc5), and its containers' own "running" would hide that Capstan
+// can no longer manage the stack (agent-os-n9kr, fail closed).
 func applyLiveStatus(stack *models.Stack, statuses map[string]services.LiveStatus) {
 	if ls, ok := statuses[stack.ProjectName]; ok && stack.ProjectName != "" {
 		stack.Status = ls.Status
+		if composeUnreadable(*stack) {
+			stack.Status = string(services.StackStatusError)
+		}
 		stack.Containers = ls.Containers
 		stack.OneOffContainers = ls.OneOffs
 		return

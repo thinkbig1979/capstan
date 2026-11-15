@@ -1,9 +1,12 @@
 package handlers
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
@@ -12,7 +15,10 @@ import (
 // agent-os-dn1z part 3: a stack's one-off containers reach the stack payload
 // apart from its service containers.
 func TestApplyLiveStatus_CarriesOneOffs_Dn1z(t *testing.T) {
-	stack := &models.Stack{ProjectName: "web"}
+	// A real compose file: an unreadable one reads "error" (agent-os-n9kr).
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte("services: {}\n"), 0o600))
+	stack := &models.Stack{ProjectName: "web", Directory: dir, ComposeFile: "compose.yaml"}
 	applyLiveStatus(stack, map[string]services.LiveStatus{
 		"web": {
 			Status:     "running",
