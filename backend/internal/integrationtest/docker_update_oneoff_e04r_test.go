@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/thinkbig1979/capstan/backend/internal/truth"
 
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
@@ -63,7 +64,11 @@ func Test_UpdateContainer_Compose_e04r_LeavesOneOffRunning(t *testing.T) {
 		ID: project + ":default", Directory: dir, ComposeFile: "compose.yaml", ProjectName: project,
 	}}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	_, ar := svc.UpdateContainer(ctx, serviceID, db)
+	ar := RetryUpdateAtPull(ctx, t, func() (truth.ActionResult, bool, string) {
+		_, ar := svc.UpdateContainer(ctx, serviceID, db)
+		// The compose path's pull error carries compose's output.
+		return ar, false, ""
+	})
 	cancel()
 	require.NotEqual(t, "failed", string(ar.Outcome), "%s (%v)", ar.Reason, ar.Err)
 

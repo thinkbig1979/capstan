@@ -14,6 +14,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/thinkbig1979/capstan/backend/internal/truth"
 
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
@@ -81,8 +82,13 @@ func Test_UpdateComposeService_fjd6_OldImageFromServiceNotOneOff(t *testing.T) {
 	svc := newDockerService(t, dir)
 	stack := models.Stack{ID: project + ":default", Directory: dir, ComposeFile: "compose.yaml", ProjectName: project}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	oldImageID, _, _, ar := svc.UpdateComposeServiceStreaming(ctx, stack, "web",
-		func(services.LogLine) {}, func(services.Status) {})
+	var oldImageID string
+	ar := RetryUpdateAtPull(ctx, t, func() (truth.ActionResult, bool, string) {
+		c := &collector{}
+		var ar truth.ActionResult
+		oldImageID, _, _, ar = svc.UpdateComposeServiceStreaming(ctx, stack, "web", c.emit, c.setStatus)
+		return ar, c.sawStatus(services.StatusRecreating), c.text()
+	})
 	cancel()
 	require.NotEqual(t, "failed", string(ar.Outcome), "%s (%v)", ar.Reason, ar.Err)
 

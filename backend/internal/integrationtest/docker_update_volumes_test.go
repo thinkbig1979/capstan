@@ -13,6 +13,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
 
 // Test_UpdateContainer_Standalone_KeepsAnonymousVolumeData (agent-os-3mox): a
@@ -92,7 +93,11 @@ func Test_UpdateContainer_Standalone_KeepsAnonymousVolumeData(t *testing.T) {
 
 	for round := 1; round <= 2; round++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-		_, ar := svc.UpdateContainer(ctx, id, nil)
+		ar := RetryUpdateAtPull(ctx, t, func() (truth.ActionResult, bool, string) {
+			_, ar := svc.UpdateContainer(ctx, id, nil)
+			// UpdateContainer streams nothing; its pull error carries the reason.
+			return ar, false, ""
+		})
 		cancel()
 		collect()
 		require.NotEqual(t, "failed", string(ar.Outcome), "update %d: %s (%v)", round, ar.Reason, ar.Err)

@@ -251,7 +251,7 @@ func RetryUpdateAtPull(ctx context.Context, t *testing.T, update func() (ar trut
 
 	for attempt := 1; ; attempt++ {
 		ar, pastPull, log := update()
-		if ar.Outcome != truth.OutcomeFailed || pastPull || !failedAtPull(ar.Err) ||
+		if ar.Outcome != truth.OutcomeFailed || pastPull || !failedAtPull(ar) ||
 			!registryTransient(ar.Err, log) || ctx.Err() != nil || attempt == registryAttempts {
 			return ar
 		}
@@ -264,15 +264,18 @@ func RetryUpdateAtPull(ctx context.Context, t *testing.T, update func() (ar trut
 // nth retry waits n of them. A variable so its own tests need not wait.
 var updateRetryPause = 2 * time.Second
 
-// failedAtPull reports whether an update's apply error is its pull step's: the
-// standalone path wraps it "pulling image", the compose path "compose pull failed"
-// (services/docker_update.go).
-func failedAtPull(err error) bool {
-	if err == nil {
+// failedAtPull reports whether an update failed at its pull step: the
+// standalone path wraps the error "pulling image", the container's compose
+// path "compose pull failed" (services/docker_update.go). The compose-service
+// path (UpdateComposeServiceStreaming) names the step in the Reason instead,
+// with only the exit status in the error (agent-os-18uw).
+func failedAtPull(ar truth.ActionResult) bool {
+	if ar.Err == nil {
 		return false
 	}
-	msg := err.Error()
-	return strings.Contains(msg, "pulling image") || strings.Contains(msg, "compose pull failed")
+	msg := ar.Err.Error()
+	return strings.Contains(msg, "pulling image") || strings.Contains(msg, "compose pull failed") ||
+		ar.Reason == "compose pull failed"
 }
 
 var (

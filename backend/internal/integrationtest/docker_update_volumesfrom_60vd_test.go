@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
 
 // Test_UpdateContainer_Standalone_60vd_VolumesFrom (agent-os-60vd): a --rm
@@ -63,7 +64,11 @@ func Test_UpdateContainer_Standalone_60vd_VolumesFrom(t *testing.T) {
 
 	svc := newDockerService(t, t.TempDir())
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	_, ar := svc.UpdateContainer(ctx, id, nil)
+	ar := RetryUpdateAtPull(ctx, t, func() (truth.ActionResult, bool, string) {
+		_, ar := svc.UpdateContainer(ctx, id, nil)
+		// UpdateContainer streams nothing; its pull error carries the reason.
+		return ar, false, ""
+	})
 	cancel()
 
 	require.NotEqual(t, "failed", string(ar.Outcome), "%s (%v)", ar.Reason, ar.Err)

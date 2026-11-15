@@ -116,6 +116,18 @@ func TestRetryUpdateAtPull(t *testing.T) {
 		assert.Equal(t, truth.OutcomeNoChange, ar.Outcome)
 		assert.Equal(t, 2, calls)
 	})
+	// UpdateComposeServiceStreaming names the step in the Reason, and its
+	// Err is only streamComposeCmd's exit status (agent-os-18uw).
+	serviceComposeFailed := truth.Failed("compose pull failed", errors.New("command failed: exit status 18"))
+	t.Run("a compose-service pull whose log says timeout is retried", func(t *testing.T) {
+		ar, calls := run(bg, []attempt{{ar: serviceComposeFailed, log: composeLogTimeout}, {ar: ok}}, false)
+		assert.Equal(t, truth.OutcomeNoChange, ar.Outcome)
+		assert.Equal(t, 2, calls)
+	})
+	t.Run("a compose-service up failure is not retried", func(t *testing.T) {
+		_, calls := run(bg, []attempt{{ar: truth.Failed("compose up failed", errors.New("command failed: exit status 1")), log: composeLogTimeout}}, false)
+		assert.Equal(t, 1, calls)
+	})
 	t.Run("a compose pull whose log says manifest unknown is not retried", func(t *testing.T) {
 		_, calls := run(bg, []attempt{{ar: composeFailed, log: composeLogManifest}}, false)
 		assert.Equal(t, 1, calls)
