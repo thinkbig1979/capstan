@@ -1132,7 +1132,7 @@ func statementsLookSensitive(line string) bool {
 			return services.IsSensitiveEnvKey(strings.TrimSpace(s))
 		}
 		value, next, more := statementValue(s[sep+1:])
-		if services.IsSensitiveEnvKey(strings.TrimSpace(s[:sep])) || services.HasURLUserinfo(value) {
+		if services.IsSensitiveEnvVar(strings.TrimSpace(s[:sep]), value) {
 			return true
 		}
 		if !more {

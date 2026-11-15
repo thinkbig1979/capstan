@@ -54,9 +54,55 @@ func IsSensitiveEnvKey(key string) bool {
 
 // IsSensitiveEnvVar is IsSensitiveEnvKey widened by the value: a value that
 // carries a URL credential (postgres://user:pw@host/db) is a secret whatever
-// its key is called (agent-os-yt2f). The locked env views mask by this.
+// its key is called (agent-os-yt2f), and so is an opaque one
+// (sftp:user:pw@host, user:pw@host) or JSON with a sensitive field
+// ({"password":"x"}, agent-os-3mjw). The locked env views mask by this.
 func IsSensitiveEnvVar(key, value string) bool {
-	return IsSensitiveEnvKey(key) || HasURLUserinfo(value)
+	return IsSensitiveEnvKey(key) || HasURLUserinfo(value) || hasOpaqueCredential(value) || hasSensitiveJSONField(value)
+}
+
+// opaqueCredentialRe is a whole value of the shape [scheme:]user:password@host,
+// optionally followed by ":..." or "/...", with no whitespace.
+var opaqueCredentialRe = regexp.MustCompile(`^(?:[A-Za-z][A-Za-z0-9+.\-]*:)?[^\s:@/]+:[^\s@]+@([A-Za-z0-9][A-Za-z0-9.\-]*|\[[0-9A-Fa-f:.]+\])(?:[:/]\S*)?$`)
+
+// digestAlgorithmRe is what follows the "@" of an image pinned by digest
+// (nginx:1.25@sha256:...), which has the user:password@host shape.
+var digestAlgorithmRe = regexp.MustCompile(`(?i)^sha[0-9]+$`)
+
+// hasOpaqueCredential reports whether value, trimmed and unquoted, is an
+// inline credential with no "//": "sftp:user:pw@host", "user:pw@host:/p".
+// RedactURLUserinfo reads only the per-scheme forms restic accepts, because
+// what it stars locks the backup repository field (agent-os-zzhs); this is
+// the env views' wider rule, where a wrongly hidden value costs one unlock.
+// A "://" value is HasURLUserinfo's: its path can hold "x:y@z".
+func hasOpaqueCredential(value string) bool {
+	v := strings.TrimSpace(value)
+	if len(v) >= 2 && (v[0] == '"' || v[0] == '\'') && v[len(v)-1] == v[0] {
+		v = v[1 : len(v)-1]
+	}
+	if strings.Contains(v, "://") {
+		return false
+	}
+	m := opaqueCredentialRe.FindStringSubmatch(v)
+	return m != nil && !digestAlgorithmRe.MatchString(m[1])
+}
+
+// jsonFieldNameRe is a JSON object field name and its colon.
+var jsonFieldNameRe = regexp.MustCompile(`"([^"\\]{1,128})"\s*:`)
+
+// hasSensitiveJSONField reports whether value holds a JSON field whose name
+// IsSensitiveEnvKey matches: {"password":"x"}, a service account's
+// "private_key". The same over-masking as the key rule: {"key": ...} counts.
+func hasSensitiveJSONField(value string) bool {
+	if !strings.Contains(value, `"`) {
+		return false
+	}
+	for _, m := range jsonFieldNameRe.FindAllStringSubmatch(value, -1) {
+		if IsSensitiveEnvKey(m[1]) {
+			return true
+		}
+	}
+	return false
 }
 
 // HasURLUserinfo reports whether s, or any scheme://... token in it, carries a
