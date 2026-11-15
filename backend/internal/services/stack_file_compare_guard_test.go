@@ -24,13 +24,11 @@ func isEmptyString(e ast.Expr) bool {
 	return ok && lit.Kind == token.STRING && (lit.Value == `""` || lit.Value == "``")
 }
 
-// stackFileCompareOK is a compare against "" or between two stack file
-// fields, both of which name a file in the same frame.
-func stackFileCompareOK(a, b ast.Expr) bool {
-	if !isStackFileField(a) && !isStackFileField(b) {
-		return true
-	}
-	return isEmptyString(a) || isEmptyString(b) || (isStackFileField(a) && isStackFileField(b))
+// stringCompareFuncs are the strings functions that compare their two
+// arguments as paths could be compared.
+var stringCompareFuncs = map[string]bool{
+	"HasSuffix": true, "HasPrefix": true, "EqualFold": true, "Contains": true, "Compare": true,
+	"TrimSuffix": true, "TrimPrefix": true, "CutSuffix": true, "CutPrefix": true,
 }
 
 // stackFileCompares lists, as "file:line", every == / != compare and every
@@ -42,12 +40,45 @@ func stackFileCompares(t *testing.T, fset *token.FileSet, name string, src []byt
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A local alias (ef := stack.EnvFile) carries the field into a compare
+	// one assignment away (review rv-dm-gitpull F2). Keyed by name per file:
+	// an over-approximation, which can only add hits.
+	aliases := map[string]bool{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		if as, ok := n.(*ast.AssignStmt); ok && len(as.Lhs) == len(as.Rhs) {
+			for i, r := range as.Rhs {
+				if id, ok := as.Lhs[i].(*ast.Ident); ok && isStackFileField(r) {
+					aliases[id.Name] = true
+				}
+			}
+		}
+		return true
+	})
+	field := func(e ast.Expr) bool {
+		id, ok := e.(*ast.Ident)
+		return isStackFileField(e) || (ok && aliases[id.Name])
+	}
+	compareOK := func(a, b ast.Expr) bool {
+		if !field(a) && !field(b) {
+			return true
+		}
+		return isEmptyString(a) || isEmptyString(b) || (field(a) && field(b))
+	}
 	var bad []string
 	at := func(n ast.Node) { bad = append(bad, fset.Position(n.Pos()).String()) }
 	ast.Inspect(f, func(n ast.Node) bool {
 		switch n := n.(type) {
 		case *ast.BinaryExpr:
-			if (n.Op == token.EQL || n.Op == token.NEQ) && !stackFileCompareOK(n.X, n.Y) {
+			if (n.Op == token.EQL || n.Op == token.NEQ) && !compareOK(n.X, n.Y) {
+				at(n)
+			}
+		case *ast.CallExpr:
+			// strings.HasSuffix(f, stack.ComposeFile) and friends compare too.
+			sel, ok := n.Fun.(*ast.SelectorExpr)
+			if !ok || len(n.Args) != 2 || !stringCompareFuncs[sel.Sel.Name] || !isIdent(sel.X, "strings") {
+				return true
+			}
+			if !compareOK(n.Args[0], n.Args[1]) {
 				at(n)
 			}
 		case *ast.SwitchStmt:
@@ -57,7 +88,7 @@ func stackFileCompares(t *testing.T, fset *token.FileSet, name string, src []byt
 			}
 			for _, c := range n.Body.List {
 				for _, e := range c.(*ast.CaseClause).List {
-					if !stackFileCompareOK(n.Tag, e) {
+					if !compareOK(n.Tag, e) {
 						at(e)
 					}
 				}
@@ -112,6 +143,11 @@ func TestStackFileCompareGuardSeesTheShapes(t *testing.T) {
 		`if st.EnvFile != "" && st.ComposeFile == "" { return }`:     0,
 		`if a.EnvFile == b.EnvFile { return }`:                       0,
 		`if want[p] { return }`:                                      0,
+		`if ef := stack.EnvFile; f == ef { return }`:                 1, // review lB
+		`if strings.HasSuffix(f, stack.ComposeFile) { return }`:      1, // review lA
+		`if strings.EqualFold(stack.EnvFile, name) { return }`:       1,
+		`if strings.HasSuffix(stack.EnvFile, "") { return }`:         0,
+		`name := st.EnvFile; if name == "" { return }`:               0,
 	}
 	for body, want := range cases {
 		got := stackFileCompares(t, token.NewFileSet(), "x.go", []byte(head+body+"\n}\n"))
