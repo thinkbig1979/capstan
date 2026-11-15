@@ -4,7 +4,6 @@ import { useWebSocketJSON } from './useWebSocket'
 import { queryClient } from '@/lib/query-client'
 import { resolveUpdateScanSuccess, resolveUpdateScanError } from './useResources'
 import { useUpdateJobStore } from '@/stores/updateJobStore'
-import type { Stack } from '@/types'
 import type {
   UpdateJobProgressEvent,
   UpdateJobCompleteEvent,
@@ -217,16 +216,14 @@ export function useStackEvents() {
     }, 750)
   }, [])
 
+  // A stack_status frame is refetched, never written into the list row: it
+  // was built from one container's action, which is not the stack's status
+  // (agent-os-4ato). The backend no longer sends one; the refetched list
+  // carries the server's aggregate, and a live read also clears statusStale
+  // (agent-os-xjzr).
   const handleStackStatusEvent = useCallback((event: StackStatusEvent) => {
-    queryClient.setQueryData(queryKeys.stacks(), (old: Stack[] | undefined) => {
-      if (!old) return old
-      return old.map((stack) =>
-        // The status now comes from Docker's event stream, so it is no longer
-        // the stored one the server flagged stale (agent-os-xjzr).
-        stack.id === event.stackId ? { ...stack, status: event.status, statusStale: false } : stack
-      )
-    })
     scheduleInvalidations([
+      queryKeys.stacks(),
       queryKeys.stack.detail(event.stackId),
       queryKeys.dashboardStats(),
     ])

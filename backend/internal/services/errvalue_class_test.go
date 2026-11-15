@@ -328,7 +328,7 @@ func TestStackEventForEmitsWhenTheProjectHasNoStackRow(t *testing.T) {
 
 	ts := time.Unix(1700000000, 0)
 	for _, action := range []string{"start", "stop", "die", "destroy"} {
-		ev, ok := s.stackEventFor(action, u2Ctr, u2Project, false, ts)
+		ev, ok := s.stackEventFor(action, u2Ctr, u2Project, ts)
 		if !ok {
 			t.Fatalf("action %q: a container whose project has no stack row must still be emitted, got dropped", action)
 		}
@@ -354,7 +354,7 @@ func TestStackEventForDiscriminatesAbsentRowFromReadFault(t *testing.T) {
 	// Side A: absent row. Not an error, so nothing at ERROR.
 	absentBuf := u2CaptureLogs(t)
 	absent := &MonitorService{db: u2StubDB{err: errdefs.ErrNotFound}}
-	evAbsent, okAbsent := absent.stackEventFor("start", u2Ctr, u2Project, false, ts)
+	evAbsent, okAbsent := absent.stackEventFor("start", u2Ctr, u2Project, ts)
 	absentLog := absentBuf.String()
 
 	if !okAbsent || evAbsent.StackID != "" {
@@ -370,7 +370,7 @@ func TestStackEventForDiscriminatesAbsentRowFromReadFault(t *testing.T) {
 	// Side B: a genuine read fault. Same emission, different and louder log.
 	faultBuf := u2CaptureLogs(t)
 	fault := &MonitorService{db: u2StubDB{err: errors.New("sql: database is closed")}}
-	evFault, okFault := fault.stackEventFor("start", u2Ctr, u2Project, false, ts)
+	evFault, okFault := fault.stackEventFor("start", u2Ctr, u2Project, ts)
 	faultLog := faultBuf.String()
 
 	if !okFault || evFault.StackID != "" {
@@ -391,36 +391,21 @@ func TestStackEventForDiscriminatesAbsentRowFromReadFault(t *testing.T) {
 	}
 }
 
-// TestStackEventForKnownStackIsUnchanged is the behaviour-preservation control
-// for the path that was already correct: a project WITH a stack row must map to
-// exactly what it mapped to before, for every action.
+// TestStackEventForKnownStackIsUnchanged is the control for the path that was
+// already correct: a project WITH a stack row is attributed to that stack for
+// every action. Since agent-os-4ato every action there is a container_event
+// with no status: one container's action is not the stack's status.
 func TestStackEventForKnownStackIsUnchanged(t *testing.T) {
 	_ = u2CaptureLogs(t)
 	s := &MonitorService{db: u2StubDB{stack: &models.Stack{ID: u2StackID}}}
 	ts := time.Unix(1700000000, 0)
 
-	want := map[string]models.StackEvent{
-		"start":   {Type: "stack_status", Status: "running", StackID: u2StackID},
-		"restart": {Type: "stack_status", Status: "running", StackID: u2StackID},
-		"unpause": {Type: "stack_status", Status: "running", StackID: u2StackID},
-		"stop":    {Type: "stack_status", Status: "stopped", StackID: u2StackID},
-		"die":     {Type: "stack_status", Status: "stopped", StackID: u2StackID},
-		"kill":    {Type: "stack_status", Status: "stopped", StackID: u2StackID},
-		"pause":   {Type: "stack_status", Status: "paused", StackID: u2StackID},
-		"create":  {Type: "container_event", StackID: u2StackID},
-		"rename":  {Type: "container_event", StackID: u2StackID},
-		"destroy": {Type: "container_event", StackID: u2StackID},
-	}
-
 	for _, action := range u2AllActions {
-		ev, ok := s.stackEventFor(action, u2Ctr, u2Project, false, ts)
+		ev, ok := s.stackEventFor(action, u2Ctr, u2Project, ts)
 		if !ok {
 			t.Fatalf("action %q: a container with a known stack must always be emitted", action)
 		}
-		w := want[action]
-		w.ContainerID = u2Ctr
-		w.Event = action
-		w.Timestamp = ts
+		w := models.StackEvent{Type: "container_event", StackID: u2StackID, ContainerID: u2Ctr, Event: action, Timestamp: ts}
 		if ev != w {
 			t.Fatalf("action %q:\n got %+v\nwant %+v", action, ev, w)
 		}
@@ -447,7 +432,7 @@ func TestStackEventForLabellessContainerIsUnchanged(t *testing.T) {
 	emitted := map[string]bool{"start": true, "stop": true, "die": true, "destroy": true}
 
 	for _, action := range u2AllActions {
-		ev, ok := s.stackEventFor(action, u2Ctr, "", false, ts)
+		ev, ok := s.stackEventFor(action, u2Ctr, "", ts)
 		if ok != emitted[action] {
 			t.Fatalf("action %q with no compose label: emitted = %v, want %v", action, ok, emitted[action])
 		}
@@ -475,14 +460,14 @@ func TestStackEventForWithoutADatabaseIsUnchanged(t *testing.T) {
 	s := &MonitorService{}
 	ts := time.Unix(1700000000, 0)
 
-	ev, ok := s.stackEventFor("start", u2Ctr, u2Project, false, ts)
+	ev, ok := s.stackEventFor("start", u2Ctr, u2Project, ts)
 	if !ok {
 		t.Fatal("no database: the event must still be emitted")
 	}
 	if ev.StackID != u2Project {
 		t.Fatalf("no database: StackID = %q, want the project name %q", ev.StackID, u2Project)
 	}
-	if ev.Type != "stack_status" || ev.Status != "running" {
-		t.Fatalf("no database: want a running stack_status, got %+v", ev)
+	if ev.Type != "container_event" || ev.Status != "" {
+		t.Fatalf("no database: want a container_event with no status (agent-os-4ato), got %+v", ev)
 	}
 }

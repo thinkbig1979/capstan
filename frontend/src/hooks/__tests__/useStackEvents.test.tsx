@@ -205,28 +205,33 @@ describe('useStackEvents update-completion invalidation', () => {
   })
 })
 
-// agent-os-xjzr: a stack served with statusStale (live read failed) whose status
-// a stack_status frame then overwrites with a value from Docker's event stream
-// must lose the flag, or the "may be out of date" note outlives its cause.
-// Two-sided: a stack the frame did not name keeps its flag.
-describe('useStackEvents stack_status clears statusStale', () => {
-  it('clears statusStale on the stack the frame names and only that one', () => {
+// agent-os-4ato: a stack_status frame named one container's action, and its
+// status was written into the stacks-list row, so one dead service of three read
+// "stopped" (truth: partial). The backend no longer sends one; a frame that
+// still arrives refetches the list instead, so the row only ever shows the
+// status the server derived from all the project's containers. That refetch is
+// also what clears statusStale (agent-os-xjzr): the list is re-read live.
+describe('useStackEvents stack_status refetches instead of writing the row', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('never writes the frame status into the list and refetches the list, the stack and the stats', () => {
     renderHook(() => useStackEvents())
 
-    capturedOnMessage!({ type: 'stack_status', stackId: 's1', status: 'running', timestamp: '' })
+    capturedOnMessage!({ type: 'stack_status', stackId: 's1', status: 'stopped', timestamp: '' })
 
-    const call = vi.mocked(queryClient.setQueryData).mock.calls.find(
-      ([key]) => JSON.stringify(key) === JSON.stringify(queryKeys.stacks()),
-    )
-    expect(call).toBeDefined()
-    const updater = call![1] as (old: unknown) => Array<{ id: string; status: string; statusStale?: boolean }>
-    const next = updater([
-      { id: 's1', status: 'stopped', statusStale: true },
-      { id: 's2', status: 'stopped', statusStale: true },
-    ])
-    expect(next[0]).toMatchObject({ id: 's1', status: 'running' })
-    expect(next[0].statusStale).not.toBe(true)
-    expect(next[1]).toMatchObject({ id: 's2', status: 'stopped', statusStale: true })
+    expect(vi.mocked(queryClient.setQueryData)).not.toHaveBeenCalled()
+    const keys = flushInvalidations().map((k) => JSON.stringify(k))
+    expect(keys).toEqual(expect.arrayContaining([
+      JSON.stringify(queryKeys.stacks()),
+      JSON.stringify(queryKeys.stack.detail('s1')),
+      JSON.stringify(queryKeys.dashboardStats()),
+    ]))
   })
 })
 
