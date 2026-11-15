@@ -78,6 +78,31 @@ func (h *GitHandler) stackSecrets(stackID string) []string {
 	return services.StackSecretValues(*stack, globalEnvPath(h.config))
 }
 
+// lockedCommitSecrets is the list a locked reply masks commit metadata with:
+// the stack's env values, or none with ?dir=, where MaskSecrets still runs
+// its KEY=value and URL passes.
+func (h *GitHandler) lockedCommitSecrets(stackID string) []string {
+	if stackID == "" {
+		return nil
+	}
+	return h.stackSecrets(stackID)
+}
+
+// maskGitText masks one piece of commit metadata for a locked session.
+func maskGitText(s string, secrets []string) string {
+	out, _ := services.MaskSecrets(s, "", secrets)
+	return out
+}
+
+// maskCommit masks a commit's free text for a locked session: a message, an
+// author or an email can hold a secret value as well as a patch can
+// (agent-os-xmbg). The hash, short hash and date carry none.
+func maskCommit(commit *models.GitCommit, secrets []string) {
+	commit.Message = maskGitText(commit.Message, secrets)
+	commit.Author = maskGitText(commit.Author, secrets)
+	commit.Email = maskGitText(commit.Email, secrets)
+}
+
 func (h *GitHandler) resolvePathFromStack(c *gin.Context) (string, string, error) {
 	stackID := c.Query("stackId")
 	if stackID != "" {
@@ -141,7 +166,7 @@ func (h *GitHandler) resolvePathFromStack(c *gin.Context) (string, string, error
 }
 
 func (h *GitHandler) GetStatus(c *gin.Context) {
-	absPath, _, err := h.resolvePathFromStack(c)
+	absPath, stackID, err := h.resolvePathFromStack(c)
 	if err != nil {
 		handleError(c, err)
 		return
@@ -202,6 +227,10 @@ func (h *GitHandler) GetStatus(c *gin.Context) {
 		}
 		handleError(c, err)
 		return
+	}
+
+	if !envUnlocked(c) {
+		maskCommit(&status.Commit, h.lockedCommitSecrets(stackID))
 	}
 
 	if status.IsBare {
@@ -472,7 +501,7 @@ func (h *GitHandler) formatPullDetail(result *models.PullResult) string {
 }
 
 func (h *GitHandler) GetLog(c *gin.Context) {
-	absPath, _, err := h.resolvePathFromStack(c)
+	absPath, stackID, err := h.resolvePathFromStack(c)
 	if err != nil {
 		handleError(c, err)
 		return
@@ -515,6 +544,15 @@ func (h *GitHandler) GetLog(c *gin.Context) {
 		return
 	}
 
+	// A locked session gets each commit's free text masked, as the diff
+	// masks the patch (agent-os-xmbg).
+	if !envUnlocked(c) {
+		secrets := h.lockedCommitSecrets(stackID)
+		for i := range result.Commits {
+			maskCommit(&result.Commits[i], secrets)
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"commits": result.Commits,
 		"total":   result.Total,
@@ -547,11 +585,24 @@ func (h *GitHandler) GetDiff(c *gin.Context) {
 	if envUnlocked(c) {
 		result, err = h.git.GetDiff(absPath, hash)
 	} else {
-		var secrets []string
-		if stackID != "" {
-			secrets = h.stackSecrets(stackID)
-		}
+		secrets := h.lockedCommitSecrets(stackID)
 		result, err = h.git.GetDiffMasked(absPath, hash, secrets)
+		if err == nil {
+			// The service masks the patch's content lines; the commit's free
+			// text and the file names are masked here (agent-os-xmbg). The
+			// patch gets one more pass for the names in its own header
+			// lines (diff --git, ---, +++), which can only mask more. Files
+			// and HiddenFiles take the same rule, so a hidden file still
+			// matches.
+			maskCommit(&result.Commit, secrets)
+			result.Diff = maskGitText(result.Diff, secrets)
+			for i := range result.Files {
+				result.Files[i] = maskGitText(result.Files[i], secrets)
+			}
+			for i := range result.HiddenFiles {
+				result.HiddenFiles[i] = maskGitText(result.HiddenFiles[i], secrets)
+			}
+		}
 	}
 	if err != nil {
 		handleError(c, err)
