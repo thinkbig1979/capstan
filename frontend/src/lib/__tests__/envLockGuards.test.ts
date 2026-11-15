@@ -523,14 +523,14 @@ function maskedValueInputs(path: string, text: string) {
     if (!type?.initializer || !/password/.test(type.initializer.getText(sf))) return
     if (!value || !ts.isPropertyAccessExpression(value) || value.name.text !== 'value') return
     const placeholder = attrExpr(attr(sf, n, 'placeholder'))
-    // The same inputs take no typed text while their key is hidden and the
-    // session is locked (agent-os-9fsu F10): `disabled` reads the rule's helper.
+    // The same inputs take no typed text while their key is hidden
+    // (agent-os-9fsu F10): `disabled` reads the hidden-key rule.
     const disabled = attrExpr(attr(sf, n, 'disabled'))
     sites.push({
       p: path,
       line: lineOf(sf, n),
       ok: !!placeholder && ts.isCallExpression(placeholder) && calleeName(placeholder) === 'valuePlaceholder',
-      frozen: !!disabled && /valueFrozen\(|\.valueLocked\b/.test(disabled.getText(sf)),
+      frozen: !!disabled && /valueFrozen\(|\.keyHidden\b/.test(disabled.getText(sf)),
     })
   })
   return sites
@@ -578,15 +578,15 @@ describe('guard 6: reveal follows the row, and a masked value says it is hidden 
     expect(sites.filter((s) => !s.ok)).toEqual([])
   })
 
-  it('every value input that can be masked is disabled while its hidden key is locked (agent-os-9fsu F10)', () => {
+  it('every value input that can be masked is disabled while its key is hidden (agent-os-9fsu F10)', () => {
     const sites = tsxProduction().flatMap(([p, t]) => maskedValueInputs(p, t))
     expect(sites).toHaveLength(4)
     expect(sites.filter((s) => !s.frozen)).toEqual([])
   })
 
-  it('flags a planted masked value input that takes typed text while locked', () => {
+  it('flags a planted masked value input that takes typed text while its key is hidden', () => {
     const path = `${GLOBAL_ENV_DIR}GlobalEnvTable.tsx`
-    const planted = sources[path].replace('disabled={entry.valueLocked}', '')
+    const planted = sources[path].replace('disabled={entry.keyHidden}', '')
     expect(planted).not.toBe(sources[path])
     expect(maskedValueInputs(path, planted).filter((s) => !s.frozen)).toHaveLength(1)
   })

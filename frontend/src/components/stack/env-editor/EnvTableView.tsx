@@ -95,12 +95,6 @@ interface EnvTableViewProps {
   saveRefused: boolean
   /** Rows whose key a dirty lock found to be secret content (agent-os-y6e8). */
   hiddenKeyIds?: ReadonlySet<number>
-  /**
-   * The unlock session has ended, whichever payload is on screen: `locked` only
-   * says the payload was served locked. A row whose key is hidden takes no typed
-   * value while either holds (agent-os-9fsu F10).
-   */
-  lockedNow?: boolean
 }
 
 export function EnvTableView({
@@ -116,7 +110,6 @@ export function EnvTableView({
   locked,
   saveRefused,
   hiddenKeyIds = NO_HIDDEN_KEYS,
-  lockedNow = false,
 }: EnvTableViewProps) {
   // A masked value is not searched, nor a hidden key: a match would tell a
   // locked user what it contains, one substring at a time (agent-os-kxag, y6e8).
@@ -139,9 +132,11 @@ export function EnvTableView({
     filtered: filteredIndexed,
   } = useTextFilter(indexedEntries, searchFields)
 
-  // While locked, text typed into a row whose key is hidden would replace a
-  // value the user never saw at the next save after unlock (agent-os-9fsu F10).
-  const valueFrozen = (e: EnvEntryRow) => (locked || lockedNow) && keyHidden(e, hiddenKeyIds)
+  // Text typed into a row whose key is hidden would replace a value the user
+  // never saw at the next save, so its value is frozen until the row is revealed
+  // (agent-os-9fsu F10). Whenever the key is hidden, not only while locked: a
+  // masked row stays hidden after an unlock too.
+  const valueFrozen = (e: EnvEntryRow) => keyHidden(e, hiddenKeyIds)
 
   if (!visible) return null
 

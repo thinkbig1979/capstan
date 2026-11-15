@@ -4,7 +4,7 @@
  * that parses as KEY= (base64 padding) arrives as a variable named by the line
  * with the value "="; the flag alone cannot tell it from `DB_PASSWORD=x`, whose
  * key is the name and stays visible, so `bodyLine` is what hides the key. While
- * the session is locked the value of such a row cannot be typed over either
+ * its key is hidden the value of such a row cannot be typed over either
  * (agent-os-9fsu F10): on an unlocked baseline the text would replace the real
  * value at the next save.
  */
@@ -26,7 +26,7 @@ const bodyRow = (over: Partial<EnvEntryRow> = {}): EnvEntryRow => ({
 const PORT: EnvEntryRow = { _rowId: 1, key: 'PORT', value: '8080', line: 1, sensitive: false }
 const PASSWORD: EnvEntryRow = { _rowId: 3, key: 'DB_PASSWORD', value: 'hunter2', line: 5, sensitive: true }
 
-function renderTable(entries: EnvEntryRow[], extra: { locked?: boolean; lockedNow?: boolean } = {}) {
+function renderTable(entries: EnvEntryRow[], extra: { locked?: boolean } = {}) {
   return render(
     <EnvTableView
       visible
@@ -39,7 +39,6 @@ function renderTable(entries: EnvEntryRow[], extra: { locked?: boolean; lockedNo
       saving={false}
       hasUnsavedChanges={false}
       locked={extra.locked ?? false}
-      lockedNow={extra.lockedNow}
       saveRefused={false}
     />,
   )
@@ -81,8 +80,8 @@ describe('EnvTableView: a flagged multi-line body row (agent-os-9fsu)', () => {
     ])
   })
 
-  it('F10: the value of a key-hidden row is disabled while the session is locked, either way it is known', () => {
-    for (const extra of [{ locked: true }, { lockedNow: true }]) {
+  it('F10: the value of a key-hidden row is disabled, locked or unlocked', () => {
+    for (const extra of [{ locked: true }, { locked: false }]) {
       const { unmount } = renderTable([bodyRow()], extra)
       expect(valueInput(1).map((el) => el.disabled)).toEqual([true, true])
       unmount()
@@ -90,12 +89,12 @@ describe('EnvTableView: a flagged multi-line body row (agent-os-9fsu)', () => {
   })
 
   it('F10: positive side, the value of a keyed sensitive row stays editable while locked', () => {
-    renderTable([PASSWORD], { locked: true, lockedNow: true })
+    renderTable([PASSWORD], { locked: true })
     expect(valueInput(1).map((el) => el.disabled)).toEqual([false, false])
   })
 
-  it('F10: unlocked, a masked body row can still be revealed and edited, so the value is not disabled', () => {
-    renderTable([bodyRow()])
+  it('F10: once the row is revealed its value is editable again', () => {
+    renderTable([bodyRow({ sensitive: false })])
     expect(valueInput(1).map((el) => el.disabled)).toEqual([false, false])
   })
 })

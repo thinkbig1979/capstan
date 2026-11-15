@@ -2,7 +2,8 @@
  * agent-os-9fsu F10, global page: the value input of a row whose key is hidden
  * stays editable while locked. On an unlocked baseline the typed text replaces
  * the real value at the next save after unlock, and the user never saw either.
- * Fixtures are the f3am ones (a commented-out PEM's body line that parsed as a
+ * Frozen whenever the key is hidden, not only while locked (orch-dm-62's ruling:
+ * a masked row stays hidden after an unlock too, F8). Fixtures are the f3am ones (a commented-out PEM's body line that parsed as a
  * variable). Two lock windows hide the key: the locked payload's blank key (a
  * dirty lock), and the stale unlocked payload before the refetch lands, or when
  * it fails (staleUnlocked).
@@ -105,5 +106,26 @@ describe('global env: the value of a key-hidden row while locked (agent-os-9fsu 
     await waitFor(() => expect(keys(2).map((el) => el.value)).toEqual(['', '']))
     expect(values(2).map((el) => el.disabled)).toEqual([true, true])
     expect(values(1).map((el) => el.disabled)).toEqual([false, false])
+  })
+
+  it('F8 (pinned, fails closed): after a dirty lock and an unlock the key stays hidden and the value frozen until the row is revealed', async () => {
+    await lockWith(lockedPayload, true)
+    await screen.findByText('Locked')
+
+    server = unlockedPayload
+    act(() => useEnvUnlockStore.getState().unlock('tok'))
+    const calls = mockGetGlobalEnv.mock.calls.length
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: queryKeys.settings.globalEnv() })
+    })
+    await waitFor(() => expect(mockGetGlobalEnv.mock.calls.length).toBeGreaterThan(calls))
+    await waitFor(() => expect(screen.queryByText('Locked')).toBeNull())
+
+    expect(keys(2).map((el) => [el.value, el.disabled])).toEqual([['', true], ['', true]])
+    expect(values(2).map((el) => el.disabled)).toEqual([true, true])
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Show value 2' })[0])
+    expect(keys(2).map((el) => [el.value, el.disabled])).toEqual([['MIIEbodyline', false], ['MIIEbodyline', false]])
+    expect(values(2).map((el) => el.disabled)).toEqual([false, false])
   })
 })

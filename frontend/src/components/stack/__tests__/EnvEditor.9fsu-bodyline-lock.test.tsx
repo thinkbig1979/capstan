@@ -112,8 +112,9 @@ describe('EnvEditor: a flagged body row that parses as KEY= (agent-os-9fsu)', ()
     expect(val(4).type).toBe('password')
   })
 
-  it('F10: while locked the value of the hidden-key row cannot be typed over', async () => {
+  it('F10: the value of the hidden-key row cannot be typed over, from the first render and while locked', async () => {
     const { queryClient } = await load()
+    expect(val(4).disabled).toBe(true)
     await lockWithFailedRefetch(queryClient)
 
     expect(val(4).disabled).toBe(true)
@@ -121,7 +122,7 @@ describe('EnvEditor: a flagged body row that parses as KEY= (agent-os-9fsu)', ()
     expect(val(1).disabled).toBe(false)
   })
 
-  it('N3 (pinned, fails closed): after an unlock the key stays hidden until the row is revealed', async () => {
+  it('N3 (pinned, fails closed): after an unlock the key stays hidden, and the value frozen, until the row is revealed', async () => {
     const { queryClient } = await load()
     fireEvent.change(val(1), { target: { value: '9090' } })
     await lockWithFailedRefetch(queryClient)
@@ -131,8 +132,10 @@ describe('EnvEditor: a flagged body row that parses as KEY= (agent-os-9fsu)', ()
     await act(() => invalidateEnvUnlockQueries(queryClient))
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Unlock' })).toBeNull())
     expect(keyValues().filter((k) => k.includes(BODY))).toEqual([])
+    expect(val(4).disabled).toBe(true)
 
     fireEvent.click(screen.getAllByRole('button', { name: 'Toggle visibility for entry 4' })[0])
     expect(keyValues()).toContain(BODY)
+    expect(val(4).disabled).toBe(false)
   })
 })

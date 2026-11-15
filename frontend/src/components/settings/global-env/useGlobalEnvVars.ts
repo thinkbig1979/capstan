@@ -178,7 +178,6 @@ export function useGlobalEnvVars(
   // so every masked row hides its key until the locked payload arrives
   // (agent-os-f3am).
   const staleUnlocked = lockedNow && data !== undefined && !data.locked
-  const payloadLocked = data?.locked === true
   // Wrap vars with their original index so filtered results can route edits
   // correctly, and with whether the row's key is hidden: a masked row whose key
   // the lock blanked, or any masked row while the payload is stale.
@@ -186,13 +185,9 @@ export function useGlobalEnvVars(
     () =>
       vars.map((v, i) => {
         const masked = (v.sensitive === true || isSensitiveKey(v.key)) && !visible[v._rowId]
-        const keyHidden = masked && (staleUnlocked || hiddenKeyIds.has(v._rowId))
-        // A hidden key's value is typed over blind while locked: on an unlocked
-        // baseline that text would replace the real value at the next save
-        // (agent-os-9fsu F10).
-        return { ...v, _originalIndex: i, keyHidden, valueLocked: keyHidden && (lockedNow || payloadLocked) }
+        return { ...v, _originalIndex: i, keyHidden: masked && (staleUnlocked || hiddenKeyIds.has(v._rowId)) }
       }),
-    [vars, visible, staleUnlocked, hiddenKeyIds, lockedNow, payloadLocked],
+    [vars, visible, staleUnlocked, hiddenKeyIds],
   )
   // A hidden value or key is not searched, the same rule the table masks it
   // by: a match would tell a locked user what it contains (agent-os-sopw, f3am).

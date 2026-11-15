@@ -92,7 +92,7 @@ export function GlobalEnvTable({
                           value={entry.value}
                           onChange={(e) => onChange(index, 'value', e.target.value)}
                           placeholder={valuePlaceholder(locked, sensitive && !reveal, entry.value)}
-                          disabled={entry.valueLocked}
+                          disabled={entry.keyHidden}
                           aria-label={`Global env value ${index + 1}`}
                         />
                       )}
