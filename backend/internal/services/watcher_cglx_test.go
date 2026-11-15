@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -48,4 +50,27 @@ func TestWatcherCglx_RenamedStackFolderStaysWatched(t *testing.T) {
 	require.Eventually(t, func() bool { return projectNameIn(t, s, b) == "second" },
 		10*time.Second, 20*time.Millisecond,
 		"an edit inside the renamed folder must rescan it; watch list: %v", w.watcher.WatchList())
+}
+
+// The deterministic arm: the real-fsnotify test above goes red only when the
+// race lands, so a revert of unwatchTree would pass it most of the time. This
+// drives handleEvent with the Rename fsnotify delivers for the old name and
+// requires the old folder and the watched folder below it to be unwatched.
+func TestWatcherCglx_RenameEventUnwatchesTheOldFolderAndItsSubfolders(t *testing.T) {
+	root := t.TempDir()
+	a := filepath.Join(root, "a")
+	sub := filepath.Join(a, "sub")
+	require.NoError(t, os.MkdirAll(sub, 0o755))
+	w, s := newTestWatcher(t, root)
+	require.NoError(t, s.db.SetSetting("scan_depth", "2"))
+	require.NoError(t, w.Start())
+	require.True(t, watchListHas(w, a), "control: a is watched")
+	require.True(t, watchListHas(w, sub), "control: a/sub is watched")
+
+	w.handleEvent(fsnotify.Event{Name: a, Op: fsnotify.Rename})
+
+	watched := w.watcher.WatchList()
+	assert.NotContains(t, watched, a, "the renamed-away folder must be unwatched")
+	assert.NotContains(t, watched, sub, "a watched folder below it must be unwatched too")
+	assert.Contains(t, watched, root, "control: the stacks dir stays watched")
 }
