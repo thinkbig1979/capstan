@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -202,7 +203,11 @@ func containerSecretValues(inspect container.InspectResponse) []string {
 
 // spanValues is the values in what the masker hid of orig (maskedSpans):
 // each span; the part after its first ":", since a URL's userinfo is starred
-// whole and the password alone is what an app prints; and, for a span that
+// whole and the password alone is what an app prints; the span's first word
+// cut at the first shell separator (shellSeparators: `x; exec app`,
+// `x&& ..`, `x| ..`, `(.. x)`), where a shell ends the value; the password
+// of every word that carries a URL credential (HasURLUserinfo), which a
+// longer span holds whole (rv-dm-rbmi2 round 3, R3-1); and, for a span that
 // runs on past a space (the masker hides the rest of a `PASSWORD=x exec app`
 // line), its first word, where the inline KEY=value rule ends a value, and
 // the values the masker finds in the span itself, down to depth levels:
@@ -214,7 +219,16 @@ func spanValues(orig, masked string, depth int) []string {
 		if _, pw, ok := strings.Cut(sp, ":"); ok {
 			out = append(out, pw)
 		}
-		if words := strings.Fields(sp); len(words) > 1 {
+		words := strings.Fields(sp)
+		if len(words) > 0 {
+			if i := strings.IndexAny(words[0], shellSeparators); i > 0 {
+				out = append(out, words[0][:i])
+			}
+		}
+		for _, w := range words {
+			out = append(out, urlUserinfoPassword(w)...)
+		}
+		if len(words) > 1 {
 			out = append(out, words[0])
 			// Only on text shorter than orig, so it always ends.
 			if depth > 0 && len(sp) < len(orig) {
@@ -224,6 +238,34 @@ func spanValues(orig, masked string, depth int) []string {
 		}
 	}
 	return out
+}
+
+// shellSeparators end a value in a shell line: a command list, a pipe, the
+// end of a subshell.
+const shellSeparators = ";&|)"
+
+// urlUserinfoPassword is the password of word when it carries a URL
+// credential, as an app prints it (decoded); nil otherwise.
+func urlUserinfoPassword(word string) []string {
+	if !HasURLUserinfo(word) {
+		return nil
+	}
+	u, err := url.Parse(strings.TrimRight(strings.Trim(word, `"'`), shellSeparators))
+	if err != nil {
+		// HasURLUserinfo found one this parse can't read: the whole word is
+		// still a needle, as part of its span.
+		return nil
+	}
+	if u.User == nil {
+		// An opaque form (sftp:user:pw@host): the span's ":" split above
+		// already holds its password.
+		return nil
+	}
+	pw, ok := u.User.Password()
+	if !ok || pw == "" {
+		return nil
+	}
+	return []string{pw}
 }
 
 // spanValuesDepth bounds spanValues' look into a span: one level per

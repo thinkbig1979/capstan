@@ -185,6 +185,21 @@ func TestMaskedSpans_HidesWhatTheMaskerHides(t *testing.T) {
 		{"after-flag two-item form", []string{"app", "--password", "twoItem44qq"}, []string{"twoItem44qq"}},
 		{"URL credential", []string{"app", "postgres://u:urlPw55qq@db/x"}, []string{"urlPw55qq"}},
 		{"orig already holds the mask", []string{"app", "--password=***pre66qq"}, []string{"***pre66qq"}},
+		// R3-1 (rv-dm-rbmi2 round 3): shell-form lines, where the masker
+		// hides the rest of the line and the value ends at a shell
+		// separator, not a space. Separators covered: space, ";", "&", "|",
+		// ")", attached to the value or after it.
+		{"sh -c: value then ; then a command", []string{"sh", "-c", "PASSWORD=sc1Pw123; exec app"}, []string{"sc1Pw123"}},
+		{"sh -c: value then ; with no space", []string{"sh", "-c", "PASSWORD=sc2Pw123;exec app"}, []string{"sc2Pw123"}},
+		{"sh -c: --flag=value then ;", []string{"sh", "-c", "app --password=sc3Pw123; sleep 1"}, []string{"sc3Pw123"}},
+		{"sh -c: value then && attached", []string{"sh", "-c", "PASSWORD=sc10Pw123&& exec app"}, []string{"sc10Pw123"}},
+		{"sh -c: value then | attached", []string{"sh", "-c", "PASSWORD=sc11Pw123| tee /log"}, []string{"sc11Pw123"}},
+		{"sh -c: value in a subshell", []string{"sh", "-c", "(export PASSWORD=sc12Pw123) && exec app"}, []string{"sc12Pw123"}},
+		{"sh -c: URL credential inside a longer line", []string{"sh", "-c", "app --db-url postgres://u:sc8Pw123@db/x --verbose"}, []string{"sc8Pw123"}},
+		// Controls the reviewer found already hidden; they stay so.
+		{"control: value then && after a space", []string{"sh", "-c", "app --password=sc4Pw123 && sleep 1"}, []string{"sc4Pw123"}},
+		{"control: two exports", []string{"sh", "-c", "export DB_PASSWORD=sc5Pw123 API_TOKEN=sc6Tok123 && exec app"}, []string{"sc5Pw123", "sc6Tok123"}},
+		{"control: mongodb URL with a port and query", []string{"app", "mongodb://u:sc7Pw123@h:27017/db?authSource=admin"}, []string{"sc7Pw123"}},
 	}
 	for _, c := range viaMaskArgs {
 		t.Run(c.name, func(t *testing.T) {
@@ -198,6 +213,20 @@ func TestMaskedSpans_HidesWhatTheMaskerHides(t *testing.T) {
 				line := needleOnly("log: "+s+" end", values)
 				require.NotContains(t, line, s, "maskedSpans' values %q leave %q visible", values, s)
 			}
+		})
+	}
+
+	// An env value is read the way containerSecretValues reads one: its
+	// spans under MaskSecrets.
+	for name, c := range map[string]struct{ value, secret string }{
+		"env: URL credential then more words":  {"postgres://u:sc9Pw123@db/x --verbose", "sc9Pw123"},
+		"env: KEY=value then ; in an opts var": {"-Dx=1 DB_PASSWORD=sc13Pw123; -Xmx1g", "sc13Pw123"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			masked, _ := MaskSecrets(c.value, "", nil)
+			require.NotContains(t, masked, c.secret, "CONTROL: the masker hides %q", c.secret)
+			values := spanValues(c.value, masked, spanValuesDepth)
+			require.NotContains(t, needleOnly("log: "+c.secret+" end", values), c.secret, "values %q leave %q visible", values, c.secret)
 		})
 	}
 
