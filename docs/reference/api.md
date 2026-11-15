@@ -97,6 +97,9 @@ honest answer rather than a blank.
   window, is bound to the account that minted it, and is revoked on logout. With
   `AUTH_DISABLED` there is no password to re-check, so a token is minted
   unconditionally and the gate is open. See [Secret reveal](#secret-reveal).
+- `POST /api/v1/auth/lock` — the Lock button: revoke every unlock token of the
+  current user before it expires (204). Open terminal and log streams opened
+  under one close with code 4403 within a few seconds.
 - `PUT /api/v1/auth/password` — change the current user's password
 
 Every route that checks a password is rate-limited per account and per client

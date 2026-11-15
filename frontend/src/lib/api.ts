@@ -240,6 +240,15 @@ export const authApi = {
     )
     return response.data
   },
+
+  /**
+   * Revokes every unlock token of this user on the server (the Lock button,
+   * agent-os-qxio). Clearing the browser's copy alone left the server
+   * honouring it until its TTL.
+   */
+  lockEnv: async () => {
+    await apiClient.post('/auth/lock')
+  },
 }
 
 /** Build identity of the running backend. Public endpoint — no session needed. */

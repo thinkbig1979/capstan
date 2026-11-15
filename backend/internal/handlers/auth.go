@@ -122,6 +122,19 @@ func (h *AuthHandler) RegisterProtectedRoutes(group *gin.RouterGroup) {
 	group.POST("/auth/logout", h.Logout)
 	group.GET("/auth/me", h.Me)
 	group.POST("/auth/verify-password", middleware.RateLimitPasswordCheck(), h.VerifyPassword)
+	group.POST("/auth/lock", h.LockEnv)
+}
+
+// LockEnv is the Lock button (POST /auth/lock): it revokes every unlock token
+// minted for this user, as logout does. Clearing only the browser's copy left
+// the server honouring the token until its TTL, for a second tab, a copied
+// token or a script (agent-os-qxio). Open terminal and log sockets re-check
+// their token (unlockWatch) and close 4403 at the next tick.
+func (h *AuthHandler) LockEnv(c *gin.Context) {
+	if h.envUnlock != nil {
+		h.envUnlock.RevokeUser(c.GetString("userID"))
+	}
+	c.Status(http.StatusNoContent)
 }
 
 func (h *AuthHandler) Status(c *gin.Context) {
