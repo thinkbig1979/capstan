@@ -28,8 +28,10 @@ interface UseExternalFileChangeOptions<T> {
   /**
    * The env values are locked now (useEnvLockedNow). A held version fetched
    * before a lock was served unlocked, and Reload would load it into a locked
-   * view, so the lock drops it; the lock's own refetch raises the notice again
-   * with the masked file (agent-os-9wp3).
+   * view, so the lock drops it. A locked refetch does not raise the notice
+   * again (a dirty editor's rebaseWhileDirty keeps its edits over a lock
+   * change); the next unlock does, when the file it serves still differs from
+   * the editor's baseline, before a save is possible (agent-os-9wp3).
    */
   lockedNow?: boolean
 }

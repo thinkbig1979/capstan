@@ -5,8 +5,9 @@
  * in state (agent-os-vqf5, w6wx), masked on screen, and revealing one asks for
  * the unlock first. The newer file held behind the "changed on disk" notice is
  * different: it is a payload served unlocked, and Reload would load it while
- * locked, comment rows unflagged. The lock drops it; the lock's refetch raises
- * the notice again with the masked file.
+ * locked, comment rows unflagged. The lock drops it. The notice comes back at
+ * the next unlock, when the file then served still differs from the edits'
+ * baseline, before a save is possible; a locked refetch does not raise it.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { screen, waitFor, fireEvent, act } from '@testing-library/react'
@@ -90,6 +91,34 @@ describe('EnvEditor: unlocked values across a lock (agent-os-9wp3)', () => {
 
     expect(screen.queryByText(NOTICE)).toBeNull()
     expect(screen.queryAllByText('commentedvalue', { exact: false })).toHaveLength(0)
+    expect(val(1).value).toBe('typedsecret')
+  })
+
+  it('the dropped notice comes back at the next unlock, not with a locked refetch', async () => {
+    const { queryClient } = await dirtyUnlocked()
+    const changed = file('#OLD_SECRET=commentedvalue')
+    mockGetEnv.mockResolvedValue(changed)
+    await act(() => queryClient.invalidateQueries({ queryKey: queryKeys.stack.env('s1') }))
+    expect(await screen.findByText(NOTICE)).toBeInTheDocument()
+
+    mockGetEnv.mockResolvedValue({
+      hasEnvFile: true,
+      filename: '.env',
+      locked: true,
+      entries: [
+        { key: 'DB_PASSWORD', value: '', line: 1, sensitive: true },
+        { key: '', value: '#OLD_SECRET=', line: 2, sensitive: true, comment: true },
+      ],
+    })
+    act(() => useEnvUnlockStore.getState().lock())
+    await act(() => queryClient.invalidateQueries({ queryKey: queryKeys.stack.env('s1') }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Unlock' })).toBeInTheDocument())
+    expect(screen.queryByText(NOTICE)).toBeNull() // a locked refetch does not raise it
+
+    mockGetEnv.mockResolvedValue(changed)
+    act(() => useEnvUnlockStore.getState().unlock('tok'))
+    await act(() => queryClient.invalidateQueries({ queryKey: queryKeys.stack.env('s1') }))
+    expect(await screen.findByText(NOTICE)).toBeInTheDocument()
     expect(val(1).value).toBe('typedsecret')
   })
 })

@@ -120,6 +120,9 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
   const hasUnsavedChanges = content !== lastSaved
   const { changedOnDisk, reload } = useExternalFileChange(data, {
     isDirty: hasUnsavedChanges,
+    // A file held behind the notice was served unlocked: a lock drops it, as
+    // the env editors do (agent-os-9wp3).
+    lockedNow,
     hydrate: (next) => {
       // '' is an absent body (see the queryFn), not a file to load.
       if (!next.text) return
