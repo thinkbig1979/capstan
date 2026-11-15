@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { stacksApi } from '@/lib/api'
 import { useEnvUnlockStore } from '@/stores/envUnlockStore'
+import { useEnvLockedNow } from '@/hooks/useEnvLockedNow'
 import { EnvUnlockDialog } from '@/components/EnvUnlockDialog'
 import { useAuth } from '@/hooks/useAuth'
 import { useEnvHistory } from './env-editor/useEnvHistory'
@@ -49,6 +50,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   const { authDisabled } = useAuth()
   const isUnlocked = useEnvUnlockStore((s) => s.isUnlocked)
   const unlockedUntil = useEnvUnlockStore((s) => s.unlockedUntil)
+  const lockedNow = useEnvLockedNow()
   const [view, setView] = useState<'table' | 'raw'>('table')
   const [entries, setEntries] = useState<EnvEntryRow[]>([])
   const [rawContent, setRawContent] = useState('')
@@ -312,7 +314,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   // The unlock store counts too: after a lock the last payload is still the
   // unlocked one until the lock's refetch lands, and for good if it fails, so
   // the payload alone would leave the whole file on screen (agent-os-wm7t).
-  const rawHidden = locked || (!authDisabled && unlockedUntil === null)
+  const rawHidden = locked || lockedNow
   const activeView = rawHidden ? 'table' : view
 
   const refusal = saveRefused
