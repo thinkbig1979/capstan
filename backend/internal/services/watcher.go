@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -169,6 +170,12 @@ func (w *WatcherService) handleEvent(event fsnotify.Event) {
 		return
 	}
 
+	// A save through a stack's symlinked compose file lands in the link
+	// target's folder, so the stack itself fired no event (agent-os-rzpw).
+	for _, linking := range w.stacksLinkingTo(event.Name) {
+		w.scheduleRescan(linking)
+	}
+
 	dirPath := filepath.Dir(event.Name)
 
 	isRootDir := false
@@ -270,6 +277,52 @@ func (w *WatcherService) unwatchTree(path string) {
 			slog.Warn("Failed to unwatch renamed directory", "path", watched, "error", err)
 		}
 	}
+}
+
+// stacksLinkingTo returns the folders of registered stacks whose compose file
+// is a symlink resolving to changed, other than changed's own folder, sorted
+// and without repeats. The editor writes through such a link to its target
+// (handlers' resolveWriteTarget), and a host edit of the target changes the
+// stack too, yet both fire events only in the target's folder. A stack whose
+// link cannot be resolved is skipped: it is not a stack this file feeds.
+func (w *WatcherService) stacksLinkingTo(changed string) []string {
+	if w.scanner == nil || w.scanner.db == nil {
+		return nil
+	}
+	stacks, err := w.scanner.db.ListStacks()
+	if err != nil {
+		slog.Warn("Failed to list stacks to find compose files linking to a changed file", "path", changed, "error", err)
+		return nil
+	}
+	changed = filepath.Clean(changed)
+	resolvedChanged, err := filepath.EvalSymlinks(changed)
+	if err != nil {
+		// A file gone since the event (a remove, a rename away) can still be
+		// a link's target: compare its spelled path.
+		resolvedChanged = changed
+	}
+	changedDir := filepath.Dir(changed)
+	seen := make(map[string]bool)
+	var dirs []string
+	for _, stack := range stacks {
+		dir := filepath.Clean(stack.Directory)
+		if dir == changedDir || seen[dir] {
+			continue
+		}
+		composePath := filepath.Join(dir, stack.ComposeFile)
+		fi, err := os.Lstat(composePath)
+		if err != nil || fi.Mode()&os.ModeSymlink == 0 { //geterrors:ignore a compose file that cannot be read is not a link this change reaches; the rescan of its own folder reports it
+			continue
+		}
+		target, err := filepath.EvalSymlinks(composePath)
+		if err != nil || target != resolvedChanged { //geterrors:ignore a dangling or looping link feeds no stack from changed
+			continue
+		}
+		seen[dir] = true
+		dirs = append(dirs, dir)
+	}
+	sort.Strings(dirs)
+	return dirs
 }
 
 // isSameOrBelow reports whether p is dir or one of its descendants, by walking
