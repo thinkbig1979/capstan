@@ -493,6 +493,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
         locked={locked}
         saveRefused={refusal !== null}
         hiddenKeyIds={hiddenKeyIds}
+        lockedNow={lockedNow}
       />
 
       {view === 'raw' && !rawHidden && (

@@ -331,7 +331,15 @@ type EnvFilePresent = Omit<EnvResponse, 'hasEnvFile'> & { hasEnvFile: true }
  * the response shape above keeps stating that `line` is always present
  * (agent-os-tuxp).
  */
-export type EnvEntryDraft = Omit<EnvEntry, 'line'> & { line?: number }
+export type EnvEntryDraft = Omit<EnvEntry, 'line'> & {
+  line?: number
+  /**
+   * A line of a multi-line secret's body, which the server flags as sensitive
+   * in every payload, unlocked too (agent-os-9fsu). Hand-declared until the
+   * generated EnvEntry carries it.
+   */
+  bodyLine?: boolean
+}
 
 interface EnvFileAbsent {
   hasEnvFile: false

@@ -10,7 +10,9 @@ export type EditableField = 'key' | 'value'
 // ensuring handleChange / handleDelete / toggleVisible always target the right entry.
 // `keyHidden`: the row's key is secret content and is not shown, edited or
 // searched (agent-os-f3am).
-export type IndexedEnvVar = EnvRow & { _originalIndex: number; keyHidden: boolean }
+// `valueLocked`: the row's key is hidden while the session is locked, so its
+// value takes no typed text either (agent-os-9fsu F10).
+export type IndexedEnvVar = EnvRow & { _originalIndex: number; keyHidden: boolean; valueLocked?: boolean }
 
 /**
  * A variable as the form holds it: `_rowId` is a client-side identity that stays

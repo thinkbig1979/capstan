@@ -15,11 +15,13 @@ const NO_HIDDEN_KEYS: ReadonlySet<number> = new Set()
 /**
  * A bare line read without "=" (a multi-line secret's body line) is a comment
  * row whose key is its own text, so a masked one hides its key as well as its
- * value; so does a row a dirty lock found to be such a line parsed as KEY=
- * (agent-os-y6e8). A multi-line row keeps its key: that is the name.
+ * value. So does a body line the server marks `bodyLine`, one that parsed as
+ * KEY= (base64 padding) included, in every payload (agent-os-9fsu), and a row a
+ * dirty lock found to be such a line (agent-os-y6e8). A multi-line row keeps its
+ * key: that is the name.
  */
 const keyHidden = (e: EnvEntryRow, hiddenKeyIds: ReadonlySet<number>) =>
-  e.sensitive && ((e.comment === true && e.key === e.value) || hiddenKeyIds.has(e._rowId))
+  e.sensitive && ((e.comment === true && e.key === e.value) || e.bodyLine === true || hiddenKeyIds.has(e._rowId))
 
 /**
  * A row the table shows but does not edit: a comment, a line compose reads
@@ -93,6 +95,12 @@ interface EnvTableViewProps {
   saveRefused: boolean
   /** Rows whose key a dirty lock found to be secret content (agent-os-y6e8). */
   hiddenKeyIds?: ReadonlySet<number>
+  /**
+   * The unlock session has ended, whichever payload is on screen: `locked` only
+   * says the payload was served locked. A row whose key is hidden takes no typed
+   * value while either holds (agent-os-9fsu F10).
+   */
+  lockedNow?: boolean
 }
 
 export function EnvTableView({
@@ -108,6 +116,7 @@ export function EnvTableView({
   locked,
   saveRefused,
   hiddenKeyIds = NO_HIDDEN_KEYS,
+  lockedNow = false,
 }: EnvTableViewProps) {
   // A masked value is not searched, nor a hidden key: a match would tell a
   // locked user what it contains, one substring at a time (agent-os-kxag, y6e8).
@@ -129,6 +138,10 @@ export function EnvTableView({
     setQuery: setEnvQuery,
     filtered: filteredIndexed,
   } = useTextFilter(indexedEntries, searchFields)
+
+  // While locked, text typed into a row whose key is hidden would replace a
+  // value the user never saw at the next save after unlock (agent-os-9fsu F10).
+  const valueFrozen = (e: EnvEntryRow) => (locked || lockedNow) && keyHidden(e, hiddenKeyIds)
 
   if (!visible) return null
 
@@ -185,6 +198,7 @@ export function EnvTableView({
                         value={entry.value}
                         onChange={(e) => onEntryChange(i, 'value', e.target.value)}
                         placeholder={valuePlaceholder(locked, entry.sensitive, entry.value)}
+                        disabled={valueFrozen(entry)}
                         aria-label={`Environment variable value ${i + 1}`}
                       />
                       <Button
@@ -266,6 +280,7 @@ export function EnvTableView({
                     value={entry.value}
                     onChange={(e) => onEntryChange(i, 'value', e.target.value)}
                     placeholder={valuePlaceholder(locked, entry.sensitive, entry.value)}
+                    disabled={valueFrozen(entry)}
                     className="flex-1"
                     aria-label={`Environment variable value ${i + 1}`}
                   />
