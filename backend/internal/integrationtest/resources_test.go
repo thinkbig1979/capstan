@@ -241,7 +241,7 @@ func Test_Resource_ImagePrune_CountsUntaggedEntries(t *testing.T) {
 
 	// Fail here, not in the prune assertion, if the fixture stops producing a
 	// dangling image: a broken setup must not read as a prune defect.
-	danglingOut, _ := exec.Command("docker", "images", "--filter", "dangling=true", "--format", "{{.ID}}").Output() //nolint:errcheck // best-effort cleanup: a failure here is not the test's result
+	danglingOut, _ := exec.Command("docker", "images", "--filter", "dangling=true", "--format", "{{.ID}}").Output() //nolint:errcheck // a failed listing is empty, which the NotEmpty below fails on
 	t.Logf("dangling images before prune: %s", strings.TrimSpace(string(danglingOut)))
 	require.NotEmpty(t, strings.TrimSpace(string(danglingOut)),
 		"fixture must leave a dangling image before the prune")

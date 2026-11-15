@@ -255,8 +255,11 @@ linters:
       # (G204), read the fixtures they wrote under t.TempDir() (G304), and
       # chmod a fixture to provoke a write failure (G302). None of it is a
       # production child process or path. Scoped to these files and these
-      # rules, so every other gosec rule still gates there.
-      - path: 'internal/integrationtest/|_integration_test\.go$'
+      # rules, so every other gosec rule still gates there. The truth arm
+      # names that package's two tagged files only: a plain unit test named
+      # *_integration_test.go elsewhere (handlers/env_integration_test.go
+      # has no build tag) still gates on G204/G302/G304.
+      - path: 'internal/integrationtest/|internal/truth/(imagedigest|image_inspect)_integration_test\.go$'
         linters: [gosec]
         text: 'G204|G302|G304'
       # G124 (http.Cookie missing/insecure Secure/HttpOnly/SameSite attribute,
