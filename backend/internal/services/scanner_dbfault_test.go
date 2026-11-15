@@ -237,6 +237,9 @@ func TestPruneStaleStacks_HealthyNoScanDepthRow_PrunesAtDepth1(t *testing.T) {
 	seedDepth2Rows(t, db, root, parent, child)
 
 	service := NewScannerService(&config.Config{StacksDir: root, DataDir: t.TempDir()}, db)
+	// Docker answers "no containers": a gone folder whose project still has
+	// containers is kept (agent-os-jny5), and this control is about the walk.
+	service.SetContainerLister(&fakeContainerLister{})
 	buf := captureSlog(t)
 
 	require.NoError(t, service.pruneStaleStacks())

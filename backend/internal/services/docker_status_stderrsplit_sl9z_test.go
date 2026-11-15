@@ -53,9 +53,10 @@ func containerNames(containers []models.Container) []string {
 	return names
 }
 
+// Rows as composePSFormat prints them (agent-os-rnba).
 const (
-	rowWeb = `{"ID":"abc","Name":"proj-web-1","Service":"web","State":"running","Health":"","Image":"nginx:latest","Ports":""}`
-	rowDB  = `{"ID":"def","Name":"proj-db-1","Service":"db","State":"running","Health":"healthy","Image":"postgres:15","Ports":""}`
+	rowWeb = `{"row":{"ID":"abc","Name":"proj-web-1","Service":"web","State":"running","Health":"","Image":"nginx:latest","Ports":""},"oneoff":"False"}`
+	rowDB  = `{"row":{"ID":"def","Name":"proj-db-1","Service":"db","State":"running","Health":"healthy","Image":"postgres:15","Ports":""},"oneoff":"False"}`
 )
 
 // TestStatus_PositiveControl_NoStderr is the control: the same harness, the

@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -86,8 +87,9 @@ func TestScannerEpc5_ScanAllDeletesTheRemovedFilesRow(t *testing.T) {
 	require.Equal(t, []string{"compose.yaml"}, composeFilesIn(t, s, app))
 }
 
-// fakeContainerLister answers GetContainerList from containers/err, or blocks
-// until release is closed when release is set. calls counts lookups.
+// fakeContainerLister answers GetContainerListCtx from containers/err, or
+// blocks until release is closed or ctx ends when release is set, the way a
+// real client gives up at its deadline. calls counts lookups.
 type fakeContainerLister struct {
 	mu         sync.Mutex
 	containers []models.Container
@@ -96,13 +98,17 @@ type fakeContainerLister struct {
 	calls      int
 }
 
-func (f *fakeContainerLister) GetContainerList(string) ([]models.Container, error) {
+func (f *fakeContainerLister) GetContainerListCtx(ctx context.Context, _ string) ([]models.Container, error) {
 	f.mu.Lock()
 	f.calls++
 	release := f.release
 	f.mu.Unlock()
 	if release != nil {
-		<-release
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 	return f.containers, f.err
 }

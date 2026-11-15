@@ -62,7 +62,7 @@ func TestStackEventFor_SharedProjectNameIsUnassociatedAtWarn(t *testing.T) {
 	buf := u2CaptureLogs(t)
 	s := &MonitorService{db: z91e19SharedProjectDB(t)}
 
-	ev, ok := s.stackEventFor("start", u2Ctr, "shared", ts)
+	ev, ok := s.stackEventFor("start", u2Ctr, "shared", false, ts)
 	log := buf.String()
 
 	require.True(t, ok)
@@ -72,7 +72,7 @@ func TestStackEventFor_SharedProjectNameIsUnassociatedAtWarn(t *testing.T) {
 	assert.Contains(t, log, "shared by more than one stack")
 
 	// Other side: a unique name is attributed.
-	ev, ok = s.stackEventFor("start", u2Ctr, "solo", ts)
+	ev, ok = s.stackEventFor("start", u2Ctr, "solo", false, ts)
 	require.True(t, ok)
 	assert.Equal(t, "s-solo", ev.StackID)
 }
