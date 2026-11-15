@@ -682,7 +682,12 @@ func parseComposePSOutput(output []byte) (string, []models.Container, error) {
 			Row    json.RawMessage `json:"row"`
 			OneOff string          `json:"oneoff"`
 		}
-		if err := json.Unmarshal([]byte(line), &psLine); err != nil || psLine.Row == nil {
+		if err := json.Unmarshal([]byte(line), &psLine); err != nil {
+			continue
+		}
+		// Valid JSON with no row is not a compose ps row (a JSON log line on
+		// stderr, agent-os-sl9z).
+		if psLine.Row == nil {
 			continue
 		}
 		if psLine.OneOff == "True" {
