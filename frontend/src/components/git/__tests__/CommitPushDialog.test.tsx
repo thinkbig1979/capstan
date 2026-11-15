@@ -9,6 +9,7 @@ import userEvent from '@testing-library/user-event'
 import { QueryClient } from '@tanstack/react-query'
 import { renderWithProviders } from '../../../test/utils'
 import type { GitChange, GitChangesResult } from '@/types/generated'
+import { useEnvUnlockStore } from '@/stores/envUnlockStore'
 
 const mockChanges = vi.fn()
 const mockChangesDiff = vi.fn()
@@ -71,6 +72,9 @@ async function typeMessage(text: string) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // Unlocked: a locked session cannot commit (agent-os-xmbg,
+  // CommitPushDialog.locked-commit.test.tsx), and these tests are about commits.
+  useEnvUnlockStore.getState().unlock('test-token')
   mockChanges.mockResolvedValue(changesResult())
   mockChangesDiff.mockResolvedValue({ path: 'compose.yaml', hidden: false, diff: DIFF })
 })

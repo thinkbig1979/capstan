@@ -26,7 +26,8 @@ import (
 // that restore, prune or initialise a repository, use it too (agent-os-h71i): a locked session that could point
 // the repository at a place it controls would read every stack's .env.
 //
-// A git pull uses it too (agent-os-hblm): it lands the remote's text in a
+// A git commit uses it too (agent-os-xmbg): its message is masked in a
+// locked log. A git pull uses it too (agent-os-hblm): it lands the remote's text in a
 // stack folder, which a locked view then masks. The git credential writes use
 // it too (agent-os-mu4z): the global SSH key,
 // HTTPS user and token, and a folder's own credentials.

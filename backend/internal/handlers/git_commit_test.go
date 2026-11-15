@@ -139,8 +139,10 @@ func (e *gitWriteEnv) doUnlocked(t *testing.T, method, path, body string) *httpt
 	return w
 }
 
+// commit commits from an unlocked session: a locked commit is refused
+// (agent-os-xmbg, git_commit_locked_xmbg_test.go).
 func (e *gitWriteEnv) commit(t *testing.T, body string) *httptest.ResponseRecorder {
-	return e.do(t, http.MethodPost, "/api/git/commit", body)
+	return e.doUnlocked(t, http.MethodPost, "/api/git/commit", body)
 }
 
 func (e *gitWriteEnv) head(t *testing.T) string { return k81pGit(t, e.top, "rev-parse", "HEAD") }
@@ -279,7 +281,7 @@ func TestCommitPathContainment(t *testing.T) {
 	}
 
 	t.Run("a write names a stack, never a directory", func(t *testing.T) {
-		requireGitCode(t, e.do(t, http.MethodPost, "/api/git/commit?dir=repo/app", `{"message":"m","files":["app/compose.yaml"]}`),
+		requireGitCode(t, e.doUnlocked(t, http.MethodPost, "/api/git/commit?dir=repo/app", `{"message":"m","files":["app/compose.yaml"]}`),
 			http.StatusBadRequest, models.ErrValidation)
 		requireGitCode(t, e.do(t, http.MethodGet, "/api/git/changes?dir=repo/app", ""), http.StatusBadRequest, models.ErrValidation)
 		requireGitCode(t, e.do(t, http.MethodPost, "/api/git/push", `{"stackId":"missing"}`), http.StatusNotFound, models.ErrStackNotFound)

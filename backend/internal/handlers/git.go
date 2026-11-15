@@ -408,6 +408,13 @@ func (h *GitHandler) GetChangeDiff(c *gin.Context) {
 // Commit commits the ticked files of a stack's folder, and pushes when asked
 // (POST /git/commit).
 func (h *GitHandler) Commit(c *gin.Context) {
+	// The message is the caller's own text, and a locked log or diff masks
+	// it with the stack's secrets (agent-os-xmbg): a locked commit of a list
+	// of guesses would read back with the secret's position starred
+	// (agent-os-ly6i).
+	if refuseLocked(c, "commit", lockedEchoReason) {
+		return
+	}
 	var req gitCommitRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		handleError(c, models.NewAppError(http.StatusBadRequest, models.ErrValidation, "Invalid request body"))

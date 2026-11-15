@@ -13,6 +13,8 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { LoadFailedNotice } from '@/components/LoadFailedNotice'
+import { EnvLockedNotice } from '@/components/EnvLockedNotice'
+import { EnvUnlockDialog } from '@/components/EnvUnlockDialog'
 import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 import { ParsedDiffView } from '@/components/git/DiffViewer'
 import { useEnvLockedNow } from '@/hooks/useEnvLockedNow'
@@ -20,6 +22,7 @@ import { useGitChanges, useGitChangesDiff, useGitCommit, useGitPush } from '@/ho
 import { isActionResult } from '@/lib/action-result'
 import type { GitCommitResult, GitPushResult } from '@/lib/api'
 import { causeOf } from '@/lib/error-handler'
+import { LOCKED_COMMIT_NOTICE } from '@/lib/locked-copy'
 import { stringOr } from '@/lib/narrow'
 import type { GitChange, GitChangesResult } from '@/types/generated'
 
@@ -289,6 +292,9 @@ function ChangesForm({ stackId, composeFile, result, busy, onCommit, onPush }: C
   const [selected, setSelected] = useState<string | null>(
     () => compose ?? changes.find((c) => !c.isEnv)?.path ?? null,
   )
+  // Locked, the server refuses a commit (agent-os-xmbg); a push stays allowed.
+  const locked = useEnvLockedNow()
+  const [unlockOpen, setUnlockOpen] = useState(false)
 
   const toggle = (path: string) => {
     const next = new Set(ticked)
@@ -304,7 +310,7 @@ function ChangesForm({ stackId, composeFile, result, busy, onCommit, onPush }: C
   const canPush = result.pushEnabled && !result.detached && result.hasUpstream
   const envTicked = changes.some((c) => c.isEnv && ticked.has(c.path))
   const messageBlank = message.trim() === ''
-  const ready = canCommit && ticked.size > 0 && !messageBlank && (!envTicked || envConfirmed) && !busy
+  const ready = canCommit && !locked && ticked.size > 0 && !messageBlank && (!envTicked || envConfirmed) && !busy
 
   const submit = (withPush: boolean) => {
     if (!ready || (withPush && !canPush)) return
@@ -398,6 +404,11 @@ function ChangesForm({ stackId, composeFile, result, busy, onCommit, onPush }: C
           </div>
         </>
       )}
+
+      {locked && changes.length > 0 && (
+        <EnvLockedNotice onUnlock={() => setUnlockOpen(true)}>{LOCKED_COMMIT_NOTICE}</EnvLockedNotice>
+      )}
+      <EnvUnlockDialog open={unlockOpen} onOpenChange={setUnlockOpen} />
 
       <div className="flex flex-wrap justify-end gap-2">
         {showPush && (

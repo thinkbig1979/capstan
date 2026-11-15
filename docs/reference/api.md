@@ -283,6 +283,8 @@ caller's own text through that masking are refused without a live token, with
 - `POST /api/v1/stacks` (create)
 - `POST /api/v1/stacks/:id/env` when the body carries content; an empty create
   carries no text and is still allowed
+- `POST /api/v1/git/commit`: a locked log or diff masks the commit message with
+  the stack's secrets (agent-os-xmbg). Push is still allowed
 
 The refusal comes before the lint, the operation lock and any read of the
 disk, so its body is the same whatever the request held. A locked caller can

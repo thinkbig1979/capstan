@@ -42,6 +42,13 @@ export const LOCKED_FOLDER_CREDENTIALS_NOTICE =
 export const LOCKED_PULL_NOTICE =
   "Env values are locked. Pulling needs an unlock, because a pull writes the remote's files into your stacks and a redeploy runs them."
 
+/**
+ * Why Commit is off while locked (agent-os-xmbg): a locked log masks the
+ * commit message with the stack's secrets, so the server refuses a commit.
+ */
+export const LOCKED_COMMIT_NOTICE =
+  'Env values are locked. Committing needs an unlock, because the history masks commit messages with your secrets. Pushing stays available.'
+
 /** Tooltip on a credential control disabled while locked. */
 export const LOCKED_CREDENTIAL_TITLE = 'Unlock env values to change this'
 

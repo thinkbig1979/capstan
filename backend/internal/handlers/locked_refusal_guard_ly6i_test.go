@@ -41,6 +41,9 @@ var lockedRefusalSinks = map[string]bool{
 // reached through a field not named git is not seen.
 var lockedRefusalFieldSinks = map[string]bool{
 	"git.PullVerified": true,
+	// agent-os-xmbg: a commit lands the caller's message where a locked log
+	// masks it.
+	"git.CommitVerified": true,
 }
 
 // lockedSettingKeys are the settings a locked session must not write
@@ -149,7 +152,7 @@ func TestLockedRefusalGuard_ly6i(t *testing.T) {
 		"backup.go:repoInit", "backup.go:updateSettings",
 		"settings.go:UpdateGitSettings", "directories.go:UpdateCredentials",
 		"env.go:Put", "settings.go:UpdateGlobalEnv", "git.go:Pull",
-		"backup.go:upsertPolicy", "backup.go:deletePolicy",
+		"backup.go:upsertPolicy", "backup.go:deletePolicy", "git.go:Commit",
 	} {
 		assert.Contains(t, inScope, want)
 	}
