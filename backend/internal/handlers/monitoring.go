@@ -69,6 +69,19 @@ func (h *MonitoringHandler) getStackContainers(jwtSecret string, authDisabled bo
 	}
 }
 
+// metricsLookupBound caps each container lookup the metrics WebSocket makes.
+// The socket's ctx ends only when the handler returns and the Docker client
+// has no HTTP timeout, so without it a daemon that never answers parks the
+// handler and its socket slot until it does (agent-os-tk2q review F1).
+var metricsLookupBound = 10 * time.Second
+
+// containersForStack is GetContainersForStack bounded by metricsLookupBound.
+func (h *MonitoringHandler) containersForStack(ctx context.Context, projectName string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, metricsLookupBound)
+	defer cancel()
+	return h.monitor.GetContainersForStack(ctx, projectName)
+}
+
 func (h *MonitoringHandler) handleMetricsWebSocket(jwtSecret string, authDisabled bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		stackID := c.Param("id")
@@ -107,7 +120,7 @@ func (h *MonitoringHandler) handleMetricsWebSocket(jwtSecret string, authDisable
 
 		go safePingLoop(ctx, conn, DefaultPingInterval)
 
-		containerIDs, err := h.monitor.GetContainersForStack(ctx, stack.ProjectName)
+		containerIDs, err := h.containersForStack(ctx, stack.ProjectName)
 		if err != nil {
 			slog.Error("Failed to get containers for stack", "stackId", stackID, "error", err)
 			// safePingLoop is already running on this connection (started
@@ -201,7 +214,7 @@ func (h *MonitoringHandler) handleMetricsWebSocket(jwtSecret string, authDisable
 					// initial GetContainersForStack error path above still owns
 					// the "refuse before streaming" behaviour for a genuine
 					// setup failure).
-					ids, err := h.monitor.GetContainersForStack(ctx, stack.ProjectName)
+					ids, err := h.containersForStack(ctx, stack.ProjectName)
 					if err == nil && len(ids) > 0 {
 						// The host stopped being empty: leave this branch with
 						// the now-populated list and fall through to the real
