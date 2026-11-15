@@ -101,8 +101,12 @@ func TestMaskSecrets_n30e_LongTailLineMasksInLinearTime(t *testing.T) {
 
 // A tail value whose quote does not close on its line is masked to the
 // line's end (review mutant m7: base showed it).
+// The lines after a quote that never closes are masked too since
+// agent-os-f3a5 (fail closed): where the value ends is unknown, as the locked
+// env view's hideMultilineBodies and the secret list (sensitiveEnvValues)
+// already read it. A blank line stays blank.
 func TestMaskSecrets_n30e_OpenTailQuoteMasked(t *testing.T) {
 	out, _ := MaskSecrets("NOTES=\"a\" DB_PASSWORD=\"SEKRIT\nB=1\n", "stack/.env", nil)
 	assert.NotContains(t, out, "SEKRIT", "%q", out)
-	assert.Contains(t, out, "\nB=1\n")
+	assert.Equal(t, "NOTES=\"a\" DB_PASSWORD=\"***\n***\n", out)
 }

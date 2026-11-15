@@ -72,8 +72,11 @@ func MaskSecrets(text, filePath string, secrets []string) (string, int) {
 	}
 	m := &lineMasker{lines: strings.Split(text, "\n")}
 	m.masked = make([]bool, len(m.lines))
+	orig := append([]string(nil), m.lines...)
 
-	if ext := strings.ToLower(path.Ext(filePath)); ext == ".yml" || ext == ".yaml" {
+	ext := strings.ToLower(path.Ext(filePath))
+	isYAML := ext == ".yml" || ext == ".yaml"
+	if isYAML {
 		m.yamlPass(text)
 	}
 	m.linePass()
@@ -99,6 +102,9 @@ func MaskSecrets(text, filePath string, secrets []string) (string, int) {
 		if !m.masked[i] {
 			m.maskEnvTail(i)
 		}
+	}
+	if !isYAML {
+		m.envQuotePass(orig)
 	}
 	return strings.Join(m.lines, "\n"), m.count
 }
@@ -487,12 +493,18 @@ func (m *lineMasker) maskLeadKey(i int) {
 // not close on the line is masked to the line's end. A reference or an
 // already masked value stays as it is.
 func (m *lineMasker) maskEnvTail(i int) {
+	m.maskStatements(i, envTailStatements(m.lines[i]))
+}
+
+// maskStatements masks the value of each sensitive statement of sts, read
+// from line i as it stands; an open one is masked to the line's end.
+func (m *lineMasker) maskStatements(i int, sts []envStatement) {
 	line := m.lines[i]
 	// The line is built once, left to right: a splice per statement made a
 	// long line of statements quadratic.
 	var b strings.Builder
 	last, masked, openAt := 0, 0, -1
-	for _, st := range envTailStatements(line) {
+	for _, st := range sts {
 		v := line[st.start:st.end]
 		if v == "" || v == secretMask || isSecretReference(v) || (!IsSensitiveEnvKey(st.key) && !HasURLUserinfo(v)) {
 			continue
@@ -518,6 +530,63 @@ func (m *lineMasker) maskEnvTail(i int) {
 	}
 }
 
+// envQuotePass masks what an env-style file holds across lines, as compose
+// reads it (agent-os-f3a5): the body of a sensitive quoted value that does
+// not close on its line, up to its closing quote, or to the end of the text
+// when it never closes (fail closed); the statements on the line that closes
+// a value, after its quote (`b" API_TOKEN: x`); and each line's first
+// statement read compose's way, so `API_TOKEN:x` is one. Where a value is
+// open is read from orig, the text before any pass; masking reads the line as
+// it stands, so it only ever adds to the passes before it. Not for YAML,
+// whose quotes and indentation the YAML pass reads.
+func (m *lineMasker) envQuotePass(orig []string) {
+	inBody, sensitive := false, false
+	var q byte
+	for i := range orig {
+		pos, cur := 0, m.lines[i]
+		if inBody {
+			c := envClosingQuote(orig[i], 0, q)
+			if c < 0 {
+				if sensitive && !m.masked[i] && strings.TrimSpace(orig[i]) != "" {
+					m.lines[i], m.masked[i] = secretMask, true
+				}
+				continue
+			}
+			inBody = false
+			if sensitive && !m.masked[i] {
+				// The line as it stands may have lost the quote to a mask.
+				if cc := envClosingQuote(cur, 0, q); cc >= 0 {
+					m.lines[i] = secretMask + cur[cc:]
+				} else {
+					m.lines[i], m.masked[i] = secretMask, true
+				}
+			}
+			pos = c + 1
+		}
+		sts := envStatementsFrom(orig[i], pos)
+		if !m.masked[i] {
+			start := pos
+			if pos > 0 {
+				start = -1
+				if cc := envClosingQuote(m.lines[i], 0, q); cc >= 0 {
+					start = cc + 1
+				}
+			}
+			if start >= 0 {
+				m.maskStatements(i, envStatementsFrom(m.lines[i], start))
+			}
+		}
+		if n := len(sts); n > 0 && sts[n-1].open {
+			last := sts[n-1]
+			inBody, q = true, last.quote
+			sensitive = IsSensitiveEnvKey(last.key) || HasURLUserinfo(orig[i][last.start:])
+			if sensitive {
+				m.count++
+			}
+		}
+	}
+}
+
 // envStatement is a statement compose reads on an env line: its key, and
 // where its value sits in the line, quotes excluded.
 type envStatement struct {
@@ -538,9 +607,18 @@ type envStatement struct {
 // a "#" comment has none. An unquoted value runs to the line's end or to
 // " #", as compose reads it. One pass along the line.
 func envTailStatements(line string) []envStatement {
+	if sts := envStatementsFrom(line, 0); len(sts) > 1 {
+		return sts[1:]
+	}
+	return nil
+}
+
+// envStatementsFrom returns every statement compose reads on line from byte
+// pos on, the first included: a quoted one that never closes is returned
+// open, an unquoted one ends the line.
+func envStatementsFrom(line string, pos int) []envStatement {
 	var out []envStatement
-	pos := 0
-	for first := true; ; first = false {
+	for {
 		sep := strings.IndexAny(line[pos:], "=:")
 		if sep == -1 {
 			return out
@@ -552,28 +630,20 @@ func envTailStatements(line string) []envStatement {
 			vs++
 		}
 		if vs == len(line) || (line[vs] != '"' && line[vs] != '\'') {
-			if !first {
-				end := len(line)
-				if c := strings.Index(line[vs:], " #"); c != -1 {
-					end = vs + c
-				}
-				st.start, st.end = vs, vs+len(strings.TrimRightFunc(line[vs:end], unicode.IsSpace))
-				out = append(out, st)
+			end := len(line)
+			if c := strings.Index(line[vs:], " #"); c != -1 {
+				end = vs + c
 			}
-			return out
+			st.start, st.end = vs, vs+len(strings.TrimRightFunc(line[vs:end], unicode.IsSpace))
+			return append(out, st)
 		}
 		st.quote, st.start = line[vs], vs+1
 		st.end = envClosingQuote(line, st.start, st.quote)
 		if st.end == -1 {
-			if !first {
-				st.end, st.open = len(line), true
-				out = append(out, st)
-			}
-			return out
+			st.end, st.open = len(line), true
+			return append(out, st)
 		}
-		if !first {
-			out = append(out, st)
-		}
+		out = append(out, st)
 		pos = st.end + 1
 		if rest := strings.TrimLeftFunc(line[pos:], unicode.IsSpace); rest == "" || rest[0] == '#' {
 			return out
