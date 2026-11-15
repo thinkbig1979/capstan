@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -113,6 +114,10 @@ func (w *WatcherService) watchLoop() {
 }
 
 func (w *WatcherService) handleEvent(event fsnotify.Event) {
+	if event.Op&fsnotify.Rename == fsnotify.Rename {
+		w.unwatchTree(event.Name)
+	}
+
 	// A new directory is handled BEFORE the filename filter: the filter is for
 	// files, and a folder named `newstack` fails it, so it was never watched
 	// and edits inside it triggered no rescan (agent-os-3uu8).
@@ -189,6 +194,43 @@ func (w *WatcherService) watchNewDir(path string) {
 		if !entry.IsDir() && w.shouldProcessEvent(entry.Name()) {
 			w.scheduleRescan(path)
 			return
+		}
+	}
+}
+
+// unwatchTree drops the watch on a path that was renamed away, and on every
+// watched path below it, before the paired Create for the new name is handled
+// (agent-os-cglx). A moved folder keeps its inode, so inotify hands Add(new)
+// the old watch descriptor; fsnotify then reuses the old entry, and its own
+// IN_MOVE_SELF cleanup later removes that shared kernel watch, leaving the new
+// name unwatched. fsnotify delivers the Rename for the old name before it
+// reads the Create for the new one (the Events channel is unbuffered), so
+// removing here always runs first and the Add gets a fresh descriptor. A
+// renamed file, or a path fsnotify already dropped, is not watched: that
+// ErrNonExistentWatch is expected.
+func (w *WatcherService) unwatchTree(path string) {
+	path = filepath.Clean(path)
+	for _, watched := range w.watcher.WatchList() {
+		if !isSameOrBelow(watched, path) {
+			continue
+		}
+		if err := w.watcher.Remove(watched); err != nil && !errors.Is(err, fsnotify.ErrNonExistentWatch) {
+			slog.Warn("Failed to unwatch renamed directory", "path", watched, "error", err)
+		}
+	}
+}
+
+// isSameOrBelow reports whether p is dir or one of its descendants, by walking
+// p's parents. It compares the watcher's own stored watch paths, not a
+// containment decision on user input: the renamed-away path no longer exists,
+// so a resolving check (pathutil.IsContained) cannot answer.
+func isSameOrBelow(p, dir string) bool {
+	for p = filepath.Clean(p); ; p = filepath.Dir(p) {
+		if p == dir {
+			return true
+		}
+		if filepath.Dir(p) == p {
+			return false
 		}
 	}
 }
