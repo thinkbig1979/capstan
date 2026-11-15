@@ -254,24 +254,41 @@ func TestPullSiblings_OutsideFolderLinkRetargetedIn_vysd(t *testing.T) {
 			{id: "B", dir: "stackB", compose: "compose.yaml"},
 		}
 		outside := t.TempDir()
-		if err := os.WriteFile(filepath.Join(outside, "compose.yaml"), []byte(composeOld4d60), 0o600); err != nil {
+		if err := os.MkdirAll(filepath.Join(outside, "sub"), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		for name, from := range map[string]string{"live outside target": outside, "dangling outside target": "/nonexistent-vysd/stack"} {
-			got := run4d60(t, pull4d60{
-				lock:  lock,
-				files: folderFiles9ut3, changes: map[string]string{},
-				stacks: stacks, pullDir: "plain",
-				prep: func(t *testing.T, work string) {
-					seedLinks(t, work, map[string]string{"stackB": from}, true)
-					seedLinks(t, work, map[string]string{"stackB": "folderY"}, false)
-				},
-			})
-			if len(got.pr.ChangedFiles) != 1 || got.pr.ChangedFiles[0] != "stackB" {
-				t.Fatalf("%s: ChangedFiles = %q, want [stackB]", name, got.pr.ChangedFiles)
+		for _, f := range []string{"compose.yaml", "sub/compose.yaml"} {
+			if err := os.WriteFile(filepath.Join(outside, f), []byte(composeOld4d60), 0o600); err != nil {
+				t.Fatal(err)
 			}
-			if ids := siblingIDs9ut3(t, got); len(ids) != 1 || ids[0] != "B" || got.ar.Details["siblingCheckFailures"] != nil {
-				t.Fatalf("%s: siblingStacksChanged = %v, want [B]; outcome=%s details=%v", name, ids, got.ar.Outcome, got.ar.Details)
+		}
+		files := map[string]string{"folderY/sub/compose.yaml": composeNew4d60}
+		for k, v := range folderFiles9ut3 {
+			files[k] = v
+		}
+		// The stack folder is the link itself (stackB), or lies under it
+		// (stackB/sub: the link is an ancestor, not the parent; review
+		// rv-dm-gitpull F1). On the locked path siblings=[B] also proves B
+		// was locked: only lockRepoStacks' list is placed before the pull.
+		for _, dir := range []string{"stackB", "stackB/sub"} {
+			stacks := []stack4d60{stacks[0], {id: "B", dir: dir, compose: "compose.yaml"}}
+			for name, from := range map[string]string{"live outside target": outside, "dangling outside target": "/nonexistent-vysd/stack"} {
+				name := dir + ", " + name
+				got := run4d60(t, pull4d60{
+					lock:  lock,
+					files: files, changes: map[string]string{},
+					stacks: stacks, pullDir: "plain",
+					prep: func(t *testing.T, work string) {
+						seedLinks(t, work, map[string]string{"stackB": from}, true)
+						seedLinks(t, work, map[string]string{"stackB": "folderY"}, false)
+					},
+				})
+				if len(got.pr.ChangedFiles) != 1 || got.pr.ChangedFiles[0] != "stackB" {
+					t.Fatalf("%s: ChangedFiles = %q, want [stackB]", name, got.pr.ChangedFiles)
+				}
+				if ids := siblingIDs9ut3(t, got); len(ids) != 1 || ids[0] != "B" || got.ar.Details["siblingCheckFailures"] != nil {
+					t.Fatalf("%s: siblingStacksChanged = %v, want [B]; outcome=%s details=%v", name, ids, got.ar.Outcome, got.ar.Details)
+				}
 			}
 		}
 
@@ -310,4 +327,40 @@ func TestPullRedeploy_FolderLinkRetargetedOut_vysd(t *testing.T) {
 			t.Fatalf("err = %v, want the post-pull HEAD read to fail outside the repository", got.ar.Err)
 		}
 	})
+}
+
+// stackInRepo: a stack folder is a member when it resolves inside top or when
+// ANY of its own path's ancestors inside top is an entry of top, however deep
+// the link sits (review rv-dm-gitpull F1).
+func TestStackInRepoAncestorLink_7xpm(t *testing.T) {
+	top := t.TempDir()
+	out := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(out, "a", "b"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(out, filepath.Join(top, "L")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/nonexistent-7xpm", filepath.Join(top, "D")); err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]bool{
+		top:                               true,  // top itself
+		filepath.Join(top, "L"):           true,  // the link
+		filepath.Join(top, "L", "a"):      true,  // under the link
+		filepath.Join(top, "L", "a", "b"): true,  // two levels under
+		filepath.Join(top, "D", "x", "y"): true,  // under a dangling link
+		filepath.Join(top, "new", "f"):    true,  // not yet existing
+		filepath.Join(out, "a"):           false, // unrelated outside folder
+		filepath.Join(filepath.Dir(top)):  false, // top's parent
+	}
+	for dir, want := range cases {
+		got, err := stackInRepo(top, dir)
+		if err != nil {
+			t.Fatalf("%s: %v", dir, err)
+		}
+		if got != want {
+			t.Errorf("stackInRepo(top, %s) = %v, want %v", dir, got, want)
+		}
+	}
 }

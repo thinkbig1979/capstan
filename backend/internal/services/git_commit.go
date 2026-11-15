@@ -689,12 +689,13 @@ func parsePorcelainV2(out, token string) ([]porcelainEntry, error) {
 }
 
 // stackInRepo reports whether a stack folder is a member of the repository at
-// top: it resolves inside top, or its own entry (the folder, or the link that
-// names it) lies inside top. git tracks a folder link as a link, so a pull can
-// retarget one that points outside today (agent-os-7xpm, agent-os-vysd). The
-// union over-locks rather than under-locks: a folder that IS top has its
-// parent outside, and a folder registered outside that links in reads the
-// repository's files.
+// top: it resolves inside top, or an entry on its own path (the folder, or any
+// folder above it, which may be the link that names it) lies inside top. git
+// tracks a folder link as a link, so a pull can retarget one that points
+// outside today, however far above the stack folder it sits (agent-os-7xpm,
+// agent-os-vysd, review rv-dm-gitpull F1). The union over-locks rather than
+// under-locks: a folder that IS top has its parent outside, and a folder
+// registered outside that links in reads the repository's files.
 func stackInRepo(top, dir string) (bool, error) {
 	in, err := pathutil.IsContained(top, dir)
 	if err != nil {
@@ -703,7 +704,22 @@ func stackInRepo(top, dir string) (bool, error) {
 	if in {
 		return true, nil
 	}
-	return inFolder(top, filepath.Clean(dir))
+	// Every lexical ancestor up to the filesystem root: inFolder resolves
+	// each one's parent, so an entry of top anywhere on the path is found.
+	for a := filepath.Clean(dir); ; {
+		entry, err := inFolder(top, a)
+		if err != nil {
+			return false, err
+		}
+		if entry {
+			return true, nil
+		}
+		parent := filepath.Dir(a)
+		if parent == a {
+			return false, nil
+		}
+		a = parent
+	}
 }
 
 // inFolder reports whether abs lies inside dirPath. The PARENT is resolved,
