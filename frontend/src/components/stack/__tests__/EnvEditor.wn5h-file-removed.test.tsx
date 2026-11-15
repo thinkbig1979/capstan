@@ -8,6 +8,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { screen, waitFor, fireEvent, act } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '../../../test/utils'
 import { useEnvUnlockStore } from '@/stores/envUnlockStore'
 import { useAuthStore } from '@/stores/authStore'
@@ -48,6 +49,7 @@ let queryClient: ReturnType<typeof renderWithProviders>['queryClient']
 
 const input = (n: number) => screen.getAllByLabelText(`Environment variable value ${n}`)[0] as HTMLInputElement
 const saveButton = () => screen.getAllByRole('button', { name: /^Save$/ })[0] as HTMLButtonElement
+const rawText = () => screen.getByPlaceholderText('KEY=value') as HTMLTextAreaElement
 
 /** PORT edited to 9090, then the file removed on disk: the edits are held. */
 async function editThenRemove() {
@@ -115,6 +117,24 @@ describe('EnvEditor: the env file removed on disk under unsaved edits (agent-os-
 
     await waitFor(() => expect(screen.queryByLabelText('Environment variable value 1')).not.toBeInTheDocument())
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('wn5h: the Raw save is refused too while the file is removed', async () => {
+    ;({ queryClient } = renderWithProviders(<EnvEditor stackId="s1" />))
+    await waitFor(() => expect(input(1).value).toBe('8080'))
+    await userEvent.setup().click(screen.getByRole('tab', { name: 'Raw Editor' }))
+    fireEvent.change(rawText(), { target: { value: 'PORT=9090\nTZ=UTC\n' } })
+
+    await serve(NO_FILE)
+    await afterATick()
+
+    expect(rawText().value).toBe('PORT=9090\nTZ=UTC\n')
+    expect(screen.getByRole('alert')).toHaveTextContent(/removed/)
+    const rawSave = screen.getAllByRole('button', { name: /^Save$/ }).at(-1) as HTMLButtonElement
+    expect(rawSave).toBeDisabled()
+    fireEvent.click(rawSave)
+    await afterATick()
+    expect(mockUpdateEnv).not.toHaveBeenCalled()
   })
 
   // Review F1: restoring the file is the natural way out of the notice. It must
