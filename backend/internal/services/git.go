@@ -568,6 +568,11 @@ type redactedError struct {
 }
 
 func (e *redactedError) Error() string { return e.msg }
+
+// Unwrap hands back the UNMASKED chain, so errors.Is and gitExitCode keep
+// working. errors.As for any type other than *models.AppError reaches the
+// original through it: no renderer may read a field of such a type off a
+// redactErr result, or the token in it is shown (review rv-dm-gitpull F4).
 func (e *redactedError) Unwrap() error { return e.err }
 
 // As answers errors.As for an AppError with the masked copy. errors.As asks
