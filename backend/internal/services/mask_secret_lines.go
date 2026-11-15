@@ -954,13 +954,35 @@ func (m *lineMasker) newLineWalk(line string) *lineWalk {
 }
 
 // mask records [a, b) as replaced by repl and returns where the scan goes
-// on: the end of the (possibly widened) span.
+// on: b, the end of the value as matched, not of the span widened to a
+// needle. A needle can run on into the next token, and resuming at its end
+// skipped that token's key, so a sensitive value after it showed (review
+// round 3 of run/maskfu, N1). A span that overlaps the one before it (only
+// a widened one can reach that far) is merged into it, so apply still sees
+// sorted, disjoint spans.
 func (w *lineWalk) mask(a, b int, repl string) int {
+	end := b
 	if wa, wb, widened := widenToRuns(w.runs, a, b); widened {
 		a, b, repl = wa, wb, secretMask
 	}
+	for n := len(w.spans); n > 0 && a < w.spans[n-1].b; n = len(w.spans) {
+		last := w.spans[n-1]
+		a, b, repl = min(a, last.a), max(b, last.b), secretMask
+		w.spans = w.spans[:n-1]
+	}
 	w.spans = append(w.spans, lineSpan{a, b, repl})
-	return b
+	return end
+}
+
+// cutFrom drops the recorded spans that reach past col and returns where a
+// mask to the line's end must start to cover them too: col, or the start of
+// the first span dropped.
+func (w *lineWalk) cutFrom(col int) int {
+	for n := len(w.spans); n > 0 && w.spans[n-1].b > col; n = len(w.spans) {
+		col = min(col, w.spans[n-1].a)
+		w.spans = w.spans[:n-1]
+	}
+	return col
 }
 
 // apply writes the recorded masks into line i, counts one per mask, and
@@ -1031,8 +1053,12 @@ func (m *lineMasker) maskFlowTokens(i int) {
 		}
 		return w.mask(start, end, repl), false
 	})
-	// An open quote is masked to the line's end, after the masks before it
-	// (all of which end before it).
+	// An open quote is masked to the line's end, after the masks before it.
+	// A mask widened to a needle can reach past it: the mask to the end then
+	// starts where that one did.
+	if openAt >= 0 {
+		openAt = w.cutFrom(openAt)
+	}
 	delta := w.apply(m, i)
 	if openAt >= 0 {
 		m.maskFrom(i, openAt+delta)
