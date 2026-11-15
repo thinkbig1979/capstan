@@ -77,10 +77,12 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   const [hiddenKeyIds, setHiddenKeyIds] = useState<ReadonlySet<number>>(NO_REDACTED_ROWS)
   // Rows the user edited or deleted while the locked view hid them (agent-os-yt2f
   // review S1, S2), with the unlocked rows they were lined up with. Save stays
-  // refused while any of them does not hold its real content.
+  // refused while any of them holds neither its real content nor what the user
+  // last typed into it with its value in view (`informed`, agent-os-ocnh).
   const [blindGuard, setBlindGuard] = useState<{
     ids: ReadonlySet<number>
     aligned: ReadonlyMap<number, { key: string; value: string }>
+    informed: ReadonlyMap<number, { key: string; value: string }>
   } | null>(null)
   const [showEnvSection, setShowEnvSection] = useState(false)
   const nextRowId = useNextRowId()
@@ -258,7 +260,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
       // (locked again, unlocked again) keeps the guard it set.
       if (aligned.size > 0) {
         const ids = blindEditedRowIds([entries, ...snapshots.map((s) => s.entries)], loadedEnv.rows, aligned)
-        setBlindGuard(ids.size > 0 ? { ids, aligned } : null)
+        setBlindGuard(ids.size > 0 ? { ids, aligned, informed: new Map() } : null)
       }
       const fill = (rows: EnvEntryRow[]) =>
         refillRedactedRows(rows, loadedEnv.rows, aligned, REDACTABLE_FIELDS)
@@ -328,7 +330,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
 
   const refusal = saveRefused
     ? 'unaligned'
-    : blindGuard && holdsBlindEdit(entries, blindGuard.ids, blindGuard.aligned)
+    : blindGuard && holdsBlindEdit(entries, blindGuard.ids, blindGuard.aligned, blindGuard.informed)
       ? 'blind'
       : null
   // A raw save never reads the table rows, so a blind table edit cannot reach
@@ -342,6 +344,18 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   }
   const saveRaw = () => {
     if (!rawRefusal) handleSaveRaw()
+  }
+  // A key or value typed into a blind-edited row while its value is in view is
+  // the user's choice, not a blind edit (agent-os-ocnh). A masked value, a lock,
+  // or a change to anything else (the visibility flag) leaves the guard as is.
+  const onEntryChange: typeof handleEntryChange = (index, field, value) => {
+    const row = entries[index]
+    const visible = row !== undefined && !row.sensitive && !locked && !lockedNow
+    if (blindGuard?.ids.has(row?._rowId) && visible && (field === 'key' || field === 'value')) {
+      const typed = { key: row.key, value: row.value, [field]: value as string }
+      setBlindGuard({ ...blindGuard, informed: new Map(blindGuard.informed).set(row._rowId, typed) })
+    }
+    handleEntryChange(index, field, value)
   }
   // A blind edit can be refused with nothing held back (the unlock lined up), so
   // Reload loads the payload on screen when no newer one is pending.
@@ -444,7 +458,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
       <EnvTableView
         visible={activeView === 'table'}
         entries={entries}
-        onEntryChange={handleEntryChange}
+        onEntryChange={onEntryChange}
         onDeleteEntry={handleDeleteEntry}
         onAddEntry={handleAddEntry}
         onToggleVisibility={toggleVisibility}

@@ -131,17 +131,24 @@ export function blindEditedRowIds<T extends Identified & Shown>(
  * write over content the user never saw. A row that holds exactly the unlocked
  * key and value (an Undo back to before the edit) is safe again; a row edited
  * after the unlock, when it could be seen, is never in `blindIds`.
+ *
+ * `informed` holds, per blind row, what the user typed into it last while its
+ * value was in view (agent-os-ocnh): that content was chosen, not blind, so the
+ * row is safe while it holds exactly that. An Undo back to the blind edit is
+ * refused again.
  */
 export function holdsBlindEdit<T extends Identified & Shown>(
   rows: T[],
   blindIds: ReadonlySet<number>,
   aligned: ReadonlyMap<number, Shown>,
+  informed: ReadonlyMap<number, Shown> = new Map(),
 ): boolean {
   if (blindIds.size === 0) return false
   const rowsById = new Map(rows.map((row) => [row._rowId, row]))
+  const holds = (row: Shown, content: Shown | undefined) =>
+    content !== undefined && row.key === content.key && row.value === content.value
   return [...blindIds].some((id) => {
     const row = rowsById.get(id)
-    const now = aligned.get(id)
-    return !row || !now || row.key !== now.key || row.value !== now.value
+    return !row || !(holds(row, aligned.get(id)) || holds(row, informed.get(id)))
   })
 }
