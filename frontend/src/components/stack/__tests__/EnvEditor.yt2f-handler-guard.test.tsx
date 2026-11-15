@@ -116,15 +116,12 @@ afterEach(() => {
 })
 
 describe('EnvEditor save handlers refuse on their own (agent-os-yt2f review S3)', () => {
-  it.each([
-    ['the payloads do not line up', aaaPlusRowUnlocked, () => fireEvent.change(input(1), { target: { value: '9090' } })],
-    ['a row hidden while locked was edited', aaaUnlocked, () => fireEvent.change(keyInput(3), { target: { value: 'FOO' } })],
-  ] as const)('yt2f: %s: the table and raw save handlers write nothing', async (_name, unlocked, edit) => {
+  it('yt2f: the payloads do not line up: the table and raw save handlers write nothing', async () => {
     server = aaaLocked
     ;({ queryClient } = renderWithProviders(<EnvEditor stackId="s1" />))
     await waitFor(() => expect(input(1).value).toBe('8080'))
-    edit()
-    await serve(unlocked as Payload)
+    fireEvent.change(input(1), { target: { value: '9090' } })
+    await serve(aaaPlusRowUnlocked as Payload)
     await screen.findByRole('alert')
 
     await callThenWait(handlers.onSaveTable)
@@ -132,6 +129,25 @@ describe('EnvEditor save handlers refuse on their own (agent-os-yt2f review S3)'
     await callThenWait(handlers.onSaveRaw)
 
     expect(mockUpdateEnv).not.toHaveBeenCalled()
+  })
+
+  // The raw save never reads the rows, so it is not refused for a blind table
+  // edit (agent-os-2vyw); the table save is.
+  it('yt2f: a row hidden while locked was edited: the table save handler writes nothing, the raw one saves the raw text', async () => {
+    server = aaaLocked
+    ;({ queryClient } = renderWithProviders(<EnvEditor stackId="s1" />))
+    await waitFor(() => expect(input(1).value).toBe('8080'))
+    fireEvent.change(keyInput(3), { target: { value: 'FOO' } })
+    await serve(aaaUnlocked as Payload)
+    await screen.findByRole('alert')
+
+    await callThenWait(handlers.onSaveTable)
+    expect(mockUpdateEnv).not.toHaveBeenCalled()
+    await userEvent.setup().click(screen.getByRole('tab', { name: 'Raw Editor' }))
+    await callThenWait(handlers.onSaveRaw)
+
+    expect(mockUpdateEnv).toHaveBeenCalledTimes(1)
+    expect(mockUpdateEnv.mock.calls[0][1]).toEqual({ raw: aaaUnlocked.raw })
   })
 
   it('yt2f: control: with nothing refused the same captured handler does save', async () => {
