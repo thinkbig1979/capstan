@@ -230,7 +230,7 @@ func (m *lineMasker) maskDeeper(i, indent int) bool {
 // superset corpus once the line maskers read the value rule).
 func (m *lineMasker) splice(i, a, b int, repl string) {
 	line := m.lines[i]
-	if wa, wb, widened := widenToRuns(m.needleRuns(line), a, b); widened {
+	if wa, wb, widened := widenForMask(line, m.needleRuns(line), a, b); widened {
 		a, b, repl = wa, wb, secretMask
 	}
 	m.lines[i] = line[:a] + repl + line[b:]
@@ -255,6 +255,22 @@ func widenToRuns(runs [][2]int, a, b int) (int, int, bool) {
 		}
 	}
 	return wa, wb, wa != a || wb != b
+}
+
+// valueStops are the bytes that end a line masker's value or key.
+const valueStops = " \t\"',;&?#[]{}()"
+
+// widenForMask is widenToRuns for a mask of [a, b) on line, failing closed
+// when a needle runs on past b into the next token: the mask then runs to
+// the line's end. What the needle swallowed may be that token's key or the
+// separator before it, and with it gone no later pass can find the key, so
+// its value showed (agent-os-ns7f).
+func widenForMask(line string, runs [][2]int, a, b int) (int, int, bool) {
+	wa, wb, widened := widenToRuns(runs, a, b)
+	if wb > b && wb < len(line) && strings.ContainsAny(line[b:wb], valueStops) {
+		wb = len(line)
+	}
+	return wa, wb, widened
 }
 
 // maskFrom replaces line i from byte col to its end, then fails closed on the
@@ -729,7 +745,7 @@ func (m *lineMasker) maskStatements(i int, sts []envStatement) {
 		if v == "" || v == secretMask || isSecretReference(v) || !IsSensitiveEnvVar(st.key, v) {
 			continue
 		}
-		start, end, _ := widenToRuns(runs, st.start, st.end)
+		start, end, _ := widenForMask(line, runs, st.start, st.end)
 		if start < last {
 			// Widened into the mask before it: one mask for both.
 			start = last
@@ -940,6 +956,7 @@ func forwardMatches(re *regexp.Regexp, line string, fn func(loc []int) (next int
 // recorded (splice's rule), on the needle runs of the line as the pass
 // found it: an earlier mask of the same pass only ever covered whole runs.
 type lineWalk struct {
+	line  string
 	runs  [][2]int
 	spans []lineSpan
 }
@@ -950,7 +967,7 @@ type lineSpan struct {
 }
 
 func (m *lineMasker) newLineWalk(line string) *lineWalk {
-	return &lineWalk{runs: m.needleRuns(line)}
+	return &lineWalk{line: line, runs: m.needleRuns(line)}
 }
 
 // mask records [a, b) as replaced by repl and returns where the scan goes
@@ -962,8 +979,11 @@ func (m *lineMasker) newLineWalk(line string) *lineWalk {
 // sorted, disjoint spans.
 func (w *lineWalk) mask(a, b int, repl string) int {
 	end := b
-	if wa, wb, widened := widenToRuns(w.runs, a, b); widened {
+	if wa, wb, widened := widenForMask(w.line, w.runs, a, b); widened {
 		a, b, repl = wa, wb, secretMask
+		if b == len(w.line) {
+			end = b // nothing after it is left to find
+		}
 	}
 	for n := len(w.spans); n > 0 && a < w.spans[n-1].b; n = len(w.spans) {
 		last := w.spans[n-1]

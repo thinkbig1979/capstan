@@ -1,6 +1,7 @@
 package services
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -36,5 +37,40 @@ func TestMaskSecrets_n1_OverlappingSpansMergeWithoutPanic(t *testing.T) {
 		var out string
 		assert.NotPanics(t, func() { out, _ = MaskSecrets(line, path, needles) }, "path %q", path)
 		assert.NotContains(t, out, "SEK1202", "path %q", path)
+	}
+}
+
+// agent-os-ns7f: a mask widened to a secret-list value that runs on into the
+// next token hid that token's key (or its separator) from every later pass,
+// so its value showed. Pre-existing on d793706. The reviewer's fuzz lines
+// (rvprobe_eq seed 99, cases 7154 and 20782), the compose text built as the
+// fuzz builds it.
+func TestMaskSecrets_ns7f_WidenedMaskHidesTheNextKey(t *testing.T) {
+	cases := []struct {
+		line    string
+		needles []string
+		secret  string
+	}{
+		{` password=SEK7154"proxy-authorization=SEK7154 proxy-authorization: Bearer "qv""Authorization: Bearer "qv" }?NOTES=a&b`, []string{`54"proxy-`, "tion: Be"}, "SEK7154"},
+		{` ',api_key=bar {'a': SEK20782},--auth SEK20782'Authorization: Bearer *** }`, []string{"a': SEK2", "20782},--aut"}, "SEK20782"},
+	}
+	for _, c := range cases {
+		for _, path := range []string{"", ".env", "docker-compose.yml"} {
+			text := c.line
+			if path == "docker-compose.yml" {
+				text = "services:\n  a:\n    command: " + strings.TrimSpace(c.line)
+			}
+			out, _ := MaskSecrets(text, path, c.needles)
+			assert.NotContains(t, out, c.secret, "path %q", path)
+		}
+	}
+	// The same through splice (the YAML pass and maskLeadKey).
+	for _, c := range []struct{ text, needle, secret string }{
+		{"services:\n  a:\n    environment:\n      DB_PASSWORD: \"abc\" ,--auth SEKsp1", `abc" ,--au`, "SEKsp1"},
+		{"services:\n  a:\n    command: [\"DB_PASSWORD=abc\", \"--auth\", \"SEKsp2\"]", `abc", "--au`, "SEKsp2"},
+		{"services:\n  a:\n    labels:\n      token: 'abc' x --auth SEKsp4", "abc' x --au", "SEKsp4"},
+	} {
+		out, _ := MaskSecrets(c.text, "docker-compose.yml", []string{c.needle})
+		assert.NotContains(t, out, c.secret, "splice, needle %q", c.needle)
 	}
 }
