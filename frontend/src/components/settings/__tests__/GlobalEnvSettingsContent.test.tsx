@@ -48,6 +48,9 @@ describe('GlobalEnvSettingsContent', () => {
         { key: 'API_KEY', value: 'secret-123' },
       ],
     })
+    // The payload is an unlocked one, so the store is unlocked too: a locked
+    // store over an unlocked payload hides secret keys (agent-os-f3am).
+    act(() => useEnvUnlockStore.getState().unlock('tok'))
     renderWithClient()
 
     await waitFor(() => {

@@ -13,6 +13,7 @@ import {
 } from '@/lib/env-unlock-rebase'
 import { useNextRowId } from '@/components/stack/env-editor/useRowId'
 import { isSensitiveKey } from '@/components/stack/env-editor/sensitiveKey'
+import { useEnvLockedNow } from '@/hooks/useEnvLockedNow'
 import type { EditableField, EnvRow, EnvVar, IndexedEnvVar } from './types'
 
 /** The fields of a variable the locked view can hide, so an unlock can put them back. */
@@ -52,6 +53,10 @@ export function useGlobalEnvVars(
   const [blindGuard, setBlindGuard] = useState<{ ids: ReadonlySet<number>; aligned: ReadonlyMap<number, EnvVar> } | null>(
     null,
   )
+  // Rows whose key the locked payload blanked while a dirty lock kept the
+  // unlocked one: a multi-line secret's body line read as a key (agent-os-f3am).
+  const [hiddenKeyIds, setHiddenKeyIds] = useState<ReadonlySet<number>>(NO_REDACTED_ROWS)
+  const lockedNow = useEnvLockedNow()
 
   // The list a save last sent. Its own refetch comes back carrying exactly this,
   // which must not read as a change made elsewhere (agent-os-lqcw). State, not a
@@ -78,17 +83,60 @@ export function useGlobalEnvVars(
     setRedacted(next.locked ? new Set(rows.filter((r) => r.value === '').map((r) => r._rowId)) : NO_REDACTED_ROWS)
     setSaveRefused(false)
     setBlindGuard(null)
+    setHiddenKeyIds(NO_REDACTED_ROWS)
     setSent(null)
     setVisible({})
     setDirty(false)
   }
+  /**
+   * A dirty lock keeps the unlocked rows, which carry a multi-line secret's
+   * body lines under keys that are their own text; the locked payload blanks
+   * those keys (agent-os-f3am, the y6e8 shape). Line the two up by position,
+   * read-only flag and every key the lock kept, mask what the lock flags and
+   * hide the keys it blanked. When they do not line up, the file changed: mask
+   * every row and hide every key.
+   */
+  const maskRowsTheLockFlags = (locked: EnvVar[]) => {
+    const lined =
+      loaded.length === locked.length &&
+      loaded.every(
+        (row, i) => !!row.readOnly === !!locked[i].readOnly && (locked[i].key === '' || locked[i].key === row.key),
+      )
+    const flagged = new Set<number>()
+    const keys = new Set<number>()
+    if (lined) {
+      loaded.forEach((row, i) => {
+        if (!locked[i].sensitive) return
+        flagged.add(row._rowId)
+        if (locked[i].key === '' && row.key !== '') keys.add(row._rowId)
+      })
+    } else {
+      for (const row of vars) {
+        flagged.add(row._rowId)
+        keys.add(row._rowId)
+      }
+    }
+    if (flagged.size > 0) {
+      setVars((prev) =>
+        prev.some((r) => flagged.has(r._rowId) && !r.sensitive)
+          ? prev.map((r) => (flagged.has(r._rowId) && !r.sensitive ? { ...r, sensitive: true } : r))
+          : prev,
+      )
+    }
+    if (keys.size > 0) setHiddenKeyIds((prev) => new Set([...prev, ...keys]))
+  }
+
   const { changedOnDisk, reload } = useExternalFileChange(data, {
     isDirty: dirty,
     hydrate,
     rebaseWhileDirty: (next, prev) => {
       if (!prev || Boolean(next.locked) === Boolean(prev.locked)) return false
-      // Locked: the payload is redacted and carries nothing to rebase onto.
-      if (next.locked) return true
+      // Locked: the payload is redacted and carries nothing to rebase onto, but
+      // it says which kept rows are secret.
+      if (next.locked) {
+        maskRowsTheLockFlags(next.vars ?? [])
+        return true
+      }
       const nextVars = next.vars ?? []
       const aligned = alignRedactedRows(loaded, redacted, nextVars)
       if (!aligned) {
@@ -121,16 +169,27 @@ export function useGlobalEnvVars(
       ? ('blind' as const)
       : null
 
-  // Wrap vars with their original index so filtered results can route edits correctly.
+  // The payload on screen was served unlocked but the session is locked now:
+  // the lock's refetch has not landed, or failed. Its keys were never blanked,
+  // so every masked row hides its key until the locked payload arrives
+  // (agent-os-f3am).
+  const staleUnlocked = lockedNow && data !== undefined && !data.locked
+  // Wrap vars with their original index so filtered results can route edits
+  // correctly, and with whether the row's key is hidden: a masked row whose key
+  // the lock blanked, or any masked row while the payload is stale.
   const indexedVars = useMemo<IndexedEnvVar[]>(
-    () => vars.map((v, i) => ({ ...v, _originalIndex: i })),
-    [vars],
+    () =>
+      vars.map((v, i) => {
+        const masked = (v.sensitive === true || isSensitiveKey(v.key)) && !visible[i]
+        return { ...v, _originalIndex: i, keyHidden: masked && (staleUnlocked || hiddenKeyIds.has(v._rowId)) }
+      }),
+    [vars, visible, staleUnlocked, hiddenKeyIds],
   )
-  // A hidden value is not searched, the same rule the table masks it by: a
-  // match would tell a locked user what it contains (agent-os-sopw).
+  // A hidden value or key is not searched, the same rule the table masks it
+  // by: a match would tell a locked user what it contains (agent-os-sopw, f3am).
   const searchFields = useMemo(
     () => [
-      (e: IndexedEnvVar) => e.key,
+      (e: IndexedEnvVar) => (e.keyHidden ? '' : e.key),
       (e: IndexedEnvVar) =>
         (e.sensitive === true || isSensitiveKey(e.key)) && !visible[e._originalIndex] ? '' : e.value,
     ],

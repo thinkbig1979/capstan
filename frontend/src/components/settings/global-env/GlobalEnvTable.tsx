@@ -70,10 +70,10 @@ export function GlobalEnvTable({
                 <TableRow key={`row-${index}`}>
                   <TableCell>
                     <Input
-                      value={entry.key}
+                      value={entry.keyHidden ? '' : entry.key}
                       onChange={(e) => onChange(index, 'key', e.target.value)}
                       placeholder="KEY"
-                      disabled={readOnly}
+                      disabled={readOnly || entry.keyHidden}
                       aria-label={`Global env key ${index + 1}`}
                     />
                   </TableCell>

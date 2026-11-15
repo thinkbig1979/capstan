@@ -46,10 +46,10 @@ export function GlobalEnvCards({
           return (
             <div key={`mrow-${index}`} className="rounded-lg border p-4 space-y-3">
               <Input
-                value={entry.key}
+                value={entry.keyHidden ? '' : entry.key}
                 onChange={(e) => onChange(index, 'key', e.target.value)}
                 placeholder="KEY"
-                disabled={readOnly}
+                disabled={readOnly || entry.keyHidden}
                 aria-label={`Global env key ${index + 1}`}
               />
               <div className="flex items-center gap-2">

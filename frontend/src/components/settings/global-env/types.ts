@@ -8,7 +8,9 @@ export type EditableField = 'key' | 'value'
 
 // Indexed wrapper so the text-filter result can carry the original vars[] index,
 // ensuring handleChange / handleDelete / toggleVisible always target the right entry.
-export type IndexedEnvVar = EnvVar & { _originalIndex: number }
+// `keyHidden`: the row's key is secret content and is not shown, edited or
+// searched (agent-os-f3am).
+export type IndexedEnvVar = EnvRow & { _originalIndex: number; keyHidden: boolean }
 
 /**
  * A variable as the form holds it: `_rowId` is a client-side identity that stays
