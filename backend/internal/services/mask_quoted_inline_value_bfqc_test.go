@@ -23,6 +23,12 @@ func TestMaskSecrets_bfqc_QuotedValueAfterSensitiveKey(t *testing.T) {
 		{`x --api-key='SEKf12'`, "SEKf12", `--api-key='***'`},
 		{`x --password "a b SEKf10" y`, "SEKf10", `--password "***" y`},
 		{`x --requirepass 'a SEKf13' y`, "SEKf13", `--requirepass '***' y`},
+		// A body holding another key or flag: its quote was paired with that
+		// token's, so the mask runs to the line's end (quotedMaskEnd).
+		{`x --password=" --token="SEKg1" y`, "SEKg1", `x --password="***`},
+		{`x --password=' --token='SEKg2' y`, "SEKg2", `x --password='***`},
+		{`x --password " --token "SEKg3" y`, "SEKg3", `x --password "***`},
+		{`x PASSWORD=" API_KEY="SEKg4" y`, "SEKg4", `x PASSWORD="***`},
 	}
 	for _, c := range cases {
 		for _, path := range []string{"", ".env", "docker-compose.yml"} {
