@@ -149,26 +149,42 @@ func TestEnvAfterQuote_zpbi_TailOpensMultilineHiddenOnLockedGlobalPage(t *testin
 
 // Review E2: the tail is checked statement by statement in one pass. A
 // recursive check rescanned the rest of the line per quoted segment: 42 s for
-// this 80 KB line, against milliseconds on the base. The bound leaves room
-// for a loaded machine and the race detector, and is far below the
-// super-linear time.
+// an 80 KB line, against milliseconds on the base.
+//
+// The check is how the time grows, not a clock: each shape is parsed and
+// redacted at n and 8n, the fastest of 3 interleaved runs each, and the time
+// may grow less than linearGrowthBound times. Linear code grows about 8x, a
+// quadratic one about 64x. A loaded machine or the race detector slows both
+// sizes, so the ratio holds where a 2 s bound did not (agent-os-yzmh: a loaded
+// -race run took 18.9 s on the sensitive chain). An allocation bound, as in
+// services' n30e test, would not do here: the no-watermark mutant (pass 1
+// re-blanking every body from every opener) writes in place and allocates
+// exactly what the fix does.
 func TestEnvAfterQuote_zpbi_LongTailParsesInLinearTime(t *testing.T) {
-	tail := strings.Repeat(" A=\"\"", 16400) + "\n"
-	// The second line is sensitive, so the locked view also walks its tail
-	// for a quote left open (opensMultilineTail).
-	// The third is a file, not a line: a chain of values each re-opened by the
-	// previous one's closing line, which the locked view follows to its end
-	// (review R2, P2). Scanned again from every row it was quadratic: 34 s
-	// at 4000 lines.
-	chain := "NOTES=\"a\" X=\"x\n" + strings.Repeat("b\" Y=\"c\n", 10300) + "end\"\n"
-	// agent-os-olcn: every sensitive opener is followed, also one inside
-	// another's body, so in a chain whose every row is a sensitive opener the
-	// body is walked from every row: each walk must be a table lookup and each
-	// row blanked once. Per row, a rescan took 61 s here and blanking the
-	// body again 5 s.
-	sensitiveChain := "NOTES=\"a\" X_TOKEN=\"x\n" + strings.Repeat("b\" Y_TOKEN=\"c\n", 40000) + "end\"\n"
-	for _, content := range []string{"A=\"\"" + tail, "DB_PASSWORD=\"\"" + tail, chain, sensitiveChain} {
-		require.Greater(t, len(content), 80*1024)
+	shapes := []struct {
+		name  string
+		build func(n int) string
+	}{
+		{"plain tail", func(n int) string { return "A=\"\"" + strings.Repeat(" A=\"\"", n) + "\n" }},
+		// Sensitive, so the locked view also walks its tail for a quote left
+		// open (opensMultilineTail).
+		{"sensitive tail", func(n int) string { return "DB_PASSWORD=\"\"" + strings.Repeat(" A=\"\"", n) + "\n" }},
+		// A file, not a line: a chain of values each re-opened by the
+		// previous one's closing line, which the locked view follows to its
+		// end (review R2, P2). Scanned again from every row it was quadratic:
+		// 34 s at 4000 lines.
+		{"chain", func(n int) string { return "NOTES=\"a\" X=\"x\n" + strings.Repeat("b\" Y=\"c\n", n) + "end\"\n" }},
+		// agent-os-olcn: every sensitive opener is followed, also one inside
+		// another's body, so in a chain whose every row is a sensitive opener
+		// the body is walked from every row: each walk must be a table lookup
+		// and each row blanked once. Per row, a rescan took 61 s here and
+		// blanking the body again 5 s.
+		{"sensitive chain", func(n int) string {
+			return "NOTES=\"a\" X_TOKEN=\"x\n" + strings.Repeat("b\" Y_TOKEN=\"c\n", n) + "end\"\n"
+		}},
+	}
+	sizes := map[string]int{"plain tail": 16400, "sensitive tail": 16400, "chain": 10300, "sensitive chain": 40000}
+	run := func(content string) time.Duration {
 		start := time.Now()
 		resp := EnvResponse{Raw: content, Entries: (&EnvHandler{}).parseEnvFile(content)}
 		redactEnvResponse(&resp)
@@ -176,10 +192,36 @@ func TestEnvAfterQuote_zpbi_LongTailParsesInLinearTime(t *testing.T) {
 		redactGlobalEnvVars(vars, content)
 		elapsed := time.Since(start)
 		require.NotEmpty(t, resp.Entries)
-		t.Logf("%d bytes parsed and redacted in %s", len(content), elapsed)
-		assert.Less(t, elapsed, 2*time.Second*timingFactor, "%d bytes took %s to parse and redact", len(content), elapsed)
+		return elapsed
+	}
+	for _, sh := range shapes {
+		t.Run(sh.name, func(t *testing.T) {
+			big := sizes[sh.name]
+			small, large := sh.build(big/8), sh.build(big)
+			require.Greater(t, len(large), 80*1024)
+			fastest := func(d, best time.Duration) time.Duration {
+				if best == 0 || d < best {
+					return d
+				}
+				return best
+			}
+			var tSmall, tLarge time.Duration
+			for range 3 {
+				tSmall = fastest(run(small), tSmall)
+				tLarge = fastest(run(large), tLarge)
+			}
+			growth := float64(tLarge) / float64(max(tSmall, time.Microsecond))
+			t.Logf("%d bytes in %s, %d bytes in %s: %.1fx", len(small), tSmall, len(large), tLarge, growth)
+			assert.Less(t, growth, linearGrowthBound, "8x the input took %.1fx the time (%s against %s): not linear", growth, tLarge, tSmall)
+		})
 	}
 }
+
+// linearGrowthBound is the growth TestEnvAfterQuote_zpbi_LongTailParsesInLinearTime
+// allows for 8x the input. Measured 2026-11-15 on cce3cd0's code: the fix grew
+// 8.1x to 10.7x per shape plain and 6.6x to 10.3x under -race; the
+// no-watermark mutant's sensitive chain grew 72.6x plain and 41.7x under -race.
+const linearGrowthBound = 20.0
 
 // Review round 3 (R1, P3, R2, P1, P2): every statement compose reads on a
 // line is checked with its own value, and a body that a later statement
