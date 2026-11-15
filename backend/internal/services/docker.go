@@ -230,8 +230,10 @@ func (s *DockerService) GetContainerListCtx(ctx context.Context, projectName str
 
 // GetServiceContainerList lists a compose project's service containers,
 // leaving `docker compose run` one-offs out: they are not part of the stack
-// (agent-os-dn1z), so a stack-scoped consumer such as the terminal's
-// container check reads this list, not GetContainerListCtx (agent-os-febs).
+// (agent-os-dn1z), so a stack-scoped consumer must read this list, not
+// GetContainerListCtx (agent-os-febs). None does yet: the terminal's container
+// check and GET /stacks/:id/containers still call GetContainerList and are
+// listed as pending on the one-off guard's allowlist.
 func (s *DockerService) GetServiceContainerList(ctx context.Context, projectName string) ([]models.Container, error) {
 	return s.listProjectContainers(ctx, projectName, false)
 }
