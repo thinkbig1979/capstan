@@ -22,8 +22,8 @@ import (
 // to <action>: <reason>".
 //
 // The backup routes that change where backups go, with what credential or
-// what they keep, and the ones that restore, prune or initialise a
-// repository, use it too (agent-os-h71i): a locked session that could point
+// what they keep, which stacks are backed up (agent-os-tp3g), and the ones
+// that restore, prune or initialise a repository, use it too (agent-os-h71i): a locked session that could point
 // the repository at a place it controls would read every stack's .env.
 //
 // A git pull uses it too (agent-os-hblm): it lands the remote's text in a
@@ -62,6 +62,9 @@ const (
 	lockedDRRestoreReason      = "it writes backed-up files, secrets included, into your stacks"
 	lockedPruneReason          = "pruning deletes backups"
 	lockedRepoInitReason       = "the repository will hold every stack's .env"
+	// lockedBackupPolicyReason: a policy write switches a stack's backups on
+	// or off, or changes how they run (agent-os-tp3g).
+	lockedBackupPolicyReason = "a backup policy decides which stacks are backed up and how"
 	// lockedBlankedReason: a locked session was handed the env values blanked,
 	// so a save from that state would write the blanks (agent-os-d1ue).
 	lockedBlankedReason = "while locked, the values you see are blanked, so saving would overwrite every secret with them"

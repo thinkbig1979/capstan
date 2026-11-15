@@ -5,6 +5,7 @@ import { expectHintOpensHelp } from '@/test/helpHint'
 import { BackupToggle } from '../BackupToggle'
 import { BackupPoliciesRefreshNotice } from '../BackupPoliciesRefreshNotice'
 import type { BackupRun, BackupStatus } from '@/types'
+import { useEnvUnlockStore } from '@/stores/envUnlockStore'
 
 // Radix UI Select uses scrollIntoView internally; jsdom does not implement it.
 window.HTMLElement.prototype.scrollIntoView = vi.fn()
@@ -30,6 +31,12 @@ vi.mock('sonner', () => ({
 }))
 
 import { useBackupPolicies, useBackupStatus } from '@/hooks/useBackup'
+
+// Unlocked: a locked session cannot write a policy (agent-os-tp3g,
+// BackupToggle.locked.test.tsx), and these tests are about the writes.
+beforeEach(() => {
+  useEnvUnlockStore.getState().unlock('test-token')
+})
 
 // ─── Fixture factories ────────────────────────────────────────────────────────
 

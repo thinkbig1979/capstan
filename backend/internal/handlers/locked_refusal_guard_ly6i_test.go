@@ -29,6 +29,9 @@ var lockedRefusalSinks = map[string]bool{
 	"EnsureRepository": true,
 	// agent-os-mu4z: a folder's own git credential.
 	"UpdateDirectoryCredentials": true,
+	// agent-os-tp3g: a backup policy decides which stacks are backed up.
+	"UpsertBackupPolicy": true,
+	"DeleteBackupPolicy": true,
 }
 
 // lockedRefusalFieldSinks are sinks named with the handler field they are
@@ -143,6 +146,7 @@ func TestLockedRefusalGuard_ly6i(t *testing.T) {
 		"backup.go:repoInit", "backup.go:updateSettings",
 		"settings.go:UpdateGitSettings", "directories.go:UpdateCredentials",
 		"env.go:Put", "settings.go:UpdateGlobalEnv", "git.go:Pull",
+		"backup.go:upsertPolicy", "backup.go:deletePolicy",
 	} {
 		assert.Contains(t, inScope, want)
 	}

@@ -635,6 +635,10 @@ type upsertPolicyRequest struct {
 }
 
 func (h *BackupHandler) upsertPolicy(c *gin.Context) {
+	// A policy decides which stacks are backed up and how (agent-os-tp3g).
+	if refuseLocked(c, "change which stacks are backed up", lockedBackupPolicyReason) {
+		return
+	}
 	stackID := c.Param("stackId")
 
 	if _, err := h.db.GetStack(stackID); err != nil {
@@ -708,6 +712,10 @@ func (h *BackupHandler) upsertPolicy(c *gin.Context) {
 }
 
 func (h *BackupHandler) deletePolicy(c *gin.Context) {
+	// A policy decides which stacks are backed up and how (agent-os-tp3g).
+	if refuseLocked(c, "change which stacks are backed up", lockedBackupPolicyReason) {
+		return
+	}
 	stackID := c.Param("stackId")
 
 	if err := h.db.DeleteBackupPolicy(stackID); err != nil {

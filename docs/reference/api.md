@@ -300,6 +300,8 @@ put every stack's `.env` in the caller's hands:
   `hostname` is still saved.
 - `POST /api/v1/backups/repo/init`, `POST /api/v1/backups/restore`,
   `POST /api/v1/backups/dr-restore` and `POST /api/v1/backups/prune`
+- `PUT` and `DELETE /api/v1/backups/policies/stack/:stackId`: a policy decides
+  which stacks are backed up (agent-os-tp3g). Listing policies stays allowed.
 
 A locked caller can still read the backup settings (the password is never
 sent; the repository and rclone remote come back with their credentials

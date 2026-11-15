@@ -770,7 +770,9 @@ func newBackupFaultHandler(t *testing.T, db *database.DB) *gin.Engine {
 	t.Cleanup(h.Stop)
 	return newDBFaultRouter(func(r *gin.Engine) {
 		r.GET("/api/settings/backup", h.getSettings)
-		r.PUT("/api/backup/policies/:stackId", h.upsertPolicy)
+		// Unlocked: a locked policy write is refused (agent-os-tp3g), and
+		// these tests are about the read fault behind it.
+		r.PUT("/api/backup/policies/:stackId", envUnlockedMiddleware(), h.upsertPolicy)
 		r.GET("/api/backup/status", h.getStatus)
 	})
 }
