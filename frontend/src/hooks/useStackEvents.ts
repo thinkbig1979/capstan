@@ -186,11 +186,11 @@ export const parseStackEvent = frameValidator((raw): StackEvent | null => {
   }
 })
 
-// A burst of events is refetched once, 750 ms after the last one, but never
-// later than 2 s after the first: every stack status now converges through a
-// refetch (agent-os-4ato), and a trailing-only debounce never fired on a host
-// that emits an event every 500 ms.
-const INVALIDATION_DEBOUNCE_MS = 750
+// A burst of events is refetched once, 750 ms after the last one (the literal
+// in scheduleInvalidations, which scripts/check-networkidle-probes.sh reads),
+// but never later than this after the first: every stack status now converges
+// through a refetch (agent-os-4ato), and a trailing-only debounce never fired
+// on a host that emits an event every 500 ms.
 const INVALIDATION_MAX_WAIT_MS = 2000
 
 export function useStackEvents() {
@@ -226,7 +226,7 @@ export function useStackEvents() {
     }
     keys.forEach((k) => pendingRef.current.add(JSON.stringify(k)))
     if (timerRef.current) clearTimeout(timerRef.current)
-    timerRef.current = setTimeout(flush, INVALIDATION_DEBOUNCE_MS)
+    timerRef.current = setTimeout(flush, 750)
     if (!maxTimerRef.current) maxTimerRef.current = setTimeout(flush, INVALIDATION_MAX_WAIT_MS)
   }, [])
 
