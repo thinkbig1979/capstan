@@ -1817,7 +1817,7 @@ func (s *ScannerService) containersKeepRow(row models.Stack) string {
 		if other.ID == row.ID || other.ProjectName != project {
 			continue
 		}
-		if _, statErr := os.Stat(filepath.Join(other.Directory, other.ComposeFile)); statErr == nil {
+		if _, statErr := os.Stat(filepath.Join(other.Directory, other.ComposeFile)); statErr == nil { //geterrors:ignore only a file proven present lets the row go: an absent file and a failed Stat both leave it unproven, so the row is kept (fail closed)
 			slog.Info("Stack row can go: another stack with its compose file on disk carries the same project", "id", row.ID, "project", project, "shownBy", other.ID)
 			return ""
 		}
