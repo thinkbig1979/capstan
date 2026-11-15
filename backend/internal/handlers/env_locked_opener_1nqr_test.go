@@ -39,13 +39,15 @@ func TestEnvLocked_1nqr_OpenerOfAHiddenBodyIsHidden(t *testing.T) {
 	}
 }
 
-// Unlocked, the rows are exactly what they were: the opener keeps its value
-// and its (non-)sensitive flag.
+// Unlocked, the opener keeps its value. Its sensitive flag changed in
+// agent-os-9fsu: the unlocked payload flags every line of a multi-line secret,
+// the first line included, so an editor that keeps these rows across a lock
+// masks it from the start (it was false here before).
 func TestEnvLocked_1nqr_OpenerUnlockedUnchanged(t *testing.T) {
 	router, stackID, token, _ := envQuoteFixture(t, openerLeakFile)
 	e := entryByKey(t, getEntriesAsJSON(t, router, stackID, token), "TZ")
 	assert.Equal(t, `"firstlinezq`, e["value"])
-	assert.Equal(t, false, e["sensitive"])
+	assert.Equal(t, true, e["sensitive"])
 }
 
 // Round 3 (review R2-1, already on base): the body was judged line by line,

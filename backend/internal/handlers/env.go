@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -139,6 +140,8 @@ func (h *EnvHandler) Get(c *gin.Context) {
 	}
 	if resp.Locked {
 		redactEnvResponse(&resp)
+	} else {
+		markMultilineBodies(resp.Entries, resp.Raw)
 	}
 
 	c.JSON(http.StatusOK, resp)
@@ -229,7 +232,7 @@ func hideMultilineBodies(entries []EnvEntry, raw string) {
 	}
 	blank := func(from, to int) {
 		for k := from; k <= to; k++ {
-			entries[k] = EnvEntry{Line: entries[k].Line, Comment: entries[k].Comment, Sensitive: true}
+			entries[k] = EnvEntry{Line: entries[k].Line, Comment: entries[k].Comment, Sensitive: true, BodyLine: true}
 		}
 	}
 	walks := newBodyWalks(entries, lineText)
@@ -367,6 +370,24 @@ func sensitiveSpans(lines []string) [][2]int {
 		}
 	}
 	return spans
+}
+
+// markMultilineBodies flags in an UNLOCKED payload the rows hideMultilineBodies
+// hides in a locked one, and blanks nothing (agent-os-9fsu): each body row gets
+// Sensitive and BodyLine and keeps its key and value, because a table save
+// writes them back; an opener the walk marks sensitive is marked here too. The
+// walk runs on a copy, so the rows it picks are exactly the locked payload's,
+// whatever the blanking does to the rows after them.
+func markMultilineBodies(entries []EnvEntry, raw string) {
+	walked := slices.Clone(entries)
+	hideMultilineBodies(walked, raw)
+	for k := range entries {
+		if walked[k].BodyLine {
+			entries[k].Sensitive, entries[k].BodyLine = true, true
+		} else if walked[k].Sensitive {
+			entries[k].Sensitive = true
+		}
+	}
 }
 
 // bodyWalks holds, for every row and each quote kind, where a quoted value
@@ -1469,7 +1490,7 @@ func composeReadsValue(e EnvEntry) bool {
 }
 
 // sameEnvRow reports whether two rows write the same text: every field
-// serializeEnvFile reads. Sensitive and Line are not written.
+// serializeEnvFile reads. Sensitive, BodyLine and Line are not written.
 func sameEnvRow(a, b EnvEntry) bool {
 	return a.Key == b.Key && a.Value == b.Value && a.Comment == b.Comment &&
 		a.Quote == b.Quote && a.InlineComment == b.InlineComment && a.Export == b.Export
