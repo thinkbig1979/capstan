@@ -46,6 +46,25 @@ func TestRetry_2vce(t *testing.T) {
 		assert.Equal(t, 2, calls)
 		assert.NoError(t, err)
 	})
+	// Review F4: a registry that failed on its side, or a DNS or route blip,
+	// is retried as the code this replaced retried it.
+	for _, msg := range []string{
+		"docker pull x: received unexpected HTTP status: 500 Internal Server Error",
+		"lookup public.ecr.aws: Temporary failure in name resolution",
+		"dial tcp: lookup public.ecr.aws on 127.0.0.53:53: server misbehaving",
+		"dial tcp 1.2.3.4:443: connect: network is unreachable",
+	} {
+		t.Run("retried: "+msg, func(t *testing.T) {
+			calls, err := run(errors.New(msg), nil)
+			assert.Equal(t, 2, calls)
+			assert.NoError(t, err)
+		})
+	}
+	t.Run("a 500 inside a digest is not a status", func(t *testing.T) {
+		calls, err := run(errors.New("invalid reference sha256:ab500cd"))
+		assert.Equal(t, 1, calls)
+		assert.Error(t, err)
+	})
 	t.Run("attempts are bounded and the last error returned", func(t *testing.T) {
 		calls, err := run(errors.New("dial tcp: i/o timeout"))
 		assert.Equal(t, Attempts, calls)

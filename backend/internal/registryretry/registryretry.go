@@ -29,10 +29,10 @@ var (
 	// A registry that answered with a verdict about the image or the
 	// credentials: asking again gets the same answer.
 	permanent = regexp.MustCompile(`(?i)manifest unknown|unauthorized|denied|not found`)
-	// A registry that did not answer in time, could not be found (DNS),
-	// throttled, or failed on its side.
+	// A registry that did not answer in time, could not be found or reached
+	// (DNS, route), throttled, or failed on its side.
 	// The status codes are whole words so a digest's hex cannot match.
-	transientText = regexp.MustCompile(`(?i)deadline exceeded|timeout|toomanyrequests|connection reset|connection refused|no such host|\bEOF\b|\b(429|502|503|504)\b`)
+	transientText = regexp.MustCompile(`(?i)deadline exceeded|timeout|toomanyrequests|connection reset|connection refused|no such host|temporary failure|server misbehaving|network is unreachable|\bEOF\b|\b(429|500|502|503|504)\b`)
 )
 
 // Transient reports whether err, with log beside it, is a registry failure
