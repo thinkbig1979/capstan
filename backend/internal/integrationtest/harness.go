@@ -24,19 +24,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"hash/fnv"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/thinkbig1979/capstan/backend/internal/registryretry"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
 
@@ -185,7 +183,7 @@ func PullPinnedImage(t *testing.T, ref string) {
 	t.Helper()
 
 	var out bytes.Buffer
-	err := RetryRegistry(t, "docker pull "+ref, func() error {
+	err := registryretry.Retry(t, "docker pull "+ref, func() error {
 		out.Reset()
 		cmd := exec.Command("docker", "pull", ref)
 		cmd.Stdout = &out
@@ -201,36 +199,9 @@ func PullPinnedImage(t *testing.T, ref string) {
 	}
 }
 
-// RetryRegistry runs op, a call that reaches the image registry, up to
-// registryAttempts times with a growing pause, and returns the last error.
-//
-// ECR Public allows one anonymous pull per second per IP, and `docker pull`
-// asks the registry even when the image is already local, so a throttled call
-// is retried a bounded number of times instead of failing the run. Only the
-// transport is retried: callers still assert on what op produced.
-func RetryRegistry(t *testing.T, what string, op func() error) error {
-	t.Helper()
-
-	var err error
-	for attempt := 1; attempt <= registryAttempts; attempt++ {
-		if err = op(); err == nil {
-			return nil
-		}
-		t.Logf("%s: attempt %d/%d: %v", what, attempt, registryAttempts, err)
-		if attempt < registryAttempts {
-			time.Sleep(time.Duration(2*attempt) * time.Second)
-		}
-	}
-	return err
-}
-
-// registryAttempts bounds RetryRegistry: at most 2+4+6+8 s of waiting, well
-// past the mirror's one-second window.
-const registryAttempts = 5
-
 // RetryUpdateAtPull runs update, a call to UpdateContainer or
 // UpdateContainerStreaming, and runs it again when it failed at its own
-// registry pull for a reason registryTransient accepts, up to registryAttempts
+// registry pull for a reason registryretry.Transient accepts, up to registryretry.Attempts
 // times. It returns the last result (agent-os-vdgc).
 //
 // update also returns the attempt's streamed log, "" when it has none. The
@@ -252,15 +223,15 @@ func RetryUpdateAtPull(ctx context.Context, t *testing.T, update func() (ar trut
 	for attempt := 1; ; attempt++ {
 		ar, pastPull, log := update()
 		if ar.Outcome != truth.OutcomeFailed || pastPull || !failedAtPull(ar) ||
-			!registryTransient(ar.Err, log) || ctx.Err() != nil || attempt == registryAttempts {
+			!registryretry.Transient(ar.Err, log) || ctx.Err() != nil || attempt == registryretry.Attempts {
 			return ar
 		}
-		t.Logf("update failed at its registry pull: attempt %d/%d: %s (%v)", attempt, registryAttempts, ar.Reason, ar.Err)
+		t.Logf("update failed at its registry pull: attempt %d/%d: %s (%v)", attempt, registryretry.Attempts, ar.Reason, ar.Err)
 		time.Sleep(time.Duration(attempt) * updateRetryPause)
 	}
 }
 
-// updateRetryPause is RetryUpdateAtPull's pause unit, as RetryRegistry's: the
+// updateRetryPause is RetryUpdateAtPull's pause unit, as registryretry.Retry's: the
 // nth retry waits n of them. A variable so its own tests need not wait.
 var updateRetryPause = 2 * time.Second
 
@@ -276,36 +247,6 @@ func failedAtPull(ar truth.ActionResult) bool {
 	msg := ar.Err.Error()
 	return strings.Contains(msg, "pulling image") || strings.Contains(msg, "compose pull failed") ||
 		ar.Reason == "compose pull failed"
-}
-
-var (
-	// A registry that answered with a verdict about the image or the
-	// credentials: asking again gets the same answer.
-	registryPermanent = regexp.MustCompile(`(?i)manifest unknown|unauthorized|denied|not found`)
-	// A registry that did not answer in time, could not be found (DNS),
-	// throttled, or failed on its side.
-	// The status codes are whole words so a digest's hex cannot match.
-	registryTransientText = regexp.MustCompile(`(?i)deadline exceeded|timeout|toomanyrequests|connection reset|connection refused|no such host|\bEOF\b|\b(429|502|503|504)\b`)
-)
-
-// registryTransient reports whether err, with the attempt's log beside it, is
-// a registry failure worth retrying. The error chain is matched first (a
-// deadline or a net timeout in this process); a daemon's error and compose's
-// stderr arrive as text, so the text of both is the fallback. A permanent
-// verdict, in either, wins over everything.
-func registryTransient(err error, log string) bool {
-	if err == nil {
-		return false
-	}
-	text := err.Error() + "\n" + log
-	if registryPermanent.MatchString(text) {
-		return false
-	}
-	var netErr net.Error
-	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) {
-		return true
-	}
-	return registryTransientText.MatchString(text)
 }
 
 // ImageRepoDigests returns the RepoDigests slice for a locally present image

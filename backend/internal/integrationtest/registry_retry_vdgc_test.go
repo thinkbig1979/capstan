@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/thinkbig1979/capstan/backend/internal/registryretry"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
 
@@ -68,7 +69,7 @@ func TestRegistryTransient(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, registryTransient(tc.err, tc.log), "%v / log %q", tc.err, tc.log)
+			assert.Equal(t, tc.want, registryretry.Transient(tc.err, tc.log), "%v / log %q", tc.err, tc.log)
 		})
 	}
 }
@@ -105,7 +106,7 @@ func TestRetryUpdateAtPull(t *testing.T) {
 	t.Run("attempts are bounded", func(t *testing.T) {
 		ar, calls := run(bg, one(pullTimeout), false)
 		assert.Equal(t, truth.OutcomeFailed, ar.Outcome)
-		assert.Equal(t, registryAttempts, calls)
+		assert.Equal(t, registryretry.Attempts, calls)
 	})
 	t.Run("a permanent pull failure is not retried", func(t *testing.T) {
 		_, calls := run(bg, one(truth.Failed("update apply failed", errors.New("pulling image x: manifest unknown"))), false)

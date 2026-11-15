@@ -28,6 +28,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/thinkbig1979/capstan/backend/internal/registryretry"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
 
@@ -57,7 +58,7 @@ func Test_UpToDateImage_NotDetectedAsUpdate(t *testing.T) {
 	// Fetch the remote digest via truth.RemoteRegistryDigest — the version-
 	// independent implementation that fixes the buildx --format bug.
 	var remote string
-	err := RetryRegistry(t, "RemoteRegistryDigest", func() (err error) {
+	err := registryretry.Retry(t, "RemoteRegistryDigest", func() (err error) {
 		remote, err = truth.RemoteRegistryDigest(ctx, ref)
 		return err
 	})
@@ -77,7 +78,7 @@ func Test_UpToDateImage_NotDetectedAsUpdate(t *testing.T) {
 	// Cross-check via ImageUpToDate helper.
 	var upToDate bool
 	var localD, remoteD string
-	err = RetryRegistry(t, "ImageUpToDate", func() (err error) {
+	err = registryretry.Retry(t, "ImageUpToDate", func() (err error) {
 		upToDate, localD, remoteD, err = truth.ImageUpToDate(ctx, ref, digests)
 		return err
 	})
@@ -115,7 +116,7 @@ func Test_DigestComparison_StaleVsUpToDate(t *testing.T) {
 
 	// With the stale digest, ImageUpToDate must return false.
 	var remote string
-	err := RetryRegistry(t, "RemoteRegistryDigest", func() (err error) {
+	err := registryretry.Retry(t, "RemoteRegistryDigest", func() (err error) {
 		remote, err = truth.RemoteRegistryDigest(ctx, ref)
 		return err
 	})
@@ -128,7 +129,7 @@ func Test_DigestComparison_StaleVsUpToDate(t *testing.T) {
 
 	// With the real local digest, ImageUpToDate must return true.
 	var upToDateReal bool
-	err = RetryRegistry(t, "ImageUpToDate", func() (err error) {
+	err = registryretry.Retry(t, "ImageUpToDate", func() (err error) {
 		upToDateReal, _, _, err = truth.ImageUpToDate(ctx, ref, digests)
 		return err
 	})
@@ -197,7 +198,7 @@ func Test_RemoteRegistryDigest_ReturnsConsistentDigest(t *testing.T) {
 	defer cancel()
 
 	var digest1, digest2 string
-	err := RetryRegistry(t, "RemoteRegistryDigest", func() (err error) {
+	err := registryretry.Retry(t, "RemoteRegistryDigest", func() (err error) {
 		digest1, err = truth.RemoteRegistryDigest(ctx, ref)
 		return err
 	})
@@ -206,7 +207,7 @@ func Test_RemoteRegistryDigest_ReturnsConsistentDigest(t *testing.T) {
 		"RemoteRegistryDigest must return a sha256: prefixed digest, got %q", digest1)
 
 	// Second call must return the same value (registry digest is stable for a pinned tag).
-	err = RetryRegistry(t, "RemoteRegistryDigest", func() (err error) {
+	err = registryretry.Retry(t, "RemoteRegistryDigest", func() (err error) {
 		digest2, err = truth.RemoteRegistryDigest(ctx, ref)
 		return err
 	})
