@@ -73,6 +73,7 @@ backend/internal/services/backup_rclone_redact.go|RedactRcloneRemote
 backend/internal/services/backup_rclone_redact.go|rcloneSecrets
 backend/internal/services/linter.go|processComposeEnv
 backend/internal/handlers/resources.go|maskContainerEnv
+backend/internal/services/runtime_secret_values.go|containerSecretValues
 backend/internal/services/mask_secret_lines.go|walkSensitiveYAML
 backend/internal/services/mask_secret_lines.go|maskItemAfterEquals
 backend/internal/services/mask_secret_lines.go|envStatementsFrom
@@ -117,6 +118,9 @@ backend/internal/services/mask_secret_lines.go|envStatementsFrom
 #     environment (dockerEnv), split as resolveComposeEnv splits it; no file.
 #   handlers/resources.go maskContainerEnv: Docker's Config.Env entries, the
 #     Engine API's KEY=VALUE strings, split to mask a value (agent-os-yvlh).
+#   services/runtime_secret_values.go containerSecretValues: the same
+#     Config.Env strings, split to add a sensitive one's value to the locked
+#     views' secret list as a masking needle (agent-os-rbmi review F2); no file.
 #   services/mask_secret_lines.go walkSensitiveYAML, maskItemAfterEquals:
 #     find where a KEY=value list item's value starts so it can be masked for
 #     a locked view (agent-os-w6wx). walkSensitiveYAML also hands that value
@@ -383,6 +387,14 @@ func maskContainerEnv(env []string) []string {
 	return nil
 }
 EOF
+  cat > "$d/backend/internal/services/runtime_secret_values.go" <<'EOF'
+package services
+
+func containerSecretValues(inspect container.InspectResponse) []string {
+	k, v, _ := strings.Cut(kv, "=")
+	return nil
+}
+EOF
   cat > "$d/backend/internal/services/mask_secret_lines.go" <<'EOF'
 package services
 
@@ -410,7 +422,7 @@ self_test() {
 
   local d="$tmp/clean"
   write_base "$d"
-  selftest_case "clean tree" 0 '0 violations in 11 files [(]19 allowlisted splits[)]' "$d"
+  selftest_case "clean tree" 0 '0 violations in 12 files [(]20 allowlisted splits[)]' "$d"
 
   d="$tmp/planted"
   write_base "$d"

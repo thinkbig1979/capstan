@@ -67,6 +67,9 @@ type DockerService struct {
 	// inject a fake so UpdateContainer and UpdateContainerStreaming can be
 	// driven without a live daemon (agent-os-bx43).
 	updateClient containerUpdateAPI
+	// runtimeSecrets is what RuntimeSecretValues learned from the stacks'
+	// containers, so a log stream's 5 s refresh inspects only new ones.
+	runtimeSecrets runtimeSecretCache
 	// statusFn, when non-nil, overrides Status during lifecycle settling.
 	// Production leaves it nil; unit tests inject a scripted snapshot
 	// sequence so pollUntilSettled runs against real code.
