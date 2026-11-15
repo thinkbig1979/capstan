@@ -54,6 +54,9 @@ const (
 	// lockedBackupReason: the request changes where backups go, with what
 	// credential, or what they keep (agent-os-h71i).
 	lockedBackupReason = "this needs your password, because it changes where backups go or what they keep"
+	// lockedBlankedReason: a locked session was handed the env values blanked,
+	// so a save from that state would write the blanks (agent-os-d1ue).
+	lockedBlankedReason = "while locked, the values you see are blanked, so saving would overwrite every secret with them"
 	// lockedGitCredentialReason: the request changes the credential git uses
 	// to reach the remote (agent-os-mu4z).
 	lockedGitCredentialReason = "pushes and pulls use them"

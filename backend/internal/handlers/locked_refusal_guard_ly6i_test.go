@@ -56,10 +56,6 @@ var lockedSettingKeys = map[string]bool{
 var lockedRefusalExempt = map[string]string{
 	// Writes back the file's own bytes from before the save, never request text.
 	"compose.go:restoreEnv": "restore of the pre-save bytes",
-	// Gated by the older `if !envUnlocked(c)` 403 FORBIDDEN before the write;
-	// moving them onto refuseLocked is a follow-up (orch-dm-60 ruling, (i)).
-	"env.go:Put":                  "older envUnlocked gate, follow-up (i)",
-	"settings.go:UpdateGlobalEnv": "older envUnlocked gate, follow-up (i)",
 }
 
 // lockedRefusalConditional names the handlers whose gate may be
@@ -137,6 +133,7 @@ func TestLockedRefusalGuard_ly6i(t *testing.T) {
 		"backup.go:runRestore", "backup.go:runDRRestore", "backup.go:runPrune",
 		"backup.go:repoInit", "backup.go:updateSettings",
 		"settings.go:UpdateGitSettings", "directories.go:UpdateCredentials",
+		"env.go:Put", "settings.go:UpdateGlobalEnv",
 	} {
 		assert.Contains(t, inScope, want)
 	}

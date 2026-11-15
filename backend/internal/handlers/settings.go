@@ -340,12 +340,7 @@ func (h *SettingsHandler) UpdateGlobalEnv(c *gin.Context) {
 	// Gated for the same reason as EnvHandler.Put: a locked session was handed
 	// blanked sensitive values, and this endpoint replaces the whole file, so
 	// saving from that state would wipe every secret it could not see.
-	if !envUnlocked(c) {
-		c.JSON(http.StatusForbidden, models.NewAppError(
-			http.StatusForbidden,
-			models.ErrForbidden,
-			"Re-enter your password to edit global environment variables",
-		))
+	if refuseLocked(c, "save global environment variables", lockedBlankedReason) {
 		return
 	}
 
