@@ -34,8 +34,9 @@ interface UseExternalFileChangeOptions<T> {
    * it serves still differs from the baseline, before a save is possible; the
    * compose editor rebases only a masked payload, so a locked refetch of a
    * changed file with nothing masked raises it at once (agent-os-9wp3).
+   * Required (agent-os-uttl): a default of false let a new editor opt out silently.
    */
-  lockedNow?: boolean
+  lockedNow: boolean
 }
 
 /**
@@ -52,7 +53,7 @@ interface UseExternalFileChangeOptions<T> {
  */
 export function useExternalFileChange<T>(
   data: T | undefined,
-  { isDirty, hydrate, canHydrateWhileDirty, isOwnSave, onOwnSave, rebaseWhileDirty, lockedNow = false }: UseExternalFileChangeOptions<T>,
+  { isDirty, hydrate, canHydrateWhileDirty, isOwnSave, onOwnSave, rebaseWhileDirty, lockedNow }: UseExternalFileChangeOptions<T>,
 ) {
   const [prevData, setPrevData] = useState<T | undefined>(undefined)
   const [pending, setPending] = useState<{ value: T } | null>(null)
