@@ -5,6 +5,7 @@ import (
 	"go/parser"
 	"go/token"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -28,12 +29,21 @@ var lockedRefusalSinks = map[string]bool{
 	"EnsureRepository": true,
 }
 
-// lockedRefusalFileSinks are sinks only in the named file: backup.go's
-// SetSettings is where the repository, its password, the rclone remote and
-// the retention are written (agent-os-h71i). SetSettings elsewhere writes
-// settings a locked session may change.
-var lockedRefusalFileSinks = map[string]string{
-	"SetSettings": "backup.go",
+// lockedSettingKeys are the settings a locked session must not write
+// (agent-os-h71i, 97pn): where backups go, with what credential, and how
+// long they are kept. A database.SettingValue literal or a SetSetting call
+// naming one of them is a sink in ANY handlers file, so moving the write out
+// of backup.go does not move it out of the guard.
+//
+// Blind spot: a key that is not a string literal (a variable, a constant) is
+// not seen. Today one site builds keys that way, settings.go's
+// UpdateLogRetention, from a fixed list of four history-retention keys.
+var lockedSettingKeys = map[string]bool{
+	"restic_repository": true, "restic_password": true,
+	"rclone_remote": true, "rclone_path": true,
+	"backup_keep_daily": true, "backup_keep_weekly": true,
+	"backup_keep_monthly": true, "backup_keep_yearly": true,
+	"backup_auto_prune": true,
 }
 
 // lockedRefusalExempt names the handlers that reach a sink without
@@ -86,7 +96,7 @@ func TestLockedRefusalGuard_ly6i(t *testing.T) {
 				continue
 			}
 			key := name + ":" + fn.Name.Name
-			sink := firstLockedRefusalSink(fn.Body, name)
+			sink := firstLockedRefusalSink(fn.Body)
 			if sink == token.NoPos {
 				continue
 			}
@@ -124,9 +134,9 @@ func TestLockedRefusalGuard_ly6i(t *testing.T) {
 	}
 }
 
-// firstLockedRefusalSink is the position of the first sink call in body, or
-// NoPos. file is the source file's name, for the file-scoped sinks.
-func firstLockedRefusalSink(body *ast.BlockStmt, file string) token.Pos {
+// firstLockedRefusalSink is the position of the first sink in body, or NoPos:
+// a call in lockedRefusalSinks, or a write naming a lockedSettingKeys key.
+func firstLockedRefusalSink(body *ast.BlockStmt) token.Pos {
 	first := token.NoPos
 	ast.Inspect(body, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
@@ -140,13 +150,40 @@ func firstLockedRefusalSink(body *ast.BlockStmt, file string) token.Pos {
 		case *ast.SelectorExpr:
 			name = f.Sel.Name
 		}
-		inFile := lockedRefusalFileSinks[name] == file
-		if (lockedRefusalSinks[name] || inFile) && (first == token.NoPos || call.Pos() < first) {
+		lockedKey := name == "SetSetting" && len(call.Args) > 0 && isLockedSettingKey(call.Args[0])
+		if (lockedRefusalSinks[name] || lockedKey) && (first == token.NoPos || call.Pos() < first) {
 			first = call.Pos()
 		}
 		return true
 	})
+	ast.Inspect(body, func(n ast.Node) bool {
+		lit, ok := n.(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		for _, el := range lit.Elts {
+			kv, ok := el.(*ast.KeyValueExpr)
+			if !ok {
+				continue
+			}
+			if id, ok := kv.Key.(*ast.Ident); ok && id.Name == "Key" && isLockedSettingKey(kv.Value) && (first == token.NoPos || lit.Pos() < first) {
+				first = lit.Pos()
+			}
+		}
+		return true
+	})
 	return first
+}
+
+// isLockedSettingKey reports whether e is a string literal naming a key in
+// lockedSettingKeys.
+func isLockedSettingKey(e ast.Expr) bool {
+	lit, ok := e.(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return false
+	}
+	key, err := strconv.Unquote(lit.Value)
+	return err == nil && lockedSettingKeys[key]
 }
 
 // topLevelRefuseLocked is the position of the first top-level statement of

@@ -373,12 +373,20 @@ type backupSettingsRequest struct {
 	Hostname                *string `json:"hostname"`
 }
 
+// backupFieldsAllowedLocked are the backupSettingsRequest fields a locked
+// session may set: none of them changes where backups go, with what
+// credential, or how long they are kept.
+var backupFieldsAllowedLocked = []string{
+	"scheduleIntervalMinutes", "scheduleMode", "scheduleTime", "scheduleDays",
+	"syncAfterBackup", "verifyWeekly", "rcloneTransfers", "hostname",
+}
+
 // changesDestinationOrRetention reports whether the request sets a field
-// that moves backups to a new place or credential, or changes how long
-// they are kept: the fields a locked session may not change (agent-os-h71i).
+// outside backupFieldsAllowedLocked: the repository, its password, the
+// rclone remote and path, the retention, and any field added later, which a
+// locked session may not change (agent-os-h71i, 97pn).
 func (r *backupSettingsRequest) changesDestinationOrRetention() bool {
-	return r.Repository != nil || r.Password != nil || r.RcloneRemote != nil || r.RclonePath != nil ||
-		r.KeepDaily != nil || r.KeepWeekly != nil || r.KeepMonthly != nil || r.KeepYearly != nil || r.AutoPrune != nil
+	return setsFieldOutside(r, backupFieldsAllowedLocked...)
 }
 
 // validateScheduleFields validates the three schedule fields that are present

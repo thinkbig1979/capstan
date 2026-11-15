@@ -2,6 +2,9 @@ package handlers
 
 import (
 	"net/http"
+	"reflect"
+	"slices"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
@@ -49,3 +52,26 @@ const (
 	// credential, or what they keep (agent-os-h71i).
 	lockedBackupReason = "this needs your password, because it changes where backups go or what they keep"
 )
+
+// setsFieldOutside reports whether req, a pointer to a request struct, sets a
+// field whose json name is not in allowed. A field is set when it is not its
+// zero value: a non-nil pointer, a non-empty string. It is an allow list on
+// purpose (agent-os-97pn): a field added to the request later is refused
+// while locked until someone names it here, instead of being let through.
+func setsFieldOutside(req any, allowed ...string) bool {
+	v := reflect.Indirect(reflect.ValueOf(req))
+	t := v.Type()
+	for i := 0; i < t.NumField(); i++ {
+		if v.Field(i).IsZero() {
+			continue
+		}
+		name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
+		if name == "" {
+			name = t.Field(i).Name
+		}
+		if !slices.Contains(allowed, name) {
+			return true
+		}
+	}
+	return false
+}
