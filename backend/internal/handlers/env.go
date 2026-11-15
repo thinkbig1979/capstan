@@ -1430,7 +1430,8 @@ func serializeEnvFileOver(current string, entries []EnvEntry) (string, error) {
 }
 
 // composeSafeRow returns a row to write fresh whose line compose reads back
-// as its value (agent-os-uxfl): the row as sent, else single-quoted, else
+// as its value (agent-os-uxfl): the row as sent, else unquoted (review R2-2:
+// C:\dir\ ends in a backslash no quote keeps), else single-quoted, else
 // double-quoted, the first whose line validateEnvQuoting accepts and
 // compose-go reads back exactly; ok is false when none does. That holds for
 // a row the client sent with quotes too, since the client sends an edited
@@ -1442,7 +1443,10 @@ func composeSafeRow(e EnvEntry) (EnvEntry, bool) {
 	if e.Comment || (e.Key == "" && e.Value == "") {
 		return e, true
 	}
-	for _, q := range []string{e.Quote, "'", `"`} {
+	for i, q := range []string{e.Quote, "", "'", `"`} {
+		if i > 0 && q == e.Quote {
+			continue // already tried as sent
+		}
 		candidate := e
 		candidate.Quote = q
 		if validateEnvQuoting(candidate) == nil && composeReadsValue(candidate) {

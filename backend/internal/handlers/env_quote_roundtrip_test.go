@@ -231,10 +231,10 @@ func TestEnvQuote_HTTP_RejectsUnsafeQuoteFields(t *testing.T) {
 		{"inlineComment with no space before # on an unquoted value", "NOTE", func(e map[string]any) { e["inlineComment"] = "#x" }},
 		{"unknown quote", "PW", func(e map[string]any) { e["quote"] = "`" }},
 		{"multi-character quote", "PW", func(e map[string]any) { e["quote"] = "''" }},
-		// No quoting keeps a value ending in a backslash: it escapes either
-		// closing quote. (A bare quote inside the value is now written with
-		// the other quote instead, review F1: TestEnvQuote_HTTP_RequotesAnEditedValue.)
-		{"trailing backslash inside single quotes", "PW", func(e map[string]any) { e["value"] = `abc\` }},
+		// A value the row's quote cannot hold is written with another quoting
+		// instead of refused (review F1, R2-2): it's in '' as "it's", a
+		// trailing backslash unquoted (TestEnvQuote_HTTP_RequotesAnEditedValue,
+		// TestEnvValueUxfl_R22_EditedQuotedRowMayBeWrittenUnquoted).
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -277,8 +277,11 @@ func TestEnvQuote_HTTP_AcceptsEscapedQuotes(t *testing.T) {
 // other quote, which compose reads back as typed, instead of being refused.
 func TestEnvQuote_HTTP_RequotesAnEditedValue(t *testing.T) {
 	cases := []struct{ quote, typed, want string }{
-		{"'", "it's", `PW="it's"` + "\n"},
-		{`"`, `say "hi"`, `PW='say "hi"'` + "\n"},
+		// Unquoted is tried before the other quote (review R2-2), and compose
+		// reads both of these as typed unquoted.
+		{"'", "it's", `PW=it's` + "\n"},
+		{`"`, `say "hi"`, `PW=say "hi"` + "\n"},
+		{"'", "it's # x", `PW="it's # x"` + "\n"},
 	}
 	for _, c := range cases {
 		t.Run(c.typed, func(t *testing.T) {

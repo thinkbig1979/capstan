@@ -51,3 +51,24 @@ func TestEnvValueUxfl_F1_EditedQuotedRowNoQuotingKeepsRefused(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
 	assert.Equal(t, content, readEnvQuoteFile(t, envPath))
 }
+
+// Round 3 (review R2-2): an edited quoted row is also tried unquoted, so a
+// value no quote keeps but compose reads as typed unquoted (a trailing
+// backslash) saves instead of being refused.
+func TestEnvValueUxfl_R22_EditedQuotedRowMayBeWrittenUnquoted(t *testing.T) {
+	for _, c := range []struct{ file, typed, want string }{
+		{`PW="old"` + "\n", `\`, `PW=\` + "\n"},
+		{`PW="old"` + "\n", `C:\dir\`, `PW=C:\dir\` + "\n"},
+		{"PW='old'\n", `C:\dir\`, `PW=C:\dir\` + "\n"},
+	} {
+		t.Run(c.file+" "+c.typed, func(t *testing.T) {
+			router, stackID, token, envPath := envQuoteFixture(t, c.file)
+			entries := getEntriesAsJSON(t, router, stackID, token)
+			entries[0]["value"] = c.typed
+			w := putEntries(t, router, stackID, token, entries)
+			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+			assert.Equal(t, c.want, readEnvQuoteFile(t, envPath))
+			assert.Equal(t, c.typed, composeReadsFile(t, readEnvQuoteFile(t, envPath))["PW"])
+		})
+	}
+}
