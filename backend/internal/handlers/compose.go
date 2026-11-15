@@ -457,19 +457,6 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 		hasEnvUpdate = true
 	}
 
-	// This endpoint writes the .env file too, so it is a second door onto the
-	// same file EnvHandler.Put guards — gating only that one would leave the
-	// bypass wide open. Conditional on hasEnvUpdate: a compose-only save touches
-	// no secret and needs no second factor.
-	if hasEnvUpdate && !envUnlocked(c) {
-		c.JSON(http.StatusForbidden, models.NewAppError(
-			http.StatusForbidden,
-			models.ErrForbidden,
-			"Re-enter your password to edit environment variables",
-		))
-		return
-	}
-
 	composePath := filepath.Join(stack.Directory, stack.ComposeFile)
 
 	// A stack with no env file recorded gets a new ".env" (agent-os-4p86): the

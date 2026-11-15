@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -389,6 +390,22 @@ func (r *backupSettingsRequest) changesDestinationOrRetention() bool {
 	return setsFieldOutside(r, backupFieldsAllowedLocked...)
 }
 
+// backupRetentionFields are the fields that only change how long backups are
+// kept. A locked request that sets them and nothing else outside
+// backupFieldsAllowedLocked is refused with the retention's own reason
+// (agent-os-wxap).
+var backupRetentionFields = []string{"keepDaily", "keepWeekly", "keepMonthly", "keepYearly", "autoPrune"}
+
+// lockedRefusal is the action and reason a locked refusal of r gives: the
+// retention's when r changes only the retention, the repository's otherwise
+// (a destination, a credential, or a field added later).
+func (r *backupSettingsRequest) lockedRefusal() (action, reason string) {
+	if setsFieldOutside(r, append(slices.Clone(backupFieldsAllowedLocked), backupRetentionFields...)...) {
+		return "change where backups go, their credentials or their retention", lockedBackupSettingsReason
+	}
+	return "change how long backups are kept", lockedBackupRetentionReason
+}
+
 // validateScheduleFields validates the three schedule fields that are present
 // in the request and returns the weekday list in its stored comma-separated
 // form. Absent (nil) fields are not validated: nil means "leave unchanged".
@@ -445,7 +462,8 @@ func (h *BackupHandler) updateSettings(c *gin.Context) {
 	// the repository at a place it controls reads every stack's .env from
 	// the next snapshot, and keep=1 with autoPrune would let the next run
 	// destroy the backups. A schedule or hostname edit stays allowed.
-	if req.changesDestinationOrRetention() && refuseLocked(c, "change where backups go, their credentials or their retention", lockedBackupSettingsReason) {
+	action, reason := req.lockedRefusal()
+	if req.changesDestinationOrRetention() && refuseLocked(c, action, reason) {
 		return
 	}
 

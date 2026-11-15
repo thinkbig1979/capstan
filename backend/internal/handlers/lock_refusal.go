@@ -58,10 +58,12 @@ const (
 	lockedPullReason = "a pull writes the remote's files into your stacks, and a redeploy runs them"
 	// The backup refusals (agent-os-h71i), one reason per action (zp59).
 	lockedBackupSettingsReason = "backups hold every stack's .env, so whoever picks the repository can read them"
-	lockedRestoreReason        = "a restore writes backed-up files, secrets included, into your stacks"
-	lockedDRRestoreReason      = "it writes backed-up files, secrets included, into your stacks"
-	lockedPruneReason          = "pruning deletes backups"
-	lockedRepoInitReason       = "the repository will hold every stack's .env"
+	// lockedBackupRetentionReason: a retention-only change (agent-os-wxap).
+	lockedBackupRetentionReason = "a shorter retention lets the next prune delete backups"
+	lockedRestoreReason         = "a restore writes backed-up files, secrets included, into your stacks"
+	lockedDRRestoreReason       = "it writes backed-up files, secrets included, into your stacks"
+	lockedPruneReason           = "pruning deletes backups"
+	lockedRepoInitReason        = "the repository will hold every stack's .env"
 	// lockedBackupPolicyReason: a policy write switches a stack's backups on
 	// or off, or changes how they run (agent-os-tp3g).
 	lockedBackupPolicyReason = "a backup policy decides which stacks are backed up and how"

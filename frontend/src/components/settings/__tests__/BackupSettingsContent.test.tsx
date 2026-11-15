@@ -723,6 +723,27 @@ describe('BackupSettingsContent — error handling', () => {
     })
   })
 
+  it('shows the server sentence when an Init click races a relock (agent-os-wxap)', async () => {
+    // Sent unlocked, it lands after the window closed: the server refuses with
+    // ENV_LOCKED, and its sentence (what to do) must reach the toast instead of
+    // the generic "Failed to initialize repository".
+    mockInitRepo.mockRejectedValue({
+      code: 'ENV_LOCKED',
+      message: 'Unlock env values to initialise a backup repository: the repository will hold every stack\'s .env',
+      status: 403,
+    })
+    const wrapper = createWrapper()
+    render(<BackupSettingsContent />, { wrapper })
+
+    fireEvent.click(await screen.findByRole('button', { name: /initialize repository/i }))
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('Failed to initialize repository', {
+        description: 'Unlock env values to initialise a backup repository: the repository will hold every stack\'s .env',
+      })
+    })
+  })
+
   it('names an unreachable repository instead of "Failed to initialize repository"', async () => {
     // agent-os-81vr stopped the server CREATING a repository over an
     // unreachable one. It did not fix what the operator is then told, so the

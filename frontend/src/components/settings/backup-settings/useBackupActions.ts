@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { presentError, presentFault, toastInvalid } from '@/lib/error-handler'
+import { isEnvLockedRefusal, presentError, presentFault, toastInvalid } from '@/lib/error-handler'
 import { useInitRepo, useRunDRRestore, useRunSync, useSyncPreflight, useTestCloud } from '@/hooks/useBackup'
 import { repoFaultFrom } from '@/lib/backup-repo-fault'
 import { messageOrNull } from '@/lib/narrow'
@@ -85,6 +85,12 @@ export function useBackupActions() {
       // this reads the one shared mapping instead of keeping a reworded second
       // copy that would drift from it.
       onError: (error) => {
+        // A click sent unlocked that lands after a relock is refused with
+        // ENV_LOCKED; its sentence says what to do (agent-os-wxap).
+        if (isEnvLockedRefusal(error)) {
+          presentError(error, { fallback: 'Failed to initialize repository' })
+          return
+        }
         const fault = repoFaultFrom(error)
         if (!fault) {
           // The code-keyed reader declined this rejection, so nothing is
