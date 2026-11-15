@@ -81,6 +81,10 @@ type Container struct {
 	Status string        `json:"status"`
 	Ports  []PortBinding `json:"ports"`
 	Health string        `json:"health"`
+	// ExitCode is an exited container's exit code as `compose ps` reports it,
+	// nil when it was not reported. Start verification reads it (a one-shot
+	// container that exited 0 is done, agent-os-rpbx F1); it is not sent.
+	ExitCode *int `json:"-"`
 }
 
 type PortBinding struct {

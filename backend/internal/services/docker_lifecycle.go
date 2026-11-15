@@ -93,10 +93,10 @@ func classifyContainers(
 		// container is an acceptable "stopped" end state), ANY container still
 		// listed by `compose ps` after a delete — running, paused, restarting,
 		// or otherwise — means the delete did not fully succeed and the caller
-		// must not proceed to remove the stack directory (see parseComposePSOutput:
-		// its "stopped" aggregate is only ever produced when len(containers)==0,
-		// so checking len(containers) here is equivalent to checking status but
-		// makes the real invariant explicit).
+		// must not proceed to remove the stack directory. Checked on
+		// len(containers), not on status: since rpbx's compose ps -a a stack of
+		// exited containers is also "stopped", and those containers still
+		// exist.
 		if len(containers) == 0 {
 			return truth.Success("stack and volumes removed", truth.KV("status", status))
 		}
@@ -111,6 +111,14 @@ func classifyContainers(
 	case actionStart, actionRestart:
 		if len(containers) == 0 {
 			return truth.Failed("stack did not start: no containers found", cmdErr,
+				truth.KV("status", status))
+		}
+
+		// A one-shot container that exited 0 is done, not failed (Edwin,
+		// agent-os-rpbx F1): only the others must be running.
+		containers = withoutCompleted(containers)
+		if len(containers) == 0 {
+			return truth.Success("stack ran: every container exited cleanly",
 				truth.KV("status", status))
 		}
 
@@ -181,6 +189,25 @@ func (s *DockerService) verifyLifecycle(stack models.Stack, action lifecycleActi
 	// final snapshot.
 	finalStatus, finalContainers := s.pollUntilSettled(stack, status, containers)
 	return classifyContainers(action, cmdErr, finalStatus, finalContainers, nil)
+}
+
+// completedCleanly reports a container that exited with code 0, as a one-shot
+// init or job container does when it has done its work. An exit code compose
+// did not report is not clean (fail closed).
+func completedCleanly(c models.Container) bool {
+	return c.State == "exited" && c.ExitCode != nil && *c.ExitCode == 0
+}
+
+// withoutCompleted returns the containers start verification waits on: all but
+// those that completedCleanly.
+func withoutCompleted(containers []models.Container) []models.Container {
+	out := make([]models.Container, 0, len(containers))
+	for _, c := range containers {
+		if !completedCleanly(c) {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // countRunning returns the number of containers in the "running" state.
@@ -334,6 +361,9 @@ func (s *DockerService) pollUntilSettledWithParams(
 // state "running" and none is "unhealthy". An empty slice returns false (no
 // containers = did not start).
 func allRunningNoUnhealthy(containers []models.Container) bool {
+	// Containers that exited 0 are done (agent-os-rpbx F1); the dwell is about
+	// the rest. With nothing else left there is nothing to wait for.
+	containers = withoutCompleted(containers)
 	if len(containers) == 0 {
 		return false
 	}
@@ -647,6 +677,8 @@ func parseComposePSOutput(output []byte) (string, []models.Container, error) {
 			Image   string `json:"Image"`
 			Ports   string `json:"Ports"`
 			Labels  string `json:"Labels"`
+			// A pointer so a row without it reads as unknown, not exit 0.
+			ExitCode *int `json:"ExitCode"`
 		}
 
 		if err := json.Unmarshal([]byte(line), &composePS); err != nil {
@@ -659,13 +691,14 @@ func parseComposePSOutput(output []byte) (string, []models.Container, error) {
 		ports := parsePorts(composePS.Ports)
 
 		c := models.Container{
-			ID:     composePS.ID,
-			Name:   composePS.Name,
-			Image:  composePS.Image,
-			State:  composePS.State,
-			Status: composePS.State,
-			Ports:  ports,
-			Health: composePS.Health,
+			ID:       composePS.ID,
+			Name:     composePS.Name,
+			Image:    composePS.Image,
+			State:    composePS.State,
+			Status:   composePS.State,
+			Ports:    ports,
+			Health:   composePS.Health,
+			ExitCode: composePS.ExitCode,
 		}
 
 		containers = append(containers, c)
