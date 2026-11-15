@@ -713,7 +713,7 @@ func (h *StacksHandler) composeDownForDelete(c *gin.Context, stack models.Stack)
 		}
 		c.JSON(http.StatusConflict, models.NewAppErrorWithDetails(
 			http.StatusConflict,
-			"STACK_DELETE_CONTAINERS_REMAIN",
+			models.ErrStackDeleteContainersRemain,
 			"The compose file "+stack.ComposeFile+" is gone but project "+stack.ProjectName+" still has containers ("+
 				strings.Join(names, ", ")+"). Run \"docker compose -p "+stack.ProjectName+" down\" on the host, then delete again.",
 			map[string]any{

@@ -191,7 +191,15 @@ code at all until 2026-09-24.
   the folder stays, and so does every file a sibling also uses. A registered
   stack whose folder cannot be resolved blocks the delete with 500, named in
   the reason and in `details.blockingStackId` and
-  `details.blockingDirectory` (agent-os-0s68).
+  `details.blockingDirectory` (agent-os-0s68). When the stack's compose file
+  is gone, compose down cannot run: the project's containers are looked up by
+  their compose label instead. If any remain the delete answers 409
+  `STACK_DELETE_CONTAINERS_REMAIN`, naming them in the message and in
+  `details.containers` (with `details.id` and `details.projectName`); run
+  `docker compose -p <project> down` on the host first. If none remain,
+  compose down is skipped and the stack's row and files are removed, but the
+  project's networks and named volumes are left in place. A lookup that fails
+  answers 500 and keeps the stack (agent-os-epc5).
 - `GET /api/v1/stacks/:id/logs` — fetch recent logs for a stack
 - `GET /api/v1/ws/logs/:id` — WebSocket stream of a stack's logs, tailing
 - `GET /api/v1/stacks/:id/containers` — list a stack's containers with live
