@@ -90,6 +90,23 @@ describe('EnvEditor reveal state (agent-os-0b4m)', () => {
     expect(placeholders(2)).toEqual(['value', 'value'])
   })
 
+  it('a reveal does not follow its key to another line: the row there is masked again', async () => {
+    const { queryClient } = await revealUrl()
+    // A line inserted above: DATABASE_URL is now on line 3, under the same key.
+    mockGetEnv.mockResolvedValue({
+      ...unlocked,
+      entries: [
+        unlocked.entries[0],
+        { key: 'TZ', value: 'UTC', line: 2, sensitive: false },
+        { ...unlocked.entries[1], line: 3 },
+      ],
+    })
+    await act(() => queryClient.invalidateQueries({ queryKey: queryKeys.stack.env('s1') }))
+    await waitFor(() => expect(val(2).value).toBe('UTC'))
+    expect(val(3).value).toBe(URL_VALUE)
+    expect(val(3).type).toBe('password')
+  })
+
   it('the unlock expiring re-masks it, with no refetch', async () => {
     await revealUrl()
     act(() => useEnvUnlockStore.getState().lock())
