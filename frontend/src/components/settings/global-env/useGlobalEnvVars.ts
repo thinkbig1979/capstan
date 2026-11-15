@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
+import { useMemo, useState, type Dispatch, type SetStateAction } from 'react'
 import { toast } from 'sonner'
 import { useTextFilter } from '@/hooks/useTextFilter'
 import { useGlobalEnv, useUpdateGlobalEnv } from '@/hooks/useResources'
 import { useExternalFileChange } from '@/hooks/useExternalFileChange'
+import { useStillHoldsSent } from '@/hooks/useStillHoldsSent'
 import { presentError } from '@/lib/error-handler'
 import {
   alignRedactedRows,
@@ -64,10 +65,8 @@ export function useGlobalEnvVars(
   // ref, because isOwnSave reads it while rendering. It is dropped once that
   // refetch is consumed, the form is clean again, or the save failed.
   const [sent, setSent] = useState<EnvRow[] | null>(null)
-  const varsRef = useRef(vars)
-  useEffect(() => {
-    varsRef.current = vars
-  }, [vars])
+  // The rows a save sent, against the form as it is when the save lands.
+  const sentRows = useStillHoldsSent(vars, (latest, rows: EnvRow[]) => sameVars(cleanRows(latest), rows))
 
   // A new payload replaces the form only when the form is clean. A dirty form
   // keeps what the user typed and offers Reload (agent-os-lqcw), the rule the
@@ -229,6 +228,7 @@ export function useGlobalEnvVars(
     if (refusal) return
     const rows = cleanRows(vars)
     setSent(rows)
+    sentRows.remember(rows)
     // The wire format has no row id.
     updateGlobalEnv.mutate(rows.map(({ key, value }) => ({ key, value })), {
       onSuccess: () => {
@@ -238,7 +238,7 @@ export function useGlobalEnvVars(
         // (agent-os-lqcw, the same rule as agent-os-3761).
         setLoaded(rows)
         setBlindGuard(null)
-        if (sameVars(cleanRows(varsRef.current), rows)) {
+        if (sentRows.stillHolds()) {
           setDirty(false)
           setSent(null)
         }
