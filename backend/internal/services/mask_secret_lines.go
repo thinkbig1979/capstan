@@ -67,10 +67,24 @@ const SecretMask = secretMask
 // An alias under a sensitive key masks its anchor's value where the anchor
 // is defined, whatever that key is.
 func MaskSecrets(text, filePath string, secrets []string) (string, int) {
+	return maskSecrets(text, filePath, secrets, isSensitiveFlagName)
+}
+
+// maskSecretsForList is MaskSecrets as the stack's secret list reads a
+// value's spans (containerSecretValues): a flag counts as sensitive only by
+// the env key rule. A value only the wider flag rule finds is masked in place
+// by MaskSecrets but is not made a needle for every line (review round 2 F2:
+// "true", "none", "trust" were starred everywhere).
+func maskSecretsForList(text string) string {
+	out, _ := maskSecrets(text, "", nil, IsSensitiveEnvKey)
+	return out
+}
+
+func maskSecrets(text, filePath string, secrets []string, flagRule func(string) bool) (string, int) {
 	if text == "" {
 		return text, 0
 	}
-	m := &lineMasker{lines: strings.Split(text, "\n")}
+	m := &lineMasker{lines: strings.Split(text, "\n"), flagRule: flagRule}
 	m.masked = make([]bool, len(m.lines))
 	orig := append([]string(nil), m.lines...)
 	m.orig = orig
@@ -164,6 +178,8 @@ type lineMasker struct {
 	count  int
 	// orig is the text before any pass, line by line, when known.
 	orig []string
+	// flagRule judges a long flag's name; nil is isSensitiveFlagName.
+	flagRule func(string) bool
 	// needles are the secret-list values MaskSecrets looks for. A pass that
 	// masks part of one masks all of it (splice): the part left would no
 	// longer match the needle and showed.
@@ -319,8 +335,21 @@ func walkSensitiveYAML(n *yaml.Node, onValue func(v, k *yaml.Node), onItem func(
 // its own whose name IsSensitiveEnvKey matches: --password, --db-token. Short
 // flags never are: -p is usually a port.
 func isSensitiveLongFlag(tok string) bool {
+	return isSensitiveLongFlagBy(tok, isSensitiveFlagName)
+}
+
+// isSensitiveLongFlagBy is isSensitiveLongFlag with the name judged by rule.
+func isSensitiveLongFlagBy(tok string, rule func(string) bool) bool {
 	name, ok := strings.CutPrefix(tok, "--")
-	return ok && longFlagNameRe.MatchString(name) && isSensitiveFlagName(name)
+	return ok && longFlagNameRe.MatchString(name) && rule(name)
+}
+
+// flagName is the masker's flag rule.
+func (m *lineMasker) flagName(name string) bool {
+	if m.flagRule == nil {
+		return isSensitiveFlagName(name)
+	}
+	return m.flagRule(name)
 }
 
 // isSensitiveFlagName is IsSensitiveEnvKey for a command-line flag's name,
@@ -332,16 +361,16 @@ func isSensitiveFlagName(name string) bool {
 	if IsSensitiveEnvKey(name) {
 		return true
 	}
+	// The flag's last word only (review round 2 F2): --pass-host-header and
+	// --auth-host name no password.
 	words := strings.FieldsFunc(strings.ToUpper(name), func(r rune) bool {
 		return (r < 'A' || r > 'Z') && (r < '0' || r > '9')
 	})
-	for _, w := range words {
-		w = strings.TrimRight(w, "0123456789")
-		if strings.HasSuffix(w, "PASS") || w == "AUTH" || w == "MASTERAUTH" {
-			return true
-		}
+	if len(words) == 0 {
+		return false
 	}
-	return false
+	w := strings.TrimRight(words[len(words)-1], "0123456789")
+	return strings.HasSuffix(w, "PASS") || w == "AUTH" || w == "MASTERAUTH"
 }
 
 var longFlagNameRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.\-]*$`)
@@ -1041,7 +1070,7 @@ func (m *lineMasker) maskInlineKV(i int) {
 		}
 		v := line[start:end]
 		flag := loc[2] >= 2 && line[loc[2]-2:loc[2]] == "--"
-		if v == "" || v == secretMask || isSecretReference(v) || (!IsSensitiveEnvVar(key, v) && (!flag || !isSensitiveFlagName(key))) {
+		if v == "" || v == secretMask || isSecretReference(v) || (!IsSensitiveEnvVar(key, v) && (!flag || !m.flagName(key))) {
 			return loc[1], false
 		}
 		return w.mask(start, end, secretMask), false
@@ -1063,7 +1092,7 @@ func (m *lineMasker) maskFlagNextToken(i int) {
 	line := m.lines[i]
 	w := m.newLineWalk(line)
 	forwardMatches(flagNextTokenRe, line, func(loc []int) (int, bool) {
-		if !isSensitiveFlagName(line[loc[2]:loc[3]]) {
+		if !m.flagName(line[loc[2]:loc[3]]) {
 			return loc[1], false
 		}
 		start := loc[1]
@@ -1093,6 +1122,12 @@ func (m *lineMasker) maskFlagNextToken(i int) {
 // line, URL and value passes, and the element after a sensitive long flag
 // (isSensitiveLongFlag) whole. nil stays nil.
 func MaskArgs(args, secrets []string) []string {
+	return maskArgs(args, secrets, isSensitiveFlagName)
+}
+
+// maskArgs is MaskArgs with a flag's name judged by flagRule (see
+// maskSecretsForList).
+func maskArgs(args, secrets []string, flagRule func(string) bool) []string {
 	if args == nil {
 		return nil
 	}
@@ -1102,10 +1137,10 @@ func MaskArgs(args, secrets []string) []string {
 		if afterFlag && a != "" && !strings.HasPrefix(a, "-") && !isSecretReference(a) {
 			out = append(out, secretMask)
 		} else {
-			masked, _ := MaskSecrets(a, "", secrets)
+			masked, _ := maskSecrets(a, "", secrets, flagRule)
 			out = append(out, masked)
 		}
-		afterFlag = isSensitiveLongFlag(a)
+		afterFlag = isSensitiveLongFlagBy(a, flagRule)
 	}
 	return out
 }

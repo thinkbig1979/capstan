@@ -176,7 +176,7 @@ func containerSecretValues(inspect container.InspectResponse) []string {
 		out = append(out, spanValues(orig, masked, spanValuesDepth)...)
 	}
 	argv := func(args []string) {
-		masked := MaskArgs(args, nil)
+		masked := maskArgs(args, nil, IsSensitiveEnvKey)
 		for i := range args {
 			addSpans(args[i], masked[i])
 		}
@@ -190,14 +190,14 @@ func containerSecretValues(inspect container.InspectResponse) []string {
 			if IsSensitiveEnvVar(k, v) {
 				out = append(out, v, strings.TrimSpace(v))
 			}
-			masked, _ := MaskSecrets(v, "", nil)
+			masked := maskSecretsForList(v)
 			addSpans(v, masked)
 		}
 		for k, v := range cfg.Labels {
 			if IsSensitiveEnvVar(k, v) {
 				out = append(out, v, strings.TrimSpace(v))
 			}
-			masked, _ := MaskSecrets(v, "", nil)
+			masked := maskSecretsForList(v)
 			addSpans(v, masked)
 		}
 		argv(cfg.Cmd)
@@ -251,7 +251,7 @@ func spanValues(orig, masked string, depth int) []string {
 		// field is one word (agent-os-w4p2). Only on text shorter than orig,
 		// so it always ends.
 		if depth > 0 && len(sp) < len(orig) {
-			inner, _ := MaskSecrets(sp, "", nil)
+			inner := maskSecretsForList(sp)
 			out = append(out, spanValues(sp, inner, depth-1)...)
 		}
 	}

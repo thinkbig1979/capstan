@@ -156,7 +156,14 @@ func composeYAMLSecrets(content []byte) (out, refs []string) {
 			}
 		}
 	}
-	onValue := func(v, _ *yaml.Node) { collect(v) }
+	onValue := func(v, k *yaml.Node) {
+		// The argument of a flag only the wider flag rule finds is masked in
+		// place but not listed (review round 2 F2).
+		if name, ok := strings.CutPrefix(k.Value, "--"); ok && k.Kind == yaml.ScalarNode && !IsSensitiveEnvKey(name) {
+			return
+		}
+		collect(v)
+	}
 	onItem := func(_ *yaml.Node, val string) {
 		if isSecretReference(val) {
 			refs = append(refs, referenceName(val))
