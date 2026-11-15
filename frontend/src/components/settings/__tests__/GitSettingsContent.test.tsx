@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { useEnvUnlockStore } from '@/stores/envUnlockStore'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { expectHintOpensHelp } from '@/test/helpHint'
@@ -47,6 +48,9 @@ const renderPanel = () => render(<GitSettingsContent />, { wrapper: createWrappe
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // Unlocked: while locked every field and Save are disabled (agent-os-mu4z,
+  // xmbg; GitSettingsContent.locked.test.tsx), and these tests are about saves.
+  useEnvUnlockStore.getState().unlock('test-token')
   mockGetGit.mockResolvedValue({ sshKey: '', httpsUser: '', hasHttpsToken: false })
   mockUpdateGit.mockResolvedValue({})
 })

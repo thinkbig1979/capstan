@@ -29,7 +29,7 @@ export const LOCKED_RESTORE_NOTICE =
  * folder, because pushes and pulls use them.
  */
 export const LOCKED_GIT_CREDENTIALS_NOTICE =
-  'Env values are locked. Changing the SSH key, HTTPS username or token needs an unlock, because pushes and pulls use them. The commit author stays editable.'
+  'Env values are locked. Changing the SSH key, HTTPS username or token needs an unlock, because pushes and pulls use them. The commit author does too, because a locked history masks it with your secrets.'
 
 export const LOCKED_FOLDER_CREDENTIALS_NOTICE =
   'Env values are locked. Changing this folder\'s git credentials needs an unlock, because pushes and pulls use them.'

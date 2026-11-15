@@ -211,6 +211,8 @@ export function GitSettingsContent() {
             type="text"
             value={effectiveAuthorName}
             onChange={(e) => setAuthorName(e.target.value)}
+            disabled={locked}
+            title={lockedTitle}
             className="max-w-md"
           />
         </div>
@@ -223,6 +225,8 @@ export function GitSettingsContent() {
             type="text"
             value={effectiveAuthorEmail}
             onChange={(e) => setAuthorEmail(e.target.value)}
+            disabled={locked}
+            title={lockedTitle}
             className="max-w-md"
           />
           <p className="text-xs text-muted-foreground">
@@ -247,7 +251,7 @@ export function GitSettingsContent() {
         />
       )}
       <div className="flex justify-end">
-        <Button type="submit" disabled={updateGitSettings.isPending}>
+        <Button type="submit" disabled={updateGitSettings.isPending || locked}>
           {updateGitSettings.isPending ? (
             <>
               <span className="mr-2"><LoadingSpinner size="small" /></span>

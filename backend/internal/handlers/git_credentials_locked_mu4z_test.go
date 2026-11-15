@@ -70,9 +70,23 @@ func TestGitSettings_LockedRefusesCredentials_mu4z(t *testing.T) {
 	}
 }
 
-func TestGitSettings_LockedAuthorStillSaves_mu4z(t *testing.T) {
+// TestGitSettings_LockedAuthorRefused_xmbg supersedes mu4z's "the author
+// stays allowed" (orch-dm-64, review F3): a locked log masks the commit
+// author with the stack's secrets (agent-os-xmbg), so an author a locked
+// session sets to a list of guesses would read back, after the next commit,
+// with the secret's position starred. A locked author save is refused and
+// writes nothing; unlocked, it saves.
+func TestGitSettings_LockedAuthorRefused_xmbg(t *testing.T) {
+	const body = `{"authorName":"Locked Author","authorEmail":"a@example.com"}`
 	h, _ := newTestSettingsHandler(t)
-	w := putJSONMu4z(gitSettingsRouterMu4z(h, false), "/settings/git", `{"authorName":"Locked Author","authorEmail":"a@example.com"}`)
+	w := putJSONMu4z(gitSettingsRouterMu4z(h, false), "/settings/git", body)
+	assert.Equal(t, http.StatusForbidden, w.Code, "body %s", w.Body.String())
+	assert.Equal(t, models.ErrEnvLocked, envLockedCodeH71i(t, w))
+	assert.Contains(t, w.Body.String(), "Unlock env values to change the commit author")
+	assert.Equal(t, "<absent>", settingOrAbsentH71i(t, h.db, models.SettingGitAuthorName))
+	assert.Equal(t, "<absent>", settingOrAbsentH71i(t, h.db, models.SettingGitAuthorEmail))
+
+	w = putJSONMu4z(gitSettingsRouterMu4z(h, true), "/settings/git", body)
 	require.Equal(t, http.StatusOK, w.Code, "body %s", w.Body.String())
 	assert.Equal(t, "Locked Author", settingOrAbsentH71i(t, h.db, models.SettingGitAuthorName))
 	assert.Equal(t, "a@example.com", settingOrAbsentH71i(t, h.db, models.SettingGitAuthorEmail))

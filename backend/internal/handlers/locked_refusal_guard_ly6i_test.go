@@ -84,9 +84,9 @@ var lockedRefusalConditional = map[string]string{
 	// Refused when the body changes where or with what credential backups
 	// go, or the retention; a schedule edit stays allowed (agent-os-h71i).
 	"backup.go:updateSettings": "refused only when a destination, credential or retention field is present",
-	// Refused when a credential field is present; the author stays allowed
-	// (agent-os-mu4z).
-	"settings.go:UpdateGitSettings": "refused only when a credential field is present",
+	// Refused when any field is set; an empty body writes nothing
+	// (agent-os-mu4z, the author since agent-os-xmbg).
+	"settings.go:UpdateGitSettings": "refused only when the body sets a field",
 }
 
 // TestLockedRefusalGuard_ly6i keeps every handler that lints or writes

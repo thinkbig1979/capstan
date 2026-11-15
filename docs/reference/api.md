@@ -131,7 +131,9 @@ password is checked.
   update-scan scheduler settings
 - `GET /api/v1/settings/git` / `PUT /api/v1/settings/git` — Git integration
   settings (SSH key, etc.). Also carries the commit author, `authorName` and
-  `authorEmail`, which are not credentials. On PUT an empty or omitted field
+  `authorEmail`, which are not credentials. While env values are locked a PUT
+  that sets any field, the author included, is refused with **403
+  `ENV_LOCKED`** (a locked log masks the author). On PUT an empty or omitted field
   means "no change"; a non-empty value is trimmed and validated, and anything
   invalid answers **400 `VALIDATION_ERROR`** with nothing in the request saved:
   both must be one line, the name at most 200 characters, the email at most

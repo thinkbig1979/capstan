@@ -1279,11 +1279,15 @@ func (h *SettingsHandler) UpdateGitSettings(c *gin.Context) {
 		return
 	}
 
-	// A credential field present needs an unlock, even with the stored value,
-	// so the answer says nothing about what is stored (agent-os-mu4z). Before
-	// the validation, which would otherwise answer about a locked caller's
-	// input. The author fields stay allowed.
-	if setsFieldOutside(&req, gitFieldsAllowedLocked...) && refuseLocked(c, "change the git credentials", lockedGitCredentialReason) {
+	// Any field set needs an unlock, even with the stored value, so the
+	// answer says nothing about what is stored (agent-os-mu4z). Before the
+	// validation, which would otherwise answer about a locked caller's input.
+	// The author too since agent-os-xmbg: a locked log masks it.
+	action, reason := "change the git credentials", lockedGitCredentialReason
+	if !setsFieldOutside(&req, gitAuthorFields...) {
+		action, reason = "change the commit author", lockedGitAuthorReason
+	}
+	if setsFieldOutside(&req) && refuseLocked(c, action, reason) {
 		return
 	}
 

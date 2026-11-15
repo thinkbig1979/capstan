@@ -77,12 +77,17 @@ const (
 	// lockedGitCredentialReason: the request changes the credential git uses
 	// to reach the remote (agent-os-mu4z).
 	lockedGitCredentialReason = "pushes and pulls use them"
+	// lockedGitAuthorReason: the author lands in commits a locked log masks
+	// (agent-os-xmbg).
+	lockedGitAuthorReason = "a locked history masks the author with your secrets"
 )
 
-// gitFieldsAllowedLocked are the git settings a locked session may change:
-// the commit author. The SSH key, HTTPS user and token, and any field added
-// later, need an unlock (agent-os-mu4z).
-var gitFieldsAllowedLocked = []string{"authorName", "authorEmail"}
+// gitAuthorFields are the git settings that set the commit author. Every git
+// setting needs an unlock: the credentials because pushes and pulls use them
+// (agent-os-mu4z), the author because a locked log masks it with the stack's
+// secrets (agent-os-xmbg, review F3). A request setting only these gets the
+// author's reason.
+var gitAuthorFields = []string{"authorName", "authorEmail"}
 
 // setsFieldOutside reports whether req, a pointer to a request struct, sets a
 // field whose json name is not in allowed. A field is set when it is not its
