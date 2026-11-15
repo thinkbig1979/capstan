@@ -452,7 +452,8 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 			renderEnvValidationFailure(c, err)
 			return
 		}
-		envContent = serializeEnvFile(req.EnvEntries)
+		// The rows are written over the file's text once it is read under
+		// the lock, below.
 		hasEnvUpdate = true
 	}
 
@@ -509,6 +510,36 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 		return
 	}
 
+	// The env path is checked here, before the lint, because the rows are
+	// written over the file's current text, read under the lock, as the table
+	// save does (serializeEnvFileOver, agent-os-4qiw): an unchanged line keeps
+	// its bytes, and the lint sees the text that will be written.
+	var envPath string
+	if hasEnvUpdate {
+		envPath = filepath.Join(stack.Directory, envFileName)
+		if err := validateStackPath(envPath, h.config); err != nil {
+			c.JSON(http.StatusBadRequest, models.NewAppError(
+				http.StatusBadRequest,
+				models.ErrPathTraversal,
+				"Invalid env file path",
+			))
+			return
+		}
+		if req.EnvRaw == "" {
+			//nolint:gosec // envPath was validated against the configured stacks directories just above (validateStackPath, symlink-aware) — see README.md "Command execution and file access"
+			current, rerr := os.ReadFile(envPath)
+			if rerr != nil && !os.IsNotExist(rerr) {
+				renderResult(c, truth.Failed("failed to read existing env file", rerr))
+				return
+			}
+			var serr error
+			if envContent, serr = serializeEnvFileOver(string(current), req.EnvEntries); serr != nil {
+				renderEnvValidationFailure(c, serr)
+				return
+			}
+		}
+	}
+
 	// ── Lint compose before touching disk ──────────────────────────────────
 	// The env half of this save is the env compose will read, so a variable
 	// it sets counts as set.
@@ -543,19 +574,8 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 	// originalEnv holds the pre-update bytes so we can restore them if the
 	// subsequent compose write fails. nil means the file did not previously exist.
 	var originalEnv []byte
-	var envPath string
 
 	if hasEnvUpdate {
-		envPath = filepath.Join(stack.Directory, envFileName)
-		if err := validateStackPath(envPath, h.config); err != nil {
-			c.JSON(http.StatusBadRequest, models.NewAppError(
-				http.StatusBadRequest,
-				models.ErrPathTraversal,
-				"Invalid env file path",
-			))
-			return
-		}
-
 		// Only a .env that is truly absent is created. With none recorded, the
 		// frontend sends just the one new VAR=value line (useExtractToEnv.ts),
 		// so writing it over a .env the scan has not seen yet would replace
