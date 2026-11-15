@@ -15,8 +15,7 @@ import { CommitPushDialog } from '@/components/git/CommitPushDialog'
 import { FileChangedNotice } from '@/components/FileChangedNotice'
 import { useExternalFileChange } from '@/hooks/useExternalFileChange'
 import { EnvUnlockDialog } from '@/components/EnvUnlockDialog'
-import { Button } from '@/components/ui/button'
-import { Lock } from 'lucide-react'
+import { EnvLockedNotice } from '@/components/EnvLockedNotice'
 import { useEnvLockedNow } from '@/hooks/useEnvLockedNow'
 import { LOCKED_COMPOSE_NOTICE } from '@/lib/locked-copy'
 
@@ -192,22 +191,11 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
       />
 
       {(masked || envLocked) && (
-        <div
-          role="status"
-          className="flex flex-wrap items-center justify-between gap-3 rounded-md border bg-muted/50 px-3 py-2 text-sm"
-        >
-          <div className="flex items-center gap-2">
-            <Lock className="h-4 w-4 shrink-0" aria-hidden="true" />
-            <span>
-              {hasUnsavedChanges
-                ? 'Values locked again; unlock to save your edits.'
-                : LOCKED_COMPOSE_NOTICE}
-            </span>
-          </div>
-          <Button type="button" size="sm" variant="outline" onClick={() => setUnlockOpen(true)}>
-            Unlock to edit
-          </Button>
-        </div>
+        <EnvLockedNotice onUnlock={() => setUnlockOpen(true)} unlockLabel="Unlock to edit">
+          {hasUnsavedChanges
+            ? 'Values locked again; unlock to save your edits.'
+            : LOCKED_COMPOSE_NOTICE}
+        </EnvLockedNotice>
       )}
       <EnvUnlockDialog open={unlockOpen} onOpenChange={setUnlockOpen} />
 

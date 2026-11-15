@@ -240,3 +240,30 @@ func TestLockedSession_EnvCreateWithContent_ly6i(t *testing.T) {
 	_, err = os.Stat(filepath.Join(dir, ".env"))
 	assert.NoError(t, err)
 }
+
+// Review F5: the env create refusal runs before the operation lock and the
+// disk, as refuseLocked's contract says. A locked create with content on a
+// stack whose env file exists answers the refusal, not the 409 that comes
+// from reading the disk. Without content the 409 stays (agent-os-40bp).
+func TestLockedSession_EnvCreateRefusedBeforeDisk_ly6i(t *testing.T) {
+	root := t.TempDir()
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	dir := filepath.Join(root, "exists")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".env"), []byte("KEEP=me\n"), 0o600))
+	createTestDirectory(t, db, dir)
+	id := filepath.Base(root) + "~exists:default"
+	require.NoError(t, db.UpsertStack(models.Stack{ID: id, Directory: dir, ComposeFile: "compose.yaml", ProjectName: "exists-default"}))
+	h := NewEnvHandler(db, &config.Config{StacksDir: root})
+	r := gin.New()
+	r.POST("/stacks/:id/env", h.Create) // no unlock: locked
+
+	w := doJSONSiou(t, r, http.MethodPost, "/stacks/"+id+"/env", map[string]string{"content": "FOO=x4820x4821x4822\n"})
+	assert.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), `"code":"ENV_LOCKED"`)
+
+	w = doJSONSiou(t, r, http.MethodPost, "/stacks/"+id+"/env", map[string]string{})
+	assert.Equal(t, http.StatusConflict, w.Code, "without content the existence check answers: %s", w.Body.String())
+}

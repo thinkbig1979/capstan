@@ -42,9 +42,13 @@ export function usePasswordReveal(authDisabled: boolean, isUnlocked: () => boole
     if (!open) setPendingReveal(false)
   }
 
+  // The locked-notice's unlock action: no reveal follows it.
+  const openUnlockDialog = () => setUnlockDialogOpen(true)
+
   return {
     showPassword,
     unlockDialogOpen,
+    openUnlockDialog,
     handleTogglePasswordReveal,
     handleUnlocked,
     handleDialogOpenChange,

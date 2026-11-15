@@ -10,3 +10,18 @@ export const LOCKED_COMPOSE_NOTICE =
 
 export const LOCKED_NEW_STACK_NOTICE =
   'Env values are locked. Linting and creating a stack need an unlock, because the replies could show which text matches a secret.'
+
+/**
+ * What a locked session cannot do with backups (agent-os-h71i). The server
+ * refuses changes to where backups go or what they keep, initialising a
+ * repository and restores: a locked session that could point the repository
+ * at a place it controls would read every stack's .env.
+ */
+export const LOCKED_BACKUP_NOTICE =
+  'Env values are locked. Changing the repository, its password, the cloud remote or retention, initializing a repository and restoring need an unlock, because backups hold every stack\'s .env.'
+
+export const LOCKED_RESTORE_NOTICE =
+  'Env values are locked. Restoring a snapshot needs an unlock, because a restore writes files into the stack.'
+
+/** Tooltip on a backup control disabled while locked. */
+export const LOCKED_BACKUP_TITLE = 'Unlock env values to change this'

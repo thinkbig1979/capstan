@@ -60,9 +60,9 @@ export function ComposeToolbar({
           variant="outline"
           size="sm"
           onClick={onExtract}
-          disabled={!selectedText || isLoading || isSaving || masked}
+          disabled={!selectedText || isLoading || isSaving || masked || locked}
           title={
-            masked
+            masked || locked
               ? 'Unlock to extract values to .env'
               : selectedText
                 ? 'Extract selected value to .env file'

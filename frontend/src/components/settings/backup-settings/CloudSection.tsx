@@ -10,6 +10,7 @@ import { ConfirmDialog } from '@/components/ConfirmDialog'
 import type { SyncPreflightResponse } from '@/types'
 import type { Draft } from './types'
 import { DrRestoreDialog } from './DrRestoreDialog'
+import { LOCKED_BACKUP_TITLE } from '@/lib/locked-copy'
 
 interface CloudSectionProps {
   draft: Draft
@@ -31,6 +32,8 @@ interface CloudSectionProps {
   backupRunning: boolean
   /** The saved local repository path, named in the restore confirmation. */
   repository: string
+  /** Env values are locked: the server refuses remote changes and a DR restore (agent-os-h71i). */
+  locked: boolean
 }
 
 function syncBlockedReason(rcloneAvailable: boolean, remote: string, isDirty: boolean): string | undefined {
@@ -69,9 +72,11 @@ export function CloudSection({
   isRestoring,
   backupRunning,
   repository,
+  locked,
 }: CloudSectionProps) {
+  const lockedTitle = locked ? LOCKED_BACKUP_TITLE : undefined
   const syncBlocked = syncBlockedReason(rcloneAvailable, draft.rcloneRemote, isDirty)
-  const restoreBlocked = restoreBlockedReason(rcloneAvailable, isDirty, backupRunning)
+  const restoreBlocked = locked ? LOCKED_BACKUP_TITLE : restoreBlockedReason(rcloneAvailable, isDirty, backupRunning)
   const [restoreOpen, setRestoreOpen] = useState(false)
   // Gated on the field still holding the value the server sent: once the
   // operator types a new remote, the masked keys are no longer in it
@@ -105,6 +110,8 @@ export function CloudSection({
           value={draft.rcloneRemote}
           onChange={(e) => onChange('rcloneRemote', e.target.value)}
           className="max-w-md"
+          disabled={locked}
+          title={lockedTitle}
           aria-describedby={
             showCredentialHint
               ? 'backup-rclone-remote-credential-hint backup-rclone-remote-hint'
@@ -138,6 +145,8 @@ export function CloudSection({
           value={draft.rclonePath}
           onChange={(e) => onChange('rclonePath', e.target.value)}
           className="max-w-md"
+          disabled={locked}
+          title={lockedTitle}
         />
       </div>
 

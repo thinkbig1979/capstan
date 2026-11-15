@@ -44,7 +44,7 @@ func (h *StacksHandler) Create(c *gin.Context) {
 		return
 	}
 
-	if refuseLocked(c, "create a stack") {
+	if refuseLocked(c, "create a stack", lockedEchoReason) {
 		return
 	}
 

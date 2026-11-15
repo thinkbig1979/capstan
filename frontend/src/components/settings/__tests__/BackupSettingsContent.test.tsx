@@ -362,6 +362,11 @@ describe('BackupSettingsContent — password field security', () => {
 })
 
 describe('BackupSettingsContent — editing and saving', () => {
+  // These edit the repository and retention: unlocked, as the server requires (agent-os-h71i).
+  beforeEach(() => {
+    useEnvUnlockStore.getState().unlock('t')
+  })
+
   it('calls updateSettings with changed repository path on save', async () => {
     const wrapper = createWrapper()
     render(<BackupSettingsContent />, { wrapper })
@@ -421,6 +426,11 @@ describe('BackupSettingsContent — editing and saving', () => {
 })
 
 describe('BackupSettingsContent — repository initialization', () => {
+  // These edit the repository and retention: unlocked, as the server requires (agent-os-h71i).
+  beforeEach(() => {
+    useEnvUnlockStore.getState().unlock('t')
+  })
+
   it('calls initRepo when "Initialize repository" button is clicked', async () => {
     const wrapper = createWrapper()
     render(<BackupSettingsContent />, { wrapper })
@@ -665,6 +675,11 @@ describe('BackupSettingsContent — draft editing and discard', () => {
 })
 
 describe('BackupSettingsContent — error handling', () => {
+  // These edit the repository and retention: unlocked, as the server requires (agent-os-h71i).
+  beforeEach(() => {
+    useEnvUnlockStore.getState().unlock('t')
+  })
+
   it('shows an error toast when saving settings fails', async () => {
     mockUpdateSettings.mockRejectedValue(new Error('fail'))
     const wrapper = createWrapper()
@@ -1327,5 +1342,78 @@ describe('BackupSettingsContent — field help (agent-os-pkq9)', () => {
   it('backup.transfers: the parallel transfers hint opens help at its topic', async () => {
     const user = renderSettings()
     await expectHintOpensHelp(user, 'Parallel transfers', 'backup.transfers')
+  })
+})
+
+// agent-os-h71i: while env values are locked the server refuses changes to
+// where backups go or what they keep, repository init and a DR restore. The
+// controls that would send them are disabled, with the unlock action beside
+// the reason. Each group asserts its locked state and, on the same render
+// path, the unlocked one, so a test that cannot fail does not pass for it.
+describe('BackupSettingsContent — locked session (agent-os-h71i)', () => {
+  const lockedSettings = () => ({
+    ...makeSettings({ hasPassword: true, passwordSource: 'db' }),
+    rcloneRemote: 'myremote',
+    rclonePath: 'bucket/backups',
+  })
+
+  async function renderPage() {
+    mockGetSettings.mockResolvedValue(lockedSettings())
+    render(<BackupSettingsContent />, { wrapper: createWrapper() })
+    await screen.findByLabelText(/repository path/i)
+  }
+
+  function unlock() {
+    act(() => {
+      useEnvUnlockStore.getState().unlock('t')
+    })
+  }
+
+  it('repository group: path, password, clear password and Initialize are disabled, with the reason and the unlock action', async () => {
+    await renderPage()
+    const controls = () => [
+      screen.getByLabelText(/repository path/i),
+      screen.getByLabelText(/repository password/i),
+      screen.getByRole('button', { name: /clear saved password/i }),
+      screen.getByRole('button', { name: /initialize repository/i }),
+    ]
+    for (const el of controls()) expect(el).toBeDisabled()
+    expect(screen.getByRole('status')).toHaveTextContent(/initializing a repository and restoring need an unlock/i)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock' }))
+    expect(await screen.findByText('Unlock environment variables')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    unlock()
+    for (const el of controls()) expect(el).toBeEnabled()
+    expect(screen.queryByText(/initializing a repository and restoring need an unlock/i)).not.toBeInTheDocument()
+  })
+
+  it('retention group: the four keep fields and auto-prune are disabled', async () => {
+    await renderPage()
+    const controls = () => [
+      screen.getByLabelText('Keep daily'),
+      screen.getByLabelText('Keep weekly'),
+      screen.getByLabelText('Keep monthly'),
+      screen.getByLabelText('Keep yearly'),
+      screen.getByRole('switch', { name: /auto-prune after backup/i }),
+    ]
+    for (const el of controls()) expect(el).toBeDisabled()
+    unlock()
+    for (const el of controls()) expect(el).toBeEnabled()
+  })
+
+  it('cloud group: remote, path and Restore repository from remote are disabled; schedule-only fields stay editable', async () => {
+    await renderPage()
+    const controls = () => [
+      screen.getByLabelText('Remote'),
+      screen.getByLabelText('Path on remote'),
+      screen.getByRole('button', { name: /restore repository from remote/i }),
+    ]
+    for (const el of controls()) expect(el).toBeDisabled()
+    // The server allows these while locked.
+    expect(document.getElementById('backup-rclone-transfers')).toBeEnabled()
+    unlock()
+    for (const el of controls()) expect(el).toBeEnabled()
   })
 })

@@ -58,6 +58,7 @@ function renderCloud(draft: Draft) {
       onLargeDeleteOpenChange={noop}
       onDrRestore={noop}
       isRestoring={false}
+      locked={false}
       backupRunning={false}
       repository="/data/restic-repo"
     />,

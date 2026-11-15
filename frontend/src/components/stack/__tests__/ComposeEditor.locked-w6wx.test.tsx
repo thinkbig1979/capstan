@@ -22,11 +22,21 @@ const mockDispatch = vi.fn((tr: { changes: { from: number; to: number; insert: s
 })
 let capturedOnChange: ((content: string) => void) | undefined
 let capturedOnSave: (() => boolean) | undefined
+let capturedOnSelect: ((text: string) => void) | undefined
 let lastReadOnly: boolean | undefined
 
 vi.mock('@/hooks/useCodeMirrorEditor', () => ({
   useCodeMirrorEditor: vi.fn(
-    (_ref: unknown, opts: { doc: string; readOnly?: boolean; onChange?: (c: string) => void; onSave?: () => boolean }) => {
+    (
+      _ref: unknown,
+      opts: {
+        doc: string
+        readOnly?: boolean
+        onChange?: (c: string) => void
+        onSave?: () => boolean
+        onSelect?: (text: string) => void
+      },
+    ) => {
       const viewRef = useRef<unknown>(null)
       viewRef.current = {
         state: { doc: { toString: () => view.text }, selection: { main: { from: 0, to: 0 } } },
@@ -35,6 +45,7 @@ vi.mock('@/hooks/useCodeMirrorEditor', () => ({
       }
       capturedOnChange = opts.onChange
       capturedOnSave = opts.onSave
+      capturedOnSelect = opts.onSelect
       lastReadOnly = opts.readOnly
       useEffect(() => {
         if (opts.doc !== view.text) view.text = opts.doc
@@ -113,6 +124,7 @@ beforeEach(() => {
   view.text = ''
   capturedOnChange = undefined
   capturedOnSave = undefined
+  capturedOnSelect = undefined
   lastReadOnly = undefined
   mockGetCompose.mockImplementation(() => Promise.resolve(storeFollows({ ...disk, locked: disk.maskedValues > 0 })))
   mockLintCompose.mockResolvedValue({ valid: true, lintResults: [] })
@@ -131,6 +143,23 @@ describe('ComposeEditor with masked secrets (agent-os-w6wx)', () => {
     expect(screen.getByRole('button', { name: /Lint/ })).toBeDisabled()
     expect(lastReadOnly).toBe(true)
     expect(screen.getByRole('button', { name: /Extract to \.env/ })).toBeDisabled()
+  })
+
+  // Review F4 (agent-os-ly6i): locked, a file with nothing masked still
+  // cannot extract to .env: the extract is a compose-env save, which the
+  // server refuses while locked.
+  it('locked with nothing masked: Extract to .env is disabled', async () => {
+    disk = { content: 'services:\n  web:\n    image: nginx\n', maskedValues: 0 }
+    mockGetCompose.mockImplementation(() => Promise.resolve(storeFollows({ ...disk, locked: true })))
+    renderEditor()
+
+    await waitFor(() => expect(view.text).toBe(disk.content))
+    act(() => {
+      capturedOnSelect?.('nginx')
+    })
+    const extract = screen.getByRole('button', { name: /Extract to \.env/ })
+    expect(extract).toBeDisabled()
+    expect(extract).toHaveAttribute('title', 'Unlock to extract values to .env')
   })
 
   it('a file with nothing masked is editable and shows no banner', async () => {

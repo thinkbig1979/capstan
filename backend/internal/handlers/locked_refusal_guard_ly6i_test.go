@@ -20,6 +20,20 @@ var lockedRefusalSinks = map[string]bool{
 	"LintCompose":            true,
 	"writeComposeFileAtomic": true,
 	"writeEnvFileAtomic":     true,
+	// agent-os-h71i: what a locked session must not start through backups:
+	// a restore or DR restore, a prune, and a repository init.
+	"LaunchRestore":    true,
+	"LaunchDRRestore":  true,
+	"LaunchPrune":      true,
+	"EnsureRepository": true,
+}
+
+// lockedRefusalFileSinks are sinks only in the named file: backup.go's
+// SetSettings is where the repository, its password, the rclone remote and
+// the retention are written (agent-os-h71i). SetSettings elsewhere writes
+// settings a locked session may change.
+var lockedRefusalFileSinks = map[string]string{
+	"SetSettings": "backup.go",
 }
 
 // lockedRefusalExempt names the handlers that reach a sink without
@@ -40,6 +54,9 @@ var lockedRefusalExempt = map[string]string{
 var lockedRefusalConditional = map[string]string{
 	// An empty env create carries no text (orch-dm-60 ruling A).
 	"env.go:Create": "refused only when the body carries content",
+	// Refused when the body changes where or with what credential backups
+	// go, or the retention; a schedule edit stays allowed (agent-os-h71i).
+	"backup.go:updateSettings": "refused only when a destination, credential or retention field is present",
 }
 
 // TestLockedRefusalGuard_ly6i keeps every handler that lints or writes
@@ -69,7 +86,7 @@ func TestLockedRefusalGuard_ly6i(t *testing.T) {
 				continue
 			}
 			key := name + ":" + fn.Name.Name
-			sink := firstLockedRefusalSink(fn.Body)
+			sink := firstLockedRefusalSink(fn.Body, name)
 			if sink == token.NoPos {
 				continue
 			}
@@ -79,9 +96,11 @@ func TestLockedRefusalGuard_ly6i(t *testing.T) {
 				continue
 			}
 			_, conditional := lockedRefusalConditional[key]
-			used[key] = used[key] || conditional
-			gate := topLevelRefuseLocked(fn.Body, conditional)
-			if !assert.NotEqual(t, token.NoPos, gate, "%s lints or writes request text with no top-level `if refuseLocked(c, ...) { return }`: a locked session would read its own text back through the secret masking (agent-os-ly6i)", fset.Position(sink)) {
+			gate, viaCond := topLevelRefuseLocked(fn.Body, conditional)
+			// A conditional entry is used only while its gate really is the
+			// `<cond> && refuseLocked` form (review F8).
+			used[key] = used[key] || (conditional && viaCond)
+			if !assert.NotEqual(t, token.NoPos, gate, "%s lints or writes request text, or starts a restore, prune or repository change, with no top-level `if refuseLocked(c, ...) { return }`: a locked session would read its own text back through the secret masking (agent-os-ly6i) or reach secrets through backups (agent-os-h71i)", fset.Position(sink)) {
 				continue
 			}
 			assert.Less(t, gate, sink, "%s: refuseLocked must come before the first lint or write at %s", key, fset.Position(sink))
@@ -91,21 +110,23 @@ func TestLockedRefusalGuard_ly6i(t *testing.T) {
 		assert.True(t, used[key], "lockedRefusalExempt names %s but it reaches no sink; remove the stale entry", key)
 	}
 	for key := range lockedRefusalConditional {
-		assert.True(t, used[key], "lockedRefusalConditional names %s but it reaches no sink; remove the stale entry", key)
+		assert.True(t, used[key], "lockedRefusalConditional names %s but it reaches no sink through a `<cond> && refuseLocked` gate; remove the stale entry", key)
 	}
 	sort.Strings(inScope)
 	// Not vacuous: every handler this bead gated is found.
 	for _, want := range []string{
 		"compose.go:Lint", "compose.go:Put", "compose.go:PutComposeAndEnv",
 		"stack_crud.go:Create", "stacks.go:Lint", "env.go:Create",
+		"backup.go:runRestore", "backup.go:runDRRestore", "backup.go:runPrune",
+		"backup.go:repoInit", "backup.go:updateSettings",
 	} {
 		assert.Contains(t, inScope, want)
 	}
 }
 
 // firstLockedRefusalSink is the position of the first sink call in body, or
-// NoPos.
-func firstLockedRefusalSink(body *ast.BlockStmt) token.Pos {
+// NoPos. file is the source file's name, for the file-scoped sinks.
+func firstLockedRefusalSink(body *ast.BlockStmt, file string) token.Pos {
 	first := token.NoPos
 	ast.Inspect(body, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
@@ -119,7 +140,8 @@ func firstLockedRefusalSink(body *ast.BlockStmt) token.Pos {
 		case *ast.SelectorExpr:
 			name = f.Sel.Name
 		}
-		if lockedRefusalSinks[name] && (first == token.NoPos || call.Pos() < first) {
+		inFile := lockedRefusalFileSinks[name] == file
+		if (lockedRefusalSinks[name] || inFile) && (first == token.NoPos || call.Pos() < first) {
 			first = call.Pos()
 		}
 		return true
@@ -128,18 +150,19 @@ func firstLockedRefusalSink(body *ast.BlockStmt) token.Pos {
 }
 
 // topLevelRefuseLocked is the position of the first top-level statement of
-// body shaped `if refuseLocked(...) { ...; return }`, or NoPos. With
-// conditional, `if <cond> && refuseLocked(...)` counts too. A call whose
-// result is dropped, or one nested in a branch, does not count.
-func topLevelRefuseLocked(body *ast.BlockStmt, conditional bool) token.Pos {
+// body shaped `if refuseLocked(...) { ...; return }`, or NoPos, and whether it
+// matched the `if <cond> && refuseLocked(...)` form, which counts only with
+// conditional. A call whose result is dropped, or one nested in a branch, does
+// not count.
+func topLevelRefuseLocked(body *ast.BlockStmt, conditional bool) (token.Pos, bool) {
 	for _, st := range body.List {
 		ifs, ok := st.(*ast.IfStmt)
 		if !ok || ifs.Init != nil || ifs.Else != nil || len(ifs.Body.List) == 0 {
 			continue
 		}
-		cond := ifs.Cond
+		cond, viaCond := ifs.Cond, false
 		if bin, ok := cond.(*ast.BinaryExpr); ok && conditional && bin.Op == token.LAND {
-			cond = bin.Y
+			cond, viaCond = bin.Y, true
 		}
 		call, ok := cond.(*ast.CallExpr)
 		if !ok {
@@ -150,8 +173,8 @@ func topLevelRefuseLocked(body *ast.BlockStmt, conditional bool) token.Pos {
 			continue
 		}
 		if _, ok := ifs.Body.List[len(ifs.Body.List)-1].(*ast.ReturnStmt); ok {
-			return ifs.Pos()
+			return ifs.Pos(), viaCond
 		}
 	}
-	return token.NoPos
+	return token.NoPos, false
 }

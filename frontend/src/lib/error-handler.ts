@@ -545,6 +545,16 @@ export function presentFault(rawTitle: string, cause: string | null, extra?: Toa
  * thing as `fallback`, so passing both left one of them dead at the call site
  * -- which is what happened at the one site that used it (found in review).
  */
+/**
+ * True when the server refused the request because env values are locked
+ * (403 ENV_LOCKED, agent-os-ly6i): lint, compose saves, stack create and the
+ * backup changes that need the password. A caller that would otherwise go on
+ * to a second request of the same kind stops here, since it is refused too.
+ */
+export function isEnvLockedRefusal(err: unknown): boolean {
+  return (err as { code?: unknown } | null | undefined)?.code === 'ENV_LOCKED'
+}
+
 export function presentError(
   err: unknown,
   opts: { fallback: string; extra?: ToastOptions },

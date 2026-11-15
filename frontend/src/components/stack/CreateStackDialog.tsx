@@ -18,8 +18,7 @@ import { CreateStackFooter } from './create-stack/CreateStackFooter'
 import { queryKeys } from '@/lib/query-keys'
 import { useEnvLockedNow } from '@/hooks/useEnvLockedNow'
 import { EnvUnlockDialog } from '@/components/EnvUnlockDialog'
-import { Button } from '@/components/ui/button'
-import { Lock } from 'lucide-react'
+import { EnvLockedNotice } from '@/components/EnvLockedNotice'
 import { LOCKED_NEW_STACK_NOTICE } from '@/lib/locked-copy'
 
 interface CreateStackDialogProps {
@@ -175,18 +174,9 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
         </div>
 
         {envLocked && (
-          <div
-            role="status"
-            className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-md border bg-muted/50 px-3 py-2 text-sm"
-          >
-            <div className="flex items-center gap-2">
-              <Lock className="h-4 w-4 shrink-0" aria-hidden="true" />
-              <span>{LOCKED_NEW_STACK_NOTICE}</span>
-            </div>
-            <Button type="button" size="sm" variant="outline" onClick={() => setUnlockOpen(true)}>
-              Unlock
-            </Button>
-          </div>
+          <EnvLockedNotice className="mt-6" onUnlock={() => setUnlockOpen(true)}>
+            {LOCKED_NEW_STACK_NOTICE}
+          </EnvLockedNotice>
         )}
         <EnvUnlockDialog open={unlockOpen} onOpenChange={setUnlockOpen} />
 

@@ -3,10 +3,13 @@ import { Switch } from '@/components/ui/switch'
 import { HelpHint } from '@/components/ui/help-hint'
 import { NumericField } from '../NumericField'
 import type { Draft } from './types'
+import { LOCKED_BACKUP_TITLE } from '@/lib/locked-copy'
 
 interface RetentionSectionProps {
   draft: Draft
   onChange: <K extends keyof Draft>(key: K, value: Draft[K]) => void
+  /** Env values are locked: the server refuses retention changes (agent-os-h71i). */
+  locked: boolean
 }
 
 const RETENTION_FIELDS = [
@@ -16,7 +19,8 @@ const RETENTION_FIELDS = [
   { key: 'keepYearly', label: 'Keep yearly', id: 'backup-keep-yearly' },
 ] as const
 
-export function RetentionSection({ draft, onChange }: RetentionSectionProps) {
+export function RetentionSection({ draft, onChange, locked }: RetentionSectionProps) {
+  const lockedTitle = locked ? LOCKED_BACKUP_TITLE : undefined
   return (
     <div className="space-y-4 pt-4 border-t">
       <div className="flex items-center gap-1.5">
@@ -46,6 +50,8 @@ export function RetentionSection({ draft, onChange }: RetentionSectionProps) {
               value={draft[key]}
               onValueChange={(v) => onChange(key, v)}
               className="w-full"
+              disabled={locked}
+              title={lockedTitle}
             />
           </div>
         ))}
@@ -59,6 +65,8 @@ export function RetentionSection({ draft, onChange }: RetentionSectionProps) {
           id="backup-auto-prune"
           checked={draft.autoPrune}
           onCheckedChange={(v) => onChange('autoPrune', v)}
+          disabled={locked}
+          title={lockedTitle}
         />
         <div>
           <Label htmlFor="backup-auto-prune">Auto-prune after backup</Label>

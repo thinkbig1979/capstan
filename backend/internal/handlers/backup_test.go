@@ -221,6 +221,10 @@ func (n *noopDocker) Status(stack models.Stack) (string, []models.Container, err
 func newBackupRouter(h *BackupHandler) *gin.Engine {
 	r := gin.New()
 	group := r.Group("/api")
+	// Unlocked: a locked session is refused the repository, retention,
+	// restore, prune and init routes (agent-os-h71i), and these tests are
+	// about what those routes do.
+	group.Use(envUnlockedMiddleware())
 	h.RegisterRoutes(group)
 	return r
 }

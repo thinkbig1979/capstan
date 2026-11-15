@@ -4,6 +4,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { BackupsTab } from '../BackupsTab'
 import { toast } from 'sonner'
+import { useAuthStore } from '@/stores/authStore'
+import { useEnvUnlockStore } from '@/stores/envUnlockStore'
 
 // ─── API mocks ───────────────────────────────────────────────────────────────
 
@@ -133,6 +135,8 @@ const STACK_ID = 'stacks~myapp'
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // Auth off, so env values count as unlocked: a locked session cannot restore (agent-os-h71i).
+  useAuthStore.setState({ authDisabled: true })
   mockStreamState.status = 'idle'
   mockStreamState.lines = []
   mockStreamState.error = null
@@ -1035,5 +1039,35 @@ describe('BackupsTab — failed policies read', () => {
     await waitFor(() => expect(mockGetPolicies).toHaveBeenCalled())
     expect(screen.queryByText(/backup is not enabled for this stack/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/Could not (load|refresh) the backup policy/)).not.toBeInTheDocument()
+  })
+})
+
+// agent-os-h71i: the server refuses a restore while env values are locked.
+// The Restore button is disabled, with the reason and the unlock action; the
+// same render unlocked enables it again.
+describe('BackupsTab — locked session (agent-os-h71i)', () => {
+  it('Restore is disabled while locked, with the reason and the unlock action', async () => {
+    useAuthStore.setState({ authDisabled: false })
+    useEnvUnlockStore.getState().lock()
+    render(<BackupsTab stackId={STACK_ID} />, { wrapper: createWrapper() })
+
+    const restore = await screen.findByRole('button', { name: /restore snapshot abc12345/i })
+    expect(restore).toBeDisabled()
+    expect(screen.getByRole('status')).toHaveTextContent(/restoring a snapshot needs an unlock/i)
+    fireEvent.click(restore)
+    expect(mockRestore).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock' }))
+    expect(await screen.findByText('Unlock environment variables')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    act(() => {
+      useEnvUnlockStore.getState().unlock('t')
+    })
+    expect(screen.getByRole('button', { name: /restore snapshot abc12345/i })).toBeEnabled()
+    expect(screen.queryByText(/restoring a snapshot needs an unlock/i)).not.toBeInTheDocument()
+    act(() => {
+      useEnvUnlockStore.getState().lock()
+    })
   })
 })

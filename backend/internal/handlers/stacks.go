@@ -125,7 +125,7 @@ func (h *StacksHandler) Lint(c *gin.Context) {
 		return
 	}
 
-	if refuseLocked(c, "lint the compose file") {
+	if refuseLocked(c, "lint the compose file", lockedEchoReason) {
 		return
 	}
 
