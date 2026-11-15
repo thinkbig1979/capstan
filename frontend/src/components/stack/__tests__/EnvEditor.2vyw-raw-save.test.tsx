@@ -147,4 +147,17 @@ describe('EnvEditor: the Raw save is not refused for a blind table edit (agent-o
     await afterATick()
     expect(mockUpdateEnv).toHaveBeenCalledTimes(1)
   })
+
+  // Review F5: the table's refusal copy says the edits can't be saved, which is
+  // false in the Raw view, where Save works. It shows in the table only.
+  it('2vyw: the blind-edit notice shows in the table view, not in the Raw view', async () => {
+    await blindEditThenUnlock(aaaUnlocked, RAW)
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(rawSave()).not.toBeDisabled()
+
+    await userEvent.setup().click(screen.getByRole('tab', { name: 'Table View' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/can't be saved/)
+    expect(tableSave()).toBeDisabled()
+  })
 })

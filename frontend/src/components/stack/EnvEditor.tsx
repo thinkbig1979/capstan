@@ -355,6 +355,10 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   // the raw text included (it is still the locked view's empty one), so that
   // refusal holds for both, as does a file removed on disk.
   const rawRefusal = refusal === 'unaligned' || refusal === 'removed' ? refusal : null
+  // The notice names the refusal of the save on screen: the Raw view's Save
+  // works under a blind table edit, so the table's copy would be false there
+  // (review F5). The table refusal itself stays.
+  const shownRefusal = activeView === 'raw' ? rawRefusal : refusal
   // Refused in the handlers too, not only by the disabled buttons.
   const saveTable = () => {
     if (!refusal) handleSaveTable()
@@ -470,8 +474,8 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
         />
       )}
 
-      {refusal && !locked ? (
-        <FileChangedNotice onReload={reloadFile}>{SAVE_REFUSED_COPY[refusal]}</FileChangedNotice>
+      {shownRefusal && !locked ? (
+        <FileChangedNotice onReload={reloadFile}>{SAVE_REFUSED_COPY[shownRefusal]}</FileChangedNotice>
       ) : (
         changedOnDisk && <FileChangedNotice onReload={reload} />
       )}
