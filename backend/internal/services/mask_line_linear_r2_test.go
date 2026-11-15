@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/stretchr/testify/assert"
@@ -46,23 +46,41 @@ func growthNeedlesR2() []string {
 	return out
 }
 
+// allocBytes is the fewest bytes one call of f allocated over three calls
+// (after a warm-up): bytes, not time, so a GC pause or a loaded machine
+// cannot move it (review round 3, N2: the wall-clock bound flaked on CI).
+// The rescan built a new line per masked value, n*k bytes; one pass
+// allocates O(n). TotalAlloc is process-wide, so the fewest of three
+// discards a call that overlapped a stray goroutine's allocation.
+func allocBytes(f func()) uint64 {
+	f()
+	best := uint64(1 << 63)
+	var a, b runtime.MemStats
+	for range 3 {
+		runtime.ReadMemStats(&a)
+		f()
+		runtime.ReadMemStats(&b)
+		best = min(best, b.TotalAlloc-a.TotalAlloc)
+	}
+	return best
+}
+
+// growthBoundR2 is the most 8x the input may multiply the bytes allocated
+// by. Measured on e184387: 5.7-8.9 (MaskSecrets), 6.6-8.4 (runtime list);
+// on 1e4d8e4, the rescan: 68-90 for every rescanning rule, 43-46 for the
+// URL values.
+const growthBoundR2 = 16.0
+
 func TestMaskSecrets_r2_LinearInLineLength(t *testing.T) {
 	needles := growthNeedlesR2()
-	best := func(line string, runs int) time.Duration {
-		d := time.Duration(1 << 62)
-		for range runs {
-			t0 := time.Now()
-			MaskSecrets(line, "", needles)
-			d = min(d, time.Since(t0))
-		}
-		return d
-	}
 	for name, u := range growthUnitsR2 {
 		mk := func(n int) string { return strings.Repeat(u, n/len(u)+1)[:n] }
-		small, large := best(mk(4096), 3), best(mk(32768), 3)
-		ratio := float64(large) / float64(max(small, 10*time.Microsecond))
-		t.Logf("%-11s n=4096 %v, n=32768 %v, ratio %.1f", name, small, large, ratio)
-		assert.Less(t, ratio, 16.0, "%s: 8x the line costs more than linear", name)
+		smallLine, largeLine := mk(4096), mk(32768)
+		small := allocBytes(func() { MaskSecrets(smallLine, "", needles) })
+		large := allocBytes(func() { MaskSecrets(largeLine, "", needles) })
+		ratio := float64(large) / float64(max(small, 1))
+		t.Logf("%-12s n=4096 %d B, n=32768 %d B, ratio %.1f", name, small, large, ratio)
+		assert.Less(t, ratio, growthBoundR2, "%s: 8x the line allocates more than linear", name)
 	}
 }
 
@@ -154,20 +172,14 @@ func TestMaskSecrets_r2_SameAsBeforeOverCorpus(t *testing.T) {
 // cost 30x 1 KiB. The reviewer's shapes.
 func TestContainerSecretValues_r2_LinearInValueLength(t *testing.T) {
 	for _, u := range []string{` {"k":"https://u:p@h"}`, " a=b c", ` "password":"x"`, " https://u:p@h?token=q"} {
-		took := func(n int) time.Duration {
+		took := func(n int) uint64 {
 			v := strings.Repeat(u, n/len(u)+1)[:n]
 			in := container.InspectResponse{Config: &container.Config{Env: []string{"CFG=" + v}}, ContainerJSONBase: &container.ContainerJSONBase{}}
-			d := time.Duration(1 << 62)
-			for range 3 {
-				t0 := time.Now()
-				containerSecretValues(in)
-				d = min(d, time.Since(t0))
-			}
-			return d
+			return allocBytes(func() { containerSecretValues(in) })
 		}
 		small, large := took(1024), took(8192)
-		ratio := float64(large) / float64(max(small, 10*time.Microsecond))
-		t.Logf("%-26q 1 KiB %v, 8 KiB %v, ratio %.1f", u, small, large, ratio)
-		assert.Less(t, ratio, 16.0, "%q: 8x the value costs more than linear", u)
+		ratio := float64(large) / float64(max(small, 1))
+		t.Logf("%-26q 1 KiB %d B, 8 KiB %d B, ratio %.1f", u, small, large, ratio)
+		assert.Less(t, ratio, growthBoundR2, "%q: 8x the value allocates more than linear", u)
 	}
 }
