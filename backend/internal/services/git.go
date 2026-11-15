@@ -1445,22 +1445,17 @@ func (p *siblingPlacement) changed(top string, changedFiles []string, token stri
 	return out, failures
 }
 
-// stackFilesChanged reports whether any changed file matches the stack's
+// stackFilesChangedSince reports whether any changed file matches the stack's
 // compose or env file. changedFiles are repository-top-relative (git's own
 // frame); the stack's files are named relative to its folder, so they are
 // placed under the folder's repository-relative path first (agent-os-4d60).
 // The folder is resolved, not the files: a file deleted by the pull has
 // nothing to resolve. A stack that reads its files through a symlink also
 // matches the link and its target (stackLinkDeps), since git names one or the
-// other, not the stack's own file name (agent-os-juq9, agent-os-9ut3).
-func stackFilesChanged(top string, stack models.Stack, changedFiles []string) (bool, error) {
-	return stackFilesChangedSince(top, stack, changedFiles, linkSnapshot{}, "")
-}
-
-// stackFilesChangedSince is stackFilesChanged that also matches the links the
-// stack read through before the pull (pre): a pull that deletes or replaces a
-// folder link on the way to the compose file leaves nothing to walk to
-// afterwards (agent-os-juq9 review S1).
+// other, not the stack's own file name (agent-os-juq9, agent-os-9ut3), and the
+// links it read through before the pull (pre): a pull that deletes or
+// replaces a folder link on the way to the compose file leaves nothing to
+// walk to afterwards (agent-os-juq9 review S1).
 func stackFilesChangedSince(top string, stack models.Stack, changedFiles []string, pre linkSnapshot, token string) (bool, error) {
 	rel, ok, err := repoRel(top, stack.Directory, token)
 	if err != nil {

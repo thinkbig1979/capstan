@@ -23,6 +23,13 @@ import (
 // redeploy shows up as the stack in details.failedRedeploys (and as a recorded
 // docker call) rather than needing a daemon.
 
+// stackFilesChanged is stackFilesChangedSince with no pre-pull links and no
+// token, for tests only: production always passes the pull's token
+// (agent-os-zcf9, TestNoEmptyTokenArg_zcf9).
+func stackFilesChanged(top string, stack models.Stack, changedFiles []string) (bool, error) {
+	return stackFilesChangedSince(top, stack, changedFiles, linkSnapshot{}, "")
+}
+
 // stack4d60 places one stack: dir is its folder inside the repository ("" is
 // the repository top).
 type stack4d60 struct {
