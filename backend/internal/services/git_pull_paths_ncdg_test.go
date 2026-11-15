@@ -52,6 +52,20 @@ func TestRelFilesChangedNcdg_TokenInFileNameNotShown(t *testing.T) {
 	}
 }
 
+// relFilesChanged: the token in the stack FOLDER, the message's other path
+// operand (agent-os-u27g). Only the census guarded it: m2, the folder quoted
+// without redactToken, failed no behaviour test.
+func TestRelFilesChangedU27g_TokenInDirectoryNotShown(t *testing.T) {
+	for _, tok := range []string{tokR5b4, tokR5b4Quoted} {
+		st := models.Stack{ID: "S", Directory: "/stacks/" + tok, ComposeFile: "../../x.yaml"}
+		_, err := relFilesChanged("s", st, nil, tok)
+		require.Error(t, err)
+		reason := shownReasonNcdg(t, err.Error(), tok)
+		require.Contains(t, reason, "cannot be placed")
+		assertNoTokenR5b4(t, reason, tok)
+	}
+}
+
 // stackFilesChangedSince: the stack folder is outside the repository.
 func TestStackFilesChangedSinceNcdg_TokenInFolderNotShown(t *testing.T) {
 	linkTop, real := linkedTopNcdg(t)
