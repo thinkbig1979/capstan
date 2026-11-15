@@ -7,6 +7,7 @@ import type { EnvEntryDraft } from '@/types'
 import { useTextFilter } from '@/hooks/useTextFilter'
 import { TableSearch } from '@/components/ui/table-search'
 import type { EnvEntryRow, IndexedEnvEntry } from './types'
+import { valuePlaceholder } from './hiddenValue'
 
 const NO_HIDDEN_KEYS: ReadonlySet<number> = new Set()
 
@@ -182,7 +183,7 @@ export function EnvTableView({
                         type={entry.sensitive ? 'password' : 'text'}
                         value={entry.value}
                         onChange={(e) => onEntryChange(i, 'value', e.target.value)}
-                        placeholder="value"
+                        placeholder={valuePlaceholder(locked, entry.sensitive, entry.value)}
                         aria-label={`Environment variable value ${i + 1}`}
                       />
                       <Button
@@ -263,7 +264,7 @@ export function EnvTableView({
                     type={entry.sensitive ? 'password' : 'text'}
                     value={entry.value}
                     onChange={(e) => onEntryChange(i, 'value', e.target.value)}
-                    placeholder="value"
+                    placeholder={valuePlaceholder(locked, entry.sensitive, entry.value)}
                     className="flex-1"
                     aria-label={`Environment variable value ${i + 1}`}
                   />

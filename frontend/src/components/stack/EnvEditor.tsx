@@ -41,6 +41,9 @@ const SAVE_REFUSED_COPY = {
     "You changed or deleted rows that were hidden while locked, so they can't be saved safely. Undo those changes, or Reload to load the file; your edits will be lost.",
 }
 
+/** Where a row sits in the file: what a reveal follows across a refetch (agent-os-0b4m). */
+const rowSlot = (e: { line?: number; key: string }) => `${e.line ?? ''}\n${e.key}`
+
 interface EnvEditorProps {
   stackId: string
 }
@@ -88,7 +91,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   // Re-masks revealed entries when the unlock session ends (manual lock or
   // auto-expiry) — see useEnvUnlockRemask for which ones and the render-time
   // detail.
-  const { rememberMasked } = useEnvUnlockRemask(unlockedUntil, setEntries, entries, { snapshots, rebase: rebaseHistory })
+  const { rememberMasked, wasMasked } = useEnvUnlockRemask(unlockedUntil, setEntries, entries, { snapshots, rebase: rebaseHistory })
 
   const {
     unlockDialogOpen,
@@ -140,14 +143,17 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
       // A reveal is stored as `sensitive: false` on the row itself, so a refetch
       // would silently re-mask whatever the user had uncovered. That refetch is
       // now routine: unlocking invalidates this query to swap the blanked values
-      // for the real ones (agent-os-7o5s). Carry the reveals across by key so the
-      // value the user asked to see survives the payload it was waiting for.
-      const revealedKeys = new Set(
-        entries.filter((e) => !e.sensitive && isSensitiveKey(e.key)).map((e) => e.key),
+      // for the real ones (agent-os-7o5s). Carry the reveals across so the value
+      // the user asked to see survives the payload it was waiting for: a row
+      // shown in the clear that was ever masked, the server's flag included (a
+      // DATABASE_URL masked for its credential, agent-os-0b4m), onto the new row
+      // on the same line under the same key.
+      const revealedRows = new Set(
+        entries.filter((e) => !e.sensitive && (isSensitiveKey(e.key) || wasMasked(e._rowId))).map(rowSlot),
       )
       const rows = next.entries.map((e) => ({
         ...e,
-        sensitive: e.sensitive && !revealedKeys.has(e.key),
+        sensitive: e.sensitive && !revealedRows.has(rowSlot(e)),
         _rowId: nextRowId(),
       }))
       setEntries(rows)

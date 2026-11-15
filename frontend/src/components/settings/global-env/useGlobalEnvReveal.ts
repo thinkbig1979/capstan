@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 
 /**
- * Per-row reveal state for sensitive values, gated behind the env-unlock
+ * Per-row reveal state for sensitive values, keyed by the row's `_rowId` so a
+ * delete above a revealed row does not move the reveal onto its neighbour
+ * (agent-os-0b4m), gated behind the env-unlock
  * session: revealing requires auth to be disabled or the session already
  * unlocked, otherwise it opens the unlock dialog and defers the reveal until
  * it succeeds. Also re-masks every revealed value whenever the unlock
@@ -14,7 +16,7 @@ export function useGlobalEnvReveal(
 ) {
   const [visible, setVisible] = useState<Record<number, boolean>>({})
   const [unlockDialogOpen, setUnlockDialogOpen] = useState(false)
-  const [pendingRevealIndex, setPendingRevealIndex] = useState<number | null>(null)
+  const [pendingRevealId, setPendingRevealId] = useState<number | null>(null)
 
   // Re-mask all values when the unlock session ends.
   useEffect(() => {
@@ -23,30 +25,30 @@ export function useGlobalEnvReveal(
     setVisible({})
   }, [unlockedUntil])
 
-  const toggleVisible = (index: number) => {
-    if (visible[index]) {
+  const toggleVisible = (rowId: number) => {
+    if (visible[rowId]) {
       // Hiding never requires unlock.
-      setVisible((prev) => ({ ...prev, [index]: false }))
+      setVisible((prev) => ({ ...prev, [rowId]: false }))
       return
     }
     if (authDisabled || isUnlocked()) {
-      setVisible((prev) => ({ ...prev, [index]: true }))
+      setVisible((prev) => ({ ...prev, [rowId]: true }))
       return
     }
-    setPendingRevealIndex(index)
+    setPendingRevealId(rowId)
     setUnlockDialogOpen(true)
   }
 
   const handleUnlocked = () => {
-    if (pendingRevealIndex !== null) {
-      setVisible((prev) => ({ ...prev, [pendingRevealIndex]: true }))
+    if (pendingRevealId !== null) {
+      setVisible((prev) => ({ ...prev, [pendingRevealId]: true }))
     }
-    setPendingRevealIndex(null)
+    setPendingRevealId(null)
   }
 
   const handleDialogOpenChange = (open: boolean) => {
     setUnlockDialogOpen(open)
-    if (!open) setPendingRevealIndex(null)
+    if (!open) setPendingRevealId(null)
   }
 
   return {

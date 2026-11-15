@@ -122,6 +122,7 @@ export function GlobalEnvSettingsContent() {
         onChange={handleChange}
         onToggleVisible={toggleVisible}
         onDelete={handleDelete}
+        locked={locked}
       />
 
       <GlobalEnvCards
@@ -132,6 +133,7 @@ export function GlobalEnvSettingsContent() {
         onChange={handleChange}
         onToggleVisible={toggleVisible}
         onDelete={handleDelete}
+        locked={locked}
       />
 
       {/* Directly above the save control: the operator is about to write these

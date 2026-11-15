@@ -84,5 +84,8 @@ export function useEnvUnlockRemask(
     if (ids.length > 0) setEverMasked((prev) => new Set([...prev, ...ids]))
   }
 
-  return { rememberMasked }
+  /** The row was masked at some point since it entered the editor. */
+  const wasMasked = (id: number) => everMasked.has(id)
+
+  return { rememberMasked, wasMasked }
 }

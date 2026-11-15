@@ -4,15 +4,19 @@ import { Eye, EyeOff, Trash2 } from 'lucide-react'
 import { isSensitiveKey } from '@/components/stack/env-editor/sensitiveKey'
 import type { EditableField, IndexedEnvVar } from './types'
 import { ReadOnlyValue } from './ReadOnlyValue'
+import { valuePlaceholder } from '@/components/stack/env-editor/hiddenValue'
 
 interface GlobalEnvCardsProps {
   hasVars: boolean
   filtered: IndexedEnvVar[]
   query: string
+  /** Revealed rows, by `_rowId`. */
   visible: Record<number, boolean>
   onChange: (index: number, field: EditableField, value: string) => void
-  onToggleVisible: (index: number) => void
+  onToggleVisible: (rowId: number) => void
   onDelete: (index: number) => void
+  /** The payload on screen was served locked: a blank secret is a hidden one. */
+  locked?: boolean
 }
 
 export function GlobalEnvCards({
@@ -23,6 +27,7 @@ export function GlobalEnvCards({
   onChange,
   onToggleVisible,
   onDelete,
+  locked = false,
 }: GlobalEnvCardsProps) {
   return (
     <div className="md:hidden space-y-3">
@@ -40,7 +45,7 @@ export function GlobalEnvCards({
           // The server's flag covers a secret value under a harmless key
           // (agent-os-ruuw); the name covers a key typed since the last load.
           const sensitive = entry.sensitive === true || isSensitiveKey(entry.key)
-          const reveal = !!visible[index]
+          const reveal = !!visible[entry._rowId]
           // A line the server keeps verbatim (agent-os-jb5g), or a multi-line value.
           const readOnly = entry.readOnly === true || entry.value.includes('\n')
           return (
@@ -60,7 +65,7 @@ export function GlobalEnvCards({
                     type={sensitive && !reveal ? 'password' : 'text'}
                     value={entry.value}
                     onChange={(e) => onChange(index, 'value', e.target.value)}
-                    placeholder="value"
+                    placeholder={valuePlaceholder(locked, sensitive && !reveal, entry.value)}
                     className="flex-1"
                     aria-label={`Global env value ${index + 1}`}
                   />
@@ -70,7 +75,7 @@ export function GlobalEnvCards({
                     type="button"
                     variant="ghost"
                     size="icon"
-                    onClick={() => onToggleVisible(index)}
+                    onClick={() => onToggleVisible(entry._rowId)}
                     className="min-h-[44px] min-w-[44px]"
                     title={reveal ? 'Hide value' : 'Show value'}
                     aria-label={reveal ? `Hide value ${index + 1}` : `Show value ${index + 1}`}

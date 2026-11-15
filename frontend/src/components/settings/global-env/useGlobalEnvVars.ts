@@ -25,7 +25,7 @@ const REDACTABLE_FIELDS = ['key', 'value'] as const
  * query, tracks unsaved-changes (dirty), and wraps the CRUD handlers plus the
  * save mutation. `setVisible` is threaded in from useGlobalEnvReveal so the
  * data-sync effect and handleDelete can clear reveal state for the right
- * indices without owning that state themselves.
+ * rows (keyed by `_rowId`) without owning that state themselves.
  */
 export function useGlobalEnvVars(
   setVisible: Dispatch<SetStateAction<Record<number, boolean>>>,
@@ -180,7 +180,7 @@ export function useGlobalEnvVars(
   const indexedVars = useMemo<IndexedEnvVar[]>(
     () =>
       vars.map((v, i) => {
-        const masked = (v.sensitive === true || isSensitiveKey(v.key)) && !visible[i]
+        const masked = (v.sensitive === true || isSensitiveKey(v.key)) && !visible[v._rowId]
         return { ...v, _originalIndex: i, keyHidden: masked && (staleUnlocked || hiddenKeyIds.has(v._rowId)) }
       }),
     [vars, visible, staleUnlocked, hiddenKeyIds],
@@ -191,7 +191,7 @@ export function useGlobalEnvVars(
     () => [
       (e: IndexedEnvVar) => (e.keyHidden ? '' : e.key),
       (e: IndexedEnvVar) =>
-        (e.sensitive === true || isSensitiveKey(e.key)) && !visible[e._originalIndex] ? '' : e.value,
+        (e.sensitive === true || isSensitiveKey(e.key)) && !visible[e._rowId] ? '' : e.value,
     ],
     [visible],
   )
@@ -213,10 +213,11 @@ export function useGlobalEnvVars(
   }
 
   const handleDelete = (index: number) => {
+    const rowId = vars[index]?._rowId
     setVars((prev) => prev.filter((_, i) => i !== index))
     setVisible((prev) => {
       const next = { ...prev }
-      delete next[index]
+      if (rowId !== undefined) delete next[rowId]
       return next
     })
     setDirty(true)
