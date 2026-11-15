@@ -25,7 +25,9 @@ var secretListPending = map[string]string{
 }
 
 // bareFileReads are the calls that read a file without the cap, by package
-// and function.
+// and function. Blind spot (review F5): matched at the call by name, so a
+// function value is not seen (`var readFile = os.ReadFile`, then
+// `readFile(p)`), nor a read through any helper outside this list.
 var bareFileReads = map[string]bool{
 	"os.ReadFile": true, "os.Open": true, "os.OpenFile": true,
 	"ioutil.ReadFile": true, "io.ReadAll": true,

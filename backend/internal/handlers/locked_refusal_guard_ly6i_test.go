@@ -253,9 +253,13 @@ func handlerConstsLy6i(t *testing.T) guardConsts {
 }
 
 // isConstantCond reports whether e is a condition fixed at compile time: a
-// literal, true or false, a package constant, or one of those negated or in
-// parentheses. A gate `if <constant> && refuseLocked(...)` never refuses, or
-// always does whatever the request (agent-os-wxap, mutant m7).
+// literal, true or false, a package constant, one of those negated or in
+// parentheses, or a binary expression of two such operands (`1 == 2`, review
+// F4). A gate `if <constant> && refuseLocked(...)` never refuses, or always
+// does whatever the request (agent-os-wxap, mutant m7). Syntax only, not
+// go/types: types.Eval without the package cannot resolve the package
+// constants this does. Blind: a binary expression constant by short circuit
+// (`false && x`), and a constant reached through a call (`len("ab") == 3`).
 func isConstantCond(e ast.Expr) bool {
 	switch x := e.(type) {
 	case *ast.BasicLit:
@@ -266,6 +270,8 @@ func isConstantCond(e ast.Expr) bool {
 		return isConstantCond(x.X)
 	case *ast.UnaryExpr:
 		return isConstantCond(x.X)
+	case *ast.BinaryExpr:
+		return isConstantCond(x.X) && isConstantCond(x.Y)
 	}
 	return false
 }

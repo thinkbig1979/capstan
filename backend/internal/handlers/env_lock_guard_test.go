@@ -124,6 +124,10 @@ func TestEnvLockGuard_ContainerOutputHandlersReadTheUnlock(t *testing.T) {
 	}
 }
 
+// Blind spot (review F5): the shapes below are matched at the call, by name,
+// so a function value is not seen: `read := h.docker.Logs; read(...)`, or a
+// method expression passed elsewhere and called there.
+//
 // containerTextSource reports what a call serves when it reaches a container's
 // own text: "logs" for its log output, "shell" for a terminal, or "". The
 // shapes are a selector call named Logs (services Logs), a terminal service's
