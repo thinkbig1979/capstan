@@ -186,9 +186,17 @@ export const parseStackEvent = frameValidator((raw): StackEvent | null => {
   }
 })
 
+// A burst of events is refetched once, 750 ms after the last one, but never
+// later than 2 s after the first: every stack status now converges through a
+// refetch (agent-os-4ato), and a trailing-only debounce never fired on a host
+// that emits an event every 500 ms.
+const INVALIDATION_DEBOUNCE_MS = 750
+const INVALIDATION_MAX_WAIT_MS = 2000
+
 export function useStackEvents() {
   const pendingRef = useRef<Set<string>>(new Set())
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const maxTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     const currentPending = pendingRef.current
@@ -199,21 +207,27 @@ export function useStackEvents() {
         })
       }
       if (timerRef.current) clearTimeout(timerRef.current)
+      if (maxTimerRef.current) clearTimeout(maxTimerRef.current)
     }
   }, [])
 
-  // Only ever touches pendingRef/timerRef.current (stable refs) and the
-  // module-level queryClient, so it never needs to change identity.
+  // Only ever touches pendingRef/timerRef/maxTimerRef.current (stable refs)
+  // and the module-level queryClient, so it never needs to change identity.
   const scheduleInvalidations = useCallback((keys: QueryKey[]) => {
-    keys.forEach((k) => pendingRef.current.add(JSON.stringify(k)))
-    if (timerRef.current) clearTimeout(timerRef.current)
-    timerRef.current = setTimeout(() => {
+    const flush = () => {
+      if (timerRef.current) clearTimeout(timerRef.current)
+      if (maxTimerRef.current) clearTimeout(maxTimerRef.current)
+      timerRef.current = null
+      maxTimerRef.current = null
       pendingRef.current.forEach((key) => {
         queryClient.invalidateQueries({ queryKey: JSON.parse(key) })
       })
       pendingRef.current.clear()
-      timerRef.current = null
-    }, 750)
+    }
+    keys.forEach((k) => pendingRef.current.add(JSON.stringify(k)))
+    if (timerRef.current) clearTimeout(timerRef.current)
+    timerRef.current = setTimeout(flush, INVALIDATION_DEBOUNCE_MS)
+    if (!maxTimerRef.current) maxTimerRef.current = setTimeout(flush, INVALIDATION_MAX_WAIT_MS)
   }, [])
 
   // A stack_status frame is refetched, never written into the list row: it

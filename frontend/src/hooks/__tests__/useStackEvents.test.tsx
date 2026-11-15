@@ -235,6 +235,51 @@ describe('useStackEvents stack_status refetches instead of writing the row', () 
   })
 })
 
+// agent-os-4ato round 2 (review F2): every container_event now carries stack
+// status convergence through scheduleInvalidations, which was trailing-only:
+// each event restarted one 750 ms timer, so a host emitting an event every
+// 500 ms never refetched. A max wait flushes at most 2 s after the first
+// pending key.
+describe('useStackEvents invalidation debounce has a max wait', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('still refetches the stack list at least every 2 s under a steady event stream', () => {
+    const start = Date.now()
+    const flushes: number[] = []
+    vi.mocked(queryClient.invalidateQueries).mockImplementation((arg) => {
+      if (JSON.stringify(arg?.queryKey) === JSON.stringify(queryKeys.stacks())) flushes.push(Date.now() - start)
+      return Promise.resolve()
+    })
+    renderHook(() => useStackEvents())
+
+    for (let t = 0; t < 30_000; t += 500) {
+      capturedOnMessage!({ type: 'container_event', stackId: 's1', containerId: 'c' + t, event: 'die', timestamp: '' })
+      vi.advanceTimersByTime(500)
+    }
+
+    expect(flushes.length).toBeGreaterThanOrEqual(14)
+    expect(flushes[0]).toBeLessThanOrEqual(2000)
+    for (let i = 1; i < flushes.length; i++) {
+      expect(flushes[i] - flushes[i - 1]).toBeLessThanOrEqual(2000)
+    }
+  })
+
+  it('still waits for a quiet gap when events are sparse', () => {
+    renderHook(() => useStackEvents())
+    capturedOnMessage!({ type: 'container_event', stackId: 's1', containerId: 'c1', event: 'die', timestamp: '' })
+    vi.advanceTimersByTime(749)
+    expect(vi.mocked(queryClient.invalidateQueries)).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(1)
+    expect(vi.mocked(queryClient.invalidateQueries)).toHaveBeenCalled()
+  })
+})
+
 // agent-os-a1ye.5: the backend re-subscribes to a lost Docker event stream and
 // then sends events_resync, because events from the gap are gone. The frame
 // must survive validation and refetch everything a missed container event
