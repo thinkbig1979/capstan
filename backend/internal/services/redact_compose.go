@@ -545,6 +545,16 @@ func writeMaskedRuns(s string, runs [][2]int, maskFor func(string) string) strin
 // searching again from each hit plus one compares a self-overlapping needle
 // whole at every byte, n*m (review of agent-os-buwq, F1).
 func markOccurrences(s, v string, first int, ends []int) {
+	eachOccurrence(s, v, first, func(a int) bool {
+		ends[a] = max(ends[a], a+len(v))
+		return true
+	})
+}
+
+// eachOccurrence calls fn with the start of every occurrence of v in s from
+// first (an occurrence) on, overlapping ones included, left to right, until
+// fn returns false: one Knuth-Morris-Pratt scan, O(len(s) + len(v)).
+func eachOccurrence(s, v string, first int, fn func(a int) bool) {
 	// fail[i] is the length of the longest proper prefix of v[:i+1] that is
 	// also its suffix.
 	fail := make([]int, len(v))
@@ -565,8 +575,9 @@ func markOccurrences(s, v string, first int, ends []int) {
 			k++
 		}
 		if k == len(v) {
-			a := i + 1 - len(v)
-			ends[a] = max(ends[a], i+1)
+			if !fn(i + 1 - len(v)) {
+				return
+			}
 			k = fail[k-1]
 		}
 	}
