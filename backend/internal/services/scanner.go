@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/compose-spec/compose-go/v2/dotenv"
 	"github.com/compose-spec/compose-go/v2/loader"
@@ -486,6 +487,17 @@ type ScannerService struct {
 	config *config.Config
 	db     *database.DB
 
+	// containers answers whether a compose project still has containers, so
+	// a row whose compose file is gone is deleted only when nothing would be
+	// hidden by it (agent-os-epc5). Nil keeps every such row: fail closed.
+	// main.go installs the DockerService (scanner_containers_wiring_test.go).
+	containers projectContainerLister
+	// lookupTimedOut is set when a container lookup ran past
+	// containerLookupBound during the current pass (a ScanAll, or one
+	// ScanDirectoryWithRoot), so a hung daemon costs one bound per pass under
+	// mu, not one per row. Guarded by mu.
+	lookupTimedOut bool
+
 	// mu serialises every entry point that reads or writes the directories and
 	// stacks rows the scanner owns: ScanAll (walk + prune), ScanDirectory,
 	// ScanDirectoryWithRoot, RegisterDirectory and UnregisterDirectory.
@@ -524,6 +536,7 @@ func NewScannerService(cfg *config.Config, db *database.DB) *ScannerService {
 func (s *ScannerService) ScanAll() (hasGlobalEnv bool, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.lookupTimedOut = false
 
 	allDirs := s.config.GetAllStacksDirs()
 	slog.Info("Starting directory scan", "stacksDirs", allDirs)
@@ -1566,6 +1579,7 @@ func (s *ScannerService) UnregisterDirectory(path string) error {
 func (s *ScannerService) ScanDirectoryWithRoot(path string, rootDir string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.lookupTimedOut = false
 
 	return s.scanDirectoryWithRoot(path, rootDir)
 }
@@ -1724,11 +1738,79 @@ func (s *ScannerService) deleteRowsForRemovedComposeFiles(path string) {
 		if !errors.Is(statErr, fs.ErrNotExist) {
 			continue
 		}
+		if keep := s.containersKeepRow(row.ProjectName); keep != "" {
+			// Deleting the row would hide containers Delete refuses to hide
+			// (handlers' composeDownForDelete), or ones nobody could check.
+			slog.Warn("Keeping stack whose compose file is missing", "id", row.ID, "directory", path, "file", row.ComposeFile, "reason", keep)
+			if stErr := s.db.UpdateStackStatus(row.ID, string(StackStatusError)); stErr != nil {
+				slog.Warn("Failed to mark stack with a missing compose file as error", "stackID", row.ID, "error", stErr)
+			}
+			continue
+		}
 		if delErr := s.db.DeleteStack(row.ID); delErr != nil {
 			slog.Warn("Failed to delete the row of a removed compose file", "stackID", row.ID, "directory", path, "file", row.ComposeFile, "error", delErr)
 			continue
 		}
 		slog.Info("Removed stack whose compose file is gone", "id", row.ID, "directory", path, "file", row.ComposeFile)
+	}
+}
+
+// projectContainerLister is the one DockerService method the scanner needs.
+type projectContainerLister interface {
+	GetContainerList(projectName string) ([]models.Container, error)
+}
+
+// SetContainerLister installs the container lookup that lets a rescan delete a
+// row whose compose file is gone. Call it before the scanner is used.
+func (s *ScannerService) SetContainerLister(l projectContainerLister) {
+	s.containers = l
+}
+
+// containerLookupBound caps one container lookup made while holding mu.
+// GetContainerList takes no context and the Docker client has no timeout, so
+// without it a hung daemon would block every scan and Delete's WithLock.
+var containerLookupBound = 10 * time.Second
+
+// containersKeepRow returns why a row of project must be kept, or "" when the
+// project has no containers and the row can go. Every failure to find out
+// keeps it: no lister, a lookup error, or a lookup past containerLookupBound.
+// After a timeout the rest of the pass keeps its rows without asking. A timed
+// out lookup's goroutine finishes whenever the daemon answers; its send
+// cannot block (buffered, and a select).
+func (s *ScannerService) containersKeepRow(project string) string {
+	if s.containers == nil {
+		return "no Docker access to check the project's containers"
+	}
+	if s.lookupTimedOut {
+		return "a container lookup earlier in this scan timed out"
+	}
+	type answer struct {
+		containers []models.Container
+		err        error
+	}
+	done := make(chan answer, 1)
+	lister := s.containers
+	go func() {
+		c, err := lister.GetContainerList(project)
+		select {
+		case done <- answer{c, err}:
+		default:
+		}
+	}()
+	timer := time.NewTimer(containerLookupBound)
+	defer timer.Stop()
+	select {
+	case a := <-done:
+		if a.err != nil {
+			return "the project's containers could not be listed: " + a.err.Error()
+		}
+		if len(a.containers) > 0 {
+			return fmt.Sprintf("project %s still has %d container(s)", project, len(a.containers))
+		}
+		return ""
+	case <-timer.C:
+		s.lookupTimedOut = true
+		return "the container lookup timed out after " + containerLookupBound.String()
 	}
 }
 
