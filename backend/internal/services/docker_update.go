@@ -179,6 +179,12 @@ func resolveUpdateStrategy(db DashboardDB, projectName, serviceName string) (com
 	return updateViaCompose, stack, nil
 }
 
+// ComposePullFailedReason names an update's failed compose pull: the
+// ActionResult Reason on the compose-service path, and the error prefix on the
+// container's compose paths. Exported so the integration tests' retry helper
+// reads the same text (agent-os-18uw); its value is unchanged.
+const ComposePullFailedReason = "compose pull failed"
+
 // refusedUpdateReason is the ActionResult reason both apply paths carry when
 // resolveUpdateStrategy refuses. A constant so the two paths cannot drift; it is
 // unexported and no caller matches on it, so it is a shared literal, not an API.
@@ -578,7 +584,7 @@ func (s *DockerService) updateComposeContainer(ctx context.Context, stack models
 	pullCmd.Env = dockerEnv()
 	if output, err := pullCmd.CombinedOutput(); err != nil {
 		err = timeoutError(pullCtx, err, "docker compose pull")
-		return fmt.Errorf("compose pull failed: %s: %w", strings.TrimSpace(s.redactComposeOutputFor(stack, string(output))), err)
+		return fmt.Errorf(ComposePullFailedReason+": %s: %w", strings.TrimSpace(s.redactComposeOutputFor(stack, string(output))), err)
 	}
 
 	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
@@ -1345,7 +1351,7 @@ func (s *DockerService) updateComposeContainerStreaming(
 
 	secrets := s.composeSecrets(stack)
 	if err := streamComposeCmd(ctx, s.composeTimeout(), pullArgs, stack.Directory, secrets, emit); err != nil {
-		return fmt.Errorf("compose pull failed: %w", err)
+		return fmt.Errorf(ComposePullFailedReason+": %w", err)
 	}
 
 	setStatus(StatusRecreating)
@@ -1439,7 +1445,7 @@ func (s *DockerService) UpdateComposeServiceStreaming(
 	secrets := s.composeSecrets(stack)
 	if pullErr := streamComposeCmd(ctx, s.composeTimeout(), pullArgs, stack.Directory, secrets, emit); pullErr != nil {
 		durationMs = time.Since(start).Milliseconds()
-		ar = truth.Failed("compose pull failed", pullErr)
+		ar = truth.Failed(ComposePullFailedReason, pullErr)
 		return
 	}
 

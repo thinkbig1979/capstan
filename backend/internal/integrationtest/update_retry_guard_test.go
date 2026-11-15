@@ -7,6 +7,7 @@ package integrationtest
 
 import (
 	"embed"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -27,18 +28,55 @@ var packageSources embed.FS
 
 // updateCalls are the update paths whose registry pull is not retried by the
 // code under test: a slow registry in CI fails them with nothing wrong.
+//
+// Matched by selector name at the call. A method value taken first
+// (`f := svc.UpdateContainer; f(...)`) or a wrapper func is not seen: the
+// guard covers direct calls only.
 var updateCalls = map[string]bool{
 	"UpdateContainer":               true,
 	"UpdateContainerStreaming":      true,
 	"UpdateComposeServiceStreaming": true,
 }
 
+// allowedUnretried is an allowlist entry: how many unwrapped calls the
+// subtest may hold, and why.
+type allowedUnretried struct {
+	calls  int
+	reason string
+}
+
 // unretriedUpdateAllowed lists the calls that may skip RetryUpdateAtPull, by
-// file and enclosing t.Run name, with the reason. Each must still match.
-var unretriedUpdateAllowed = map[string]string{
+// file and enclosing t.Run name, with their count. Each count must match
+// exactly, so a second unwrapped call in an allowlisted subtest gates, and a
+// stale entry does too.
+var unretriedUpdateAllowed = map[string]allowedUnretried{
 	// The update is refused before any pull, so a retry has nothing to retry
 	// and the test asserts the failure.
-	"docker_update_autoremove_64me_test.go/refused": "refused before the pull; expects failed",
+	"docker_update_autoremove_64me_test.go/refused": {1, "refused before the pull; expects failed"},
+}
+
+// unretriedVerdict returns a problem for every site not covered by allowed,
+// and for every allowlist entry whose count does not match what was found.
+func unretriedVerdict(sites []string, allowed map[string]allowedUnretried) []string {
+	var bad []string
+	byKey := map[string][]string{}
+	for _, site := range sites {
+		key := site[:strings.LastIndex(site, ":")]
+		byKey[key] = append(byKey[key], site)
+	}
+	for key, found := range byKey {
+		if a, ok := allowed[key]; ok && len(found) == a.calls {
+			continue
+		}
+		bad = append(bad, found...)
+	}
+	for key, a := range allowed {
+		if n := len(byKey[key]); n != a.calls {
+			bad = append(bad, fmt.Sprintf("allowlist entry %s expects %d unwrapped call(s), found %d", key, a.calls, n))
+		}
+	}
+	sort.Strings(bad)
+	return bad
 }
 
 // unretriedUpdates returns "file/subtest:line method" for every update call
@@ -128,8 +166,7 @@ func TestUpdateCallsRetryAtPull_18uw(t *testing.T) {
 	entries, err := packageSources.ReadDir(".")
 	require.NoError(t, err)
 
-	var bad []string
-	used := map[string]bool{}
+	var sites []string
 	scanned, calls := 0, 0
 	for _, e := range entries {
 		name := e.Name()
@@ -142,25 +179,29 @@ func TestUpdateCallsRetryAtPull_18uw(t *testing.T) {
 		calls += strings.Count(string(src), ".UpdateContainer(") +
 			strings.Count(string(src), ".UpdateContainerStreaming(") +
 			strings.Count(string(src), ".UpdateComposeServiceStreaming(")
-		for _, site := range unretriedUpdates(t, name, string(src)) {
-			key := site[:strings.LastIndex(site, ":")]
-			if _, ok := unretriedUpdateAllowed[key]; ok {
-				used[key] = true
-				continue
-			}
-			bad = append(bad, site)
-		}
+		sites = append(sites, unretriedUpdates(t, name, string(src))...)
 	}
-	sort.Strings(bad)
 	// Positive side: the guard read the package and saw update calls.
 	require.Greater(t, scanned, 10, "files scanned")
 	require.Greater(t, calls, 0, "update calls seen")
 	t.Logf("%d files, %d update calls", scanned, calls)
 
-	assert.Empty(t, bad, "update calls outside RetryUpdateAtPull: a slow registry fails them (wrap as docker_update_apply_test.go does, or allowlist with a reason)")
-	for key := range unretriedUpdateAllowed {
-		assert.True(t, used[key], "allowlist entry matches nothing (remove it): %s", key)
-	}
+	assert.Empty(t, unretriedVerdict(sites, unretriedUpdateAllowed),
+		"update calls outside RetryUpdateAtPull: a slow registry fails them (wrap as docker_update_apply_test.go does, or allowlist with a reason and count)")
+}
+
+// The allowlist is counted per subtest: a second unwrapped call in an
+// allowlisted subtest gates, and so does an entry that matches nothing.
+func TestUpdateCallsRetryAtPull_18uw_AllowlistCounts(t *testing.T) {
+	allowed := map[string]allowedUnretried{"a_test.go/refused": {1, "test"}}
+	assert.Empty(t, unretriedVerdict([]string{"a_test.go/refused:10 UpdateContainer"}, allowed))
+	assert.Equal(t, []string{
+		"a_test.go/refused:10 UpdateContainer",
+		"a_test.go/refused:12 UpdateContainer",
+		"allowlist entry a_test.go/refused expects 1 unwrapped call(s), found 2",
+	}, unretriedVerdict([]string{"a_test.go/refused:10 UpdateContainer", "a_test.go/refused:12 UpdateContainer"}, allowed))
+	assert.Equal(t, []string{"allowlist entry a_test.go/refused expects 1 unwrapped call(s), found 0"},
+		unretriedVerdict(nil, allowed))
 }
 
 // The guard fires on the shapes it exists for and stays quiet on a wrapped call.

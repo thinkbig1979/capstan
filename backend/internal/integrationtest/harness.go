@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/thinkbig1979/capstan/backend/internal/registryretry"
+	"github.com/thinkbig1979/capstan/backend/internal/services"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
 
@@ -245,8 +246,8 @@ func failedAtPull(ar truth.ActionResult) bool {
 		return false
 	}
 	msg := ar.Err.Error()
-	return strings.Contains(msg, "pulling image") || strings.Contains(msg, "compose pull failed") ||
-		ar.Reason == "compose pull failed"
+	return strings.Contains(msg, "pulling image") || strings.Contains(msg, services.ComposePullFailedReason) ||
+		ar.Reason == services.ComposePullFailedReason
 }
 
 // ImageRepoDigests returns the RepoDigests slice for a locally present image
