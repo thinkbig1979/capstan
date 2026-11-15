@@ -184,3 +184,43 @@ func TestScannerEpc5_LookupTimeoutKeepsEveryRowAndWaitsOnce(t *testing.T) {
 	require.Equal(t, string(StackStatusError), statusOf(t, s, app, "compose.a.yaml"))
 	require.Equal(t, string(StackStatusError), statusOf(t, s, app, "compose.b.yaml"))
 }
+
+// A timeout is remembered for one pass only: the next pass asks again. One
+// test per entry point that starts a pass (review G1).
+func timedOutThenClearedPass(t *testing.T, scan func(s *ScannerService, app string)) {
+	t.Helper()
+	old := containerLookupBound
+	containerLookupBound = 200 * time.Millisecond
+	t.Cleanup(func() { containerLookupBound = old })
+
+	app, s := epc5Folder(t)
+	require.NoError(t, os.Remove(filepath.Join(app, "compose.worker.yaml")))
+	release := make(chan struct{})
+	hung := &fakeContainerLister{release: release}
+	s.SetContainerLister(hung)
+
+	scan(s, app)
+	require.Equal(t, []string{"compose.worker.yaml", "compose.yaml"}, composeFilesIn(t, s, app), "control: the timed out pass keeps the row")
+	require.Equal(t, 1, hung.callCount(), "control: the first pass asked once")
+
+	close(release)
+	answering := &fakeContainerLister{}
+	s.SetContainerLister(answering)
+
+	scan(s, app)
+	require.Equal(t, 1, answering.callCount(), "the next pass must ask again, not reuse the earlier pass's timeout")
+	require.Equal(t, []string{"compose.yaml"}, composeFilesIn(t, s, app), "with no containers the next pass deletes the row")
+}
+
+func TestScannerEpc5_ScanDirectoryAsksAgainAfterAnEarlierTimeout(t *testing.T) {
+	timedOutThenClearedPass(t, func(s *ScannerService, app string) {
+		require.NoError(t, s.ScanDirectory(app))
+	})
+}
+
+func TestScannerEpc5_ScanAllAsksAgainAfterAnEarlierTimeout(t *testing.T) {
+	timedOutThenClearedPass(t, func(s *ScannerService, _ string) {
+		_, err := s.ScanAll()
+		require.NoError(t, err)
+	})
+}
