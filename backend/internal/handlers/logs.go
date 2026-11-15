@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -12,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -229,11 +232,12 @@ func (h *LogsHandler) StreamLogs(c *gin.Context) {
 		case line, ok := <-logChan:
 			if !ok {
 				if scanErr != nil {
-					// A line over lineio.MaxLine stopped the reader
-					// (agent-os-0h4p). Say so in the stream rather than just
-					// ending it; cleanup then kills the child.
-					slog.Warn("Log stream stopped by a long line", "stackID", id, "error", scanErr)
-					_ = safeWriteJSON(wsConn, LogLine{Container: "capstan", Message: "A log line over 1 MiB could not be shown; the stream stopped here."}) //nolint:errcheck // best effort: the stream is ending either way
+					// Reading the child's output failed (a long line no
+					// longer does: it is cut, agent-os-v8ig). Say so in the
+					// stream rather than just ending it; cleanup then kills
+					// the child.
+					slog.Warn("Log stream stopped: reading the log output failed", "stackID", id, "error", scanErr)
+					_ = safeWriteJSON(wsConn, LogLine{Container: "capstan", Message: "Reading the log output failed; the stream stopped here."}) //nolint:errcheck // best effort: the stream is ending either way
 				}
 				goto cleanup
 			}
@@ -417,17 +421,81 @@ func writeJSONError(c *gin.Context, status int, code, message string) {
 	c.JSON(status, models.NewAppError(status, code, message))
 }
 
+// logLineTruncatedNote ends a log line cut at lineio.MaxLine (agent-os-v8ig).
+const logLineTruncatedNote = " … [line truncated]"
+
 // pumpLogLines sends each line of r to out until r ends or ctx is done. A
-// line over lineio.MaxLine stops it with the scanner's error (agent-os-0h4p);
+// line over lineio.MaxLine is cut there, marked with logLineTruncatedNote, and
+// the rest of it skipped, so the stream goes on (agent-os-v8ig, Edwin
+// 2026-11-15; it used to stop, agent-os-0h4p). It returns only a read error;
 // the caller then kills the child, which is what unblocks its writes.
 func pumpLogLines(ctx context.Context, r io.Reader, out chan<- string) error {
-	scanner := lineio.NewScanner(r)
-	for scanner.Scan() {
-		select {
-		case out <- scanner.Text():
-		case <-ctx.Done():
+	br := bufio.NewReader(r)
+	for {
+		line, err := readLogLine(br)
+		if line != nil {
+			select {
+			case out <- *line:
+			case <-ctx.Done():
+				return nil
+			}
+		}
+		if errors.Is(err, io.EOF) {
 			return nil
 		}
+		if err != nil {
+			return err
+		}
 	}
-	return scanner.Err()
+}
+
+// readLogLine reads one line from br, without its "\n" or "\r\n", keeping at
+// most lineio.MaxLine bytes of it (cut at a rune boundary, then marked). It
+// returns nil and io.EOF at the end of input; a last line with no newline is
+// returned with io.EOF.
+func readLogLine(br *bufio.Reader) (*string, error) {
+	var buf []byte
+	truncated, read := false, false
+	for {
+		chunk, err := br.ReadSlice('\n')
+		read = read || len(chunk) > 0
+		if !truncated {
+			buf = append(buf, chunk...)
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			if len(buf) > lineio.MaxLine {
+				buf, truncated = cutAtRune(buf, lineio.MaxLine), true
+			}
+			continue
+		}
+		if err != nil && !errors.Is(err, io.EOF) {
+			return nil, err
+		}
+		if !read {
+			return nil, err
+		}
+		if !truncated {
+			buf = bytes.TrimSuffix(bytes.TrimSuffix(buf, []byte("\n")), []byte("\r"))
+			if len(buf) > lineio.MaxLine {
+				buf, truncated = cutAtRune(buf, lineio.MaxLine), true
+			}
+		}
+		line := string(buf)
+		if truncated {
+			line += logLineTruncatedNote
+		}
+		return &line, err
+	}
+}
+
+// cutAtRune returns b cut to at most n bytes, backing off so a multi-byte
+// UTF-8 rune is not split.
+func cutAtRune(b []byte, n int) []byte {
+	if len(b) <= n {
+		return b
+	}
+	for n > 0 && !utf8.RuneStart(b[n]) {
+		n--
+	}
+	return b[:n]
 }
