@@ -399,6 +399,11 @@ export interface BackupSettings {
   repositorySource: 'env' | 'db' | 'default'
   hasPassword: boolean
   passwordSource: 'env' | 'db' | 'default'
+  /**
+   * The effective restic password has whitespace at either end, which restic
+   * ignores (agent-os-v8ig). Absent reads as false.
+   */
+  passwordEdgeWhitespace?: boolean
   keepDaily: number
   keepWeekly: number
   keepMonthly: number
