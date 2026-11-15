@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"slices"
 	"strings"
 	"time"
 
@@ -593,7 +592,7 @@ func (s *DockerService) Status(stack models.Stack) (string, []models.Container, 
 	// -a lists stopped containers too, so a partly stopped stack reads
 	// "partial" (agent-os-rpbx). It also lists one-off containers from
 	// `compose run`, which parseComposePSOutput drops.
-	args := s.buildComposeArgs(stack, "ps", []string{"-a", "--format", "json"})
+	args := s.buildComposeArgs(stack, "ps", []string{"-a", "--format", composePSFormat})
 
 	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
 	cmd, ctx, cancel := commandWithDeadline(context.Background(), s.composeTimeout(), "docker", args...)
@@ -655,16 +654,38 @@ func (s *DockerService) Status(stack models.Stack) (string, []models.Container, 
 	return parseComposePSOutput(stdout.Bytes())
 }
 
-// parseComposePSOutput parses NDJSON lines from `docker compose ps -a --format json`
-// and returns the aggregate status and per-container list. One-off containers
-// (`compose run`, Labels carries com.docker.compose.oneoff=True) are left out:
-// they are not part of the stack's status (agent-os-dn1z).
+// composePSFormat prints each `compose ps` row as {"row": <the row --format
+// json prints>, "oneoff": <the com.docker.compose.oneoff label>}. The label is
+// read with .Label, not from the row's Labels string: compose joins every
+// label as k=v with commas and does not escape values, so a user label value
+// holding ",com.docker.compose.oneoff=True" cannot be told apart from the
+// real label there (agent-os-rnba). Probed read-only with the CLI the image
+// ships (docker:29-cli, compose v5.6.0) and with compose v5.7.1.
+const composePSFormat = `{"row":{{json .}},"oneoff":{{json (.Label "com.docker.compose.oneoff")}}}`
+
+// parseComposePSOutput parses the NDJSON lines `docker compose ps -a --format
+// composePSFormat` prints and returns the aggregate status and per-container
+// list. One-off containers (`compose run`, oneoff "True") are left out: they
+// are not part of the stack's status (agent-os-dn1z). A row whose oneoff is
+// missing or any other value counts as a service container: a container
+// wrongly counted shows, one wrongly dropped hides.
 func parseComposePSOutput(output []byte) (string, []models.Container, error) {
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	containers := make([]models.Container, 0, len(lines))
 
 	for _, line := range lines {
 		if line == "" {
+			continue
+		}
+
+		var psLine struct {
+			Row    json.RawMessage `json:"row"`
+			OneOff string          `json:"oneoff"`
+		}
+		if err := json.Unmarshal([]byte(line), &psLine); err != nil || psLine.Row == nil {
+			continue
+		}
+		if psLine.OneOff == "True" {
 			continue
 		}
 
@@ -676,15 +697,11 @@ func parseComposePSOutput(output []byte) (string, []models.Container, error) {
 			Health  string `json:"Health"`
 			Image   string `json:"Image"`
 			Ports   string `json:"Ports"`
-			Labels  string `json:"Labels"`
 			// A pointer so a row without it reads as unknown, not exit 0.
 			ExitCode *int `json:"ExitCode"`
 		}
 
-		if err := json.Unmarshal([]byte(line), &composePS); err != nil {
-			continue
-		}
-		if composePSOneOff(composePS.Labels) {
+		if err := json.Unmarshal(psLine.Row, &composePS); err != nil {
 			continue
 		}
 
@@ -736,17 +753,6 @@ func composeStackStatus(containers []models.Container) string {
 // and is not on its way back (restarting) or held (paused).
 func containerStateStopped(state string) bool {
 	return state == "exited" || state == "dead" || state == "created"
-}
-
-// composeOneOffLabel is the label, as `compose ps` prints it in Labels, that
-// compose puts on a `compose run` container.
-const composeOneOffLabel = "com.docker.compose.oneoff=True"
-
-// composePSOneOff reports a `compose ps` row's comma-joined Labels carrying
-// composeOneOffLabel. Compose labels, not an env file: nothing here reads a
-// KEY=value pair, it matches one whole label.
-func composePSOneOff(labels string) bool {
-	return slices.Contains(strings.Split(labels, ","), composeOneOffLabel)
 }
 
 // RunStreaming executes a compose subcommand and emits each output line on the

@@ -86,10 +86,10 @@ func TestPollUntilSettled_InitExitedZeroThenStableIsSuccess_F1(t *testing.T) {
 }
 
 func TestParseComposePS_CarriesExitCode_F1(t *testing.T) {
-	_, containers, err := parseComposePSOutput([]byte(
+	_, containers, err := parseComposePSOutput([]byte(asComposePSFormat(
 		`{"Name":"p-init-1","State":"exited","ExitCode":0}` + "\n" +
 			`{"Name":"p-bad-1","State":"exited","ExitCode":1}` + "\n" +
-			`{"Name":"p-old-1","State":"exited"}` + "\n"))
+			`{"Name":"p-old-1","State":"exited"}` + "\n")))
 	require.NoError(t, err)
 	require.Len(t, containers, 3)
 	require.NotNil(t, containers[0].ExitCode)

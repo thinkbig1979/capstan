@@ -576,7 +576,7 @@ func TestParseComposePSOutput(t *testing.T) {
 		ndjson := `{"ID":"abc","Name":"proj-web-1","Service":"web","State":"running","Health":"","Image":"nginx:latest","Ports":""}
 {"ID":"def","Name":"proj-db-1","Service":"db","State":"running","Health":"healthy","Image":"postgres:15","Ports":""}`
 
-		status, containers, err := parseComposePSOutput([]byte(ndjson))
+		status, containers, err := parseComposePSOutput([]byte(asComposePSFormat(ndjson)))
 		require.NoError(t, err)
 		assert.Equal(t, "running", status)
 		assert.Len(t, containers, 2)
@@ -587,7 +587,7 @@ func TestParseComposePSOutput(t *testing.T) {
 		ndjson := `{"ID":"abc","Name":"proj-web-1","Service":"web","State":"running","Health":"","Image":"nginx:latest","Ports":""}
 {"ID":"def","Name":"proj-db-1","Service":"db","State":"exited","Health":"","Image":"postgres:15","Ports":""}`
 
-		status, containers, err := parseComposePSOutput([]byte(ndjson))
+		status, containers, err := parseComposePSOutput([]byte(asComposePSFormat(ndjson)))
 		require.NoError(t, err)
 		assert.Equal(t, "partial", status)
 		assert.Len(t, containers, 2)
@@ -606,7 +606,7 @@ func TestParseComposePSOutput(t *testing.T) {
 		ndjson := `not-json
 {"ID":"abc","Name":"proj-web-1","Service":"web","State":"running","Health":"","Image":"nginx:latest","Ports":""}`
 
-		status, containers, err := parseComposePSOutput([]byte(ndjson))
+		status, containers, err := parseComposePSOutput([]byte(asComposePSFormat(ndjson)))
 		require.NoError(t, err)
 		assert.Equal(t, "running", status)
 		assert.Len(t, containers, 1)

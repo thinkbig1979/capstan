@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"encoding/json"
 	"io"
 	"log/slog"
 	"os/exec"
@@ -50,12 +49,9 @@ func rpbxCompose(t *testing.T, rows []rpbxRow) {
 			if r.oneOff {
 				oneOff = "True"
 			}
-			line, err := json.Marshal(map[string]string{
-				"ID": r.name, "Name": r.name, "Service": r.name, "State": r.state, "Image": "busybox:latest",
-				"Labels": "com.docker.compose.project=proj,com.docker.compose.oneoff=" + oneOff,
-			})
-			require.NoError(t, err)
-			out.Write(line)
+			out.WriteString(composePSLine(t, arg,
+				map[string]any{"ID": r.name, "Name": r.name, "Service": r.name, "State": r.state, "Image": "busybox:latest"},
+				map[string]string{"com.docker.compose.project": "proj", "com.docker.compose.oneoff": oneOff}))
 			out.WriteByte('\n')
 		}
 		//nolint:gosec // G204: a test fixture's own JSON, passed as an argument, not a shell string
