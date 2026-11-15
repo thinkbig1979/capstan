@@ -83,6 +83,7 @@ var authBodyRoutes = []string{
 	"POST /logout",
 	"GET /me",
 	"POST /verify-password",
+	"POST /lock",
 	"PUT /password",
 }
 
@@ -275,6 +276,10 @@ func TestAuthBody_NoAuthResponseCarriesAJWT(t *testing.T) {
 	assert.NotContains(t, env.jwts, unlock, "the unlockToken must never be a session JWT")
 	assert.NotRegexp(t, authBodyJWTRe, unlock, "the unlockToken is an opaque token, not a JWT-shaped value")
 	step(http.MethodPost, "/verify-password", map[string]string{"password": "wrong-Passw0rd!"}, env.loginCookie, http.StatusUnauthorized, false)
+
+	// The Lock button revokes the user's unlock tokens (agent-os-qxio); 204,
+	// no body.
+	step(http.MethodPost, "/lock", nil, env.loginCookie, http.StatusNoContent, true)
 
 	step(http.MethodPut, "/password", map[string]string{"currentPassword": "wrong-Passw0rd!", "newPassword": authBodyNewPass}, env.loginCookie, http.StatusUnauthorized, false)
 	step(http.MethodPut, "/password", map[string]string{"currentPassword": authBodyPassword, "newPassword": authBodyNewPass}, env.loginCookie, http.StatusNoContent, true)
