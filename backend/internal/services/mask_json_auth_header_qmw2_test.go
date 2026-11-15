@@ -26,6 +26,14 @@ func TestMaskSecrets_qmw2_JSONQuotedAuthorizationHeader(t *testing.T) {
 		{`x "set-cookie: sid=SEKq11" y`, "SEKq11", `" y`},
 		{`{'cookie': 'sid=SEKq12'}`, "SEKq12", `{'cookie': '`},
 		{`{"cookie":"SEKq13 lang=en"}`, "SEKq13", `{"cookie":"`},
+		// Review F1, F3: Go's http.Header as JSON (array values) and an
+		// object value.
+		{`{"Authorization":["Bearer SEKq16"]}`, "SEKq16", `{"Authorization":[`},
+		{`{"headers":{"Cookie":["sid=SEKq17"],"X-Id":["7"]}}`, "SEKq17", `"X-Id":["7"]`},
+		{`{"Authorization": ["Bearer SEKq18a", "Bearer SEKq18b"], "status": 200}`, "SEKq18", `"status": 200`},
+		{`{"cookie": {"secure": true, "sid": "SEKq19"}, "x": 1}`, "SEKq19", `"x": 1`},
+		{`{"cookie": {"a": {"b": 1}, "sid": "SEKq20"}, "x": 1}`, "SEKq20", `{"cookie": {`},
+		{`{"Authorization":["Bearer SEKq21"`, "SEKq21", `{"Authorization":[`},
 		// From a fuzz of these shapes: a header inside a quoted header's
 		// value, and a quoted name with an unquoted value.
 		{`"Cookie=Basic "qv"'Cookie=Basic ${R} proxy-authorization: ${R} & --password=x ? {'a'=SEKq14`, "SEKq14", `"Cookie=`},
