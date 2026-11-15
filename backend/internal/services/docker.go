@@ -222,7 +222,21 @@ func (s *DockerService) GetContainerList(projectName string) ([]models.Container
 
 // GetContainerListCtx lists every container of a compose project, one-offs
 // included, honouring ctx's deadline.
+//
+//oneoff:counted Delete and the scanner's containersKeepRow ask "would removing this row hide containers?", and a `compose run` container is hidden too.
 func (s *DockerService) GetContainerListCtx(ctx context.Context, projectName string) ([]models.Container, error) {
+	return s.listProjectContainers(ctx, projectName, true)
+}
+
+// GetServiceContainerList lists a compose project's service containers,
+// leaving `docker compose run` one-offs out: they are not part of the stack
+// (agent-os-dn1z), so a stack-scoped consumer such as the terminal's
+// container check reads this list, not GetContainerListCtx (agent-os-febs).
+func (s *DockerService) GetServiceContainerList(ctx context.Context, projectName string) ([]models.Container, error) {
+	return s.listProjectContainers(ctx, projectName, false)
+}
+
+func (s *DockerService) listProjectContainers(ctx context.Context, projectName string, withOneOffs bool) ([]models.Container, error) {
 	if s == nil {
 		return nil, ErrDockerUnavailable
 	}
@@ -242,6 +256,9 @@ func (s *DockerService) GetContainerListCtx(ctx context.Context, projectName str
 	result := make([]models.Container, 0, len(containers))
 
 	for _, c := range containers {
+		if !withOneOffs && isOneOffContainer(c.Labels) {
+			continue
+		}
 		ports := make([]models.PortBinding, 0)
 		for _, p := range c.Ports {
 			if p.PublicPort > 0 {

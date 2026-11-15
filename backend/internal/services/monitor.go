@@ -261,7 +261,12 @@ func unassociatedStackEvent(action, containerID string, ts time.Time) (models.St
 //     dark. The log level is what distinguishes the two, which is the whole
 //     point — dropping telemetry because a container has no stack and dropping it
 //     because the database is broken must not look the same.
-func (s *MonitorService) stackEventFor(action, containerID, projectName string, ts time.Time) (models.StackEvent, bool) {
+//
+// A one-off container (`docker compose run`, oneOff) does not count toward the
+// stack's status (agent-os-dn1z), so its lifecycle actions stay a
+// container_event: the frontend refetches the stack list on one, and the
+// server's status leaves one-offs out (agent-os-febs).
+func (s *MonitorService) stackEventFor(action, containerID, projectName string, oneOff bool, ts time.Time) (models.StackEvent, bool) {
 	if projectName == "" {
 		return unassociatedStackEvent(action, containerID, ts)
 	}
@@ -298,6 +303,9 @@ func (s *MonitorService) stackEventFor(action, containerID, projectName string, 
 		ContainerID: containerID,
 		Event:       action,
 		Timestamp:   ts,
+	}
+	if oneOff {
+		return stackEvent, true
 	}
 
 	switch action {
@@ -424,7 +432,7 @@ func (s *MonitorService) forwardEvents(ctx context.Context, src eventsSource, op
 			containerLabels := event.Actor.Attributes
 			projectName := containerLabels["com.docker.compose.project"]
 
-			stackEvent, ok := s.stackEventFor(action, containerID, projectName, time.Unix(event.Time, 0))
+			stackEvent, ok := s.stackEventFor(action, containerID, projectName, isOneOffContainer(containerLabels), time.Unix(event.Time, 0))
 			if !ok {
 				continue
 			}
@@ -513,8 +521,12 @@ func (s *MonitorService) GetContainersForStack(ctx context.Context, projectName 
 		return nil, err
 	}
 
+	// One-offs (`docker compose run`) are not part of the stack (agent-os-febs).
 	ids := make([]string, 0, len(containers))
 	for _, c := range containers {
+		if isOneOffContainer(c.Labels) {
+			continue
+		}
 		ids = append(ids, c.ID)
 	}
 
