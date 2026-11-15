@@ -392,8 +392,10 @@ func stackDotEnv(dir string) map[string]string {
 
 	envs, err := resolveComposeEnv(models.Stack{Directory: dir}, "", composeEnvScannedName)
 	if err != nil {
+		// err is not logged: compose-go quotes the offending line, which can
+		// be a secret (resolveComposeEnv's doc).
 		slog.Warn("Could not parse the stack's .env; compose project name resolved without it",
-			"file", envPath, "error", err)
+			"file", envPath)
 		return map[string]string{}
 	}
 	return envs[0]

@@ -46,3 +46,19 @@ func TestScannedName2geb_UnparseableDotEnvDegradesToEmpty(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".env"), []byte("A=\"unterminated\n"), 0o600))
 	assert.Empty(t, stackDotEnv(dir))
 }
+
+// agent-os-2geb round 2 (review F1): compose-go's parse error quotes the
+// offending .env value (`unterminated quoted value "hunter2secret`), and
+// resolveComposeEnv's doc says that error is not for a log. The WARN names the
+// file only.
+func TestScannedName2geb_ParseWarnCarriesNoValueText(t *testing.T) {
+	logs := u2CaptureLogs(t)
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".env"), []byte("USER=a\nPASSWORD=\"hunter2secret\n"), 0o600))
+
+	assert.Empty(t, stackDotEnv(dir))
+	out := logs.String()
+	require.Contains(t, out, "level=WARN", "control: the parse fault is still warned about")
+	require.Contains(t, out, filepath.Join(dir, ".env"), "control: the warning names the file")
+	assert.NotContains(t, out, "hunter2secret", "the warning must not quote the .env value")
+}

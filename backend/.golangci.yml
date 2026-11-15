@@ -134,9 +134,15 @@ linters:
         # the seed env for each question. A direct GetEnvFromFile was a third
         # resolver that chose its own (scanner.go stackDotEnv) and could
         # disagree with compose. `pkg` pins the match to compose-go's dotenv.
-        - pattern: '^dotenv\.GetEnvFromFile$'
+        # Every reader of a file or io.Reader in that package is covered
+        # (compose-go v2.16.1: GetEnvFromFile, Load, Read, ReadWithLookup,
+        # ReadFile, Parse, ParseWithLookup, ParseWithFormat). The two
+        # Unmarshal* functions are not: they parse text already in hand
+        # (settings.go's one-line check, linter.go's editor text), not a
+        # stack's env files.
+        - pattern: '^dotenv\.(GetEnvFromFile|Load|Read|ReadWithLookup|ReadFile|Parse|ParseWithLookup|ParseWithFormat)$'
           pkg: '^github\.com/compose-spec/compose-go/v2/dotenv$'
-          msg: 'resolve compose env files through resolveComposeEnv (services/compose_env.go), not GetEnvFromFile directly (agent-os-2geb)'
+          msg: 'resolve compose env files through resolveComposeEnv (services/compose_env.go), not compose-go dotenv readers directly (agent-os-2geb)'
       analyze-types: true
   enable:
     - errcheck
