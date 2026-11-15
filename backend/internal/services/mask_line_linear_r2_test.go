@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/docker/docker/api/types/container"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -146,4 +147,27 @@ func TestMaskSecrets_r2_SameAsBeforeOverCorpus(t *testing.T) {
 	require.NoError(t, sc.Err())
 	require.Equal(t, len(got), k, "the corpus must be the recorded one")
 	t.Logf("compared %d outputs", k)
+}
+
+// Review round 2 F3: the runtime list read each env value through the
+// masker at every span depth, so it inherited the rescan; 8 KiB of value
+// cost 30x 1 KiB. The reviewer's shapes.
+func TestContainerSecretValues_r2_LinearInValueLength(t *testing.T) {
+	for _, u := range []string{` {"k":"https://u:p@h"}`, " a=b c", ` "password":"x"`, " https://u:p@h?token=q"} {
+		took := func(n int) time.Duration {
+			v := strings.Repeat(u, n/len(u)+1)[:n]
+			in := container.InspectResponse{Config: &container.Config{Env: []string{"CFG=" + v}}, ContainerJSONBase: &container.ContainerJSONBase{}}
+			d := time.Duration(1 << 62)
+			for range 3 {
+				t0 := time.Now()
+				containerSecretValues(in)
+				d = min(d, time.Since(t0))
+			}
+			return d
+		}
+		small, large := took(1024), took(8192)
+		ratio := float64(large) / float64(max(small, 10*time.Microsecond))
+		t.Logf("%-26q 1 KiB %v, 8 KiB %v, ratio %.1f", u, small, large, ratio)
+		assert.Less(t, ratio, 16.0, "%q: 8x the value costs more than linear", u)
+	}
 }
