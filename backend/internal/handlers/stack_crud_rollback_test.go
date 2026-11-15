@@ -38,7 +38,7 @@ func (s *upsertFailingStore) UpsertStack(models.Stack) error { return s.err }
 func createStackRequest(t *testing.T, handler *StacksHandler, name string) *httptest.ResponseRecorder {
 	t.Helper()
 	router := gin.New()
-	router.POST("/stacks", authContextMiddleware("test-user-id"), handler.Create)
+	router.POST("/stacks", authContextMiddleware("test-user-id"), envUnlockedMiddleware(), handler.Create) // unlocked: a locked create is refused (agent-os-ly6i)
 
 	body, err := json.Marshal(map[string]any{
 		"name":           name,

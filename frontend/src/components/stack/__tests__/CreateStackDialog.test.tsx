@@ -12,8 +12,10 @@
  * to control CreateStackDialog's own wiring deterministically rather than
  * re-testing their internals.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { screen, waitFor, within } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { useEnvUnlockStore } from '@/stores/envUnlockStore'
+import { LOCKED_NEW_STACK_NOTICE } from '@/lib/locked-copy'
+import { act, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '../../../test/utils'
 
@@ -128,6 +130,13 @@ describe('CreateStackDialog', () => {
     vi.clearAllMocks()
     mockGetConfig.mockResolvedValue(ONE_DIR_CONFIG)
     mockLint.mockResolvedValue({ valid: true, lintResults: [] })
+    // Unlocked: a locked session can neither lint nor create (agent-os-ly6i,
+    // covered at the end of this file).
+    useEnvUnlockStore.getState().unlock('tok')
+  })
+
+  afterEach(() => {
+    useEnvUnlockStore.getState().lock()
   })
 
   // ─── rendering / directory selector ────────────────────────────────────────
@@ -513,5 +522,34 @@ describe('CreateStackDialog', () => {
 
     await user.keyboard('{Escape}')
     expect(onOpenChange).toHaveBeenCalledWith(false)
+  })
+
+  // ─── locked (agent-os-ly6i) ──────────────────────────────────────────────────
+
+  it('locked: says why, offers the unlock, and sends no lint or create', async () => {
+    const user = userEvent.setup()
+    act(() => useEnvUnlockStore.getState().lock())
+    renderDialog()
+
+    const notice = await screen.findByRole('status')
+    expect(notice).toHaveTextContent(LOCKED_NEW_STACK_NOTICE)
+    expect(within(notice).getByRole('button', { name: 'Unlock' })).toBeInTheDocument()
+
+    await user.type(await screen.findByLabelText('Stack Name'), 'my-stack')
+    const lint = screen.getByRole('button', { name: /Lint/ })
+    const create = screen.getByRole('button', { name: /Create Stack/ })
+    expect(lint).toBeDisabled()
+    expect(create).toBeDisabled()
+    await user.click(lint)
+    await user.click(create)
+    expect(mockLint).not.toHaveBeenCalled()
+    expect(mockCreate).not.toHaveBeenCalled()
+  })
+
+  it('unlocked: no lock notice', async () => {
+    renderDialog()
+    await waitFor(() => expect(screen.getByText('Lint')).toBeInTheDocument())
+    expect(screen.queryByText(LOCKED_NEW_STACK_NOTICE)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Lint/ })).toBeEnabled()
   })
 })

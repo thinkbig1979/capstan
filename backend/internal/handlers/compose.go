@@ -227,6 +227,10 @@ func (h *ComposeHandler) Put(c *gin.Context) {
 		return
 	}
 
+	if refuseLocked(c, "save the compose file") {
+		return
+	}
+
 	composePath := filepath.Join(stack.Directory, stack.ComposeFile)
 
 	// Held from before the lint (which reads the stack directory) to after
@@ -309,6 +313,10 @@ func (h *ComposeHandler) Lint(c *gin.Context) {
 			models.ErrValidation,
 			"Invalid request body",
 		))
+		return
+	}
+
+	if refuseLocked(c, "lint the compose file") {
 		return
 	}
 
@@ -423,6 +431,10 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 			models.ErrValidation,
 			"Invalid request body",
 		))
+		return
+	}
+
+	if refuseLocked(c, "save the compose file") {
 		return
 	}
 

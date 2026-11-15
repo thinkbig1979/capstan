@@ -684,6 +684,13 @@ func (h *EnvHandler) Create(c *gin.Context) {
 	if content == "" {
 		content = req.Raw
 	}
+	// Text from a locked session is refused (agent-os-ly6i): once in the
+	// file, a locked inspect or compose output masks it with the stack's
+	// secrets, and the starred guess names the secret. An empty create
+	// carries no text and stays allowed.
+	if content != "" && refuseLocked(c, "create an env file with content") {
+		return
+	}
 
 	if err := writeEnvFileAtomic(envPath, content, h.config.GetAllStacksDirs()); err != nil {
 		renderWriteFailure(c, err, "failed to create env file", "")

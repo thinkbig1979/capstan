@@ -104,32 +104,31 @@ func jsonStringsPh(v any) []string {
 
 func TestStackComposeLint_LockedNeverSeesSecretPieces_siou(t *testing.T) {
 	h, id, _ := composeStackSiou(t, "services:\n  db:\n    image: nginx:1.27\n", stackEnvPh)
-	router := gin.New()
-	router.POST("/stacks/:id/compose/lint", h.Lint) // no unlock: locked
-
+	// The route refuses a locked session (agent-os-ly6i); the linter's
+	// locked arm is driven directly.
 	for name, compose := range probesPh {
-		w := doJSONSiou(t, router, http.MethodPost, "/stacks/"+id+"/compose/lint", map[string]string{"content": compose})
-		require.Equal(t, http.StatusOK, w.Code, "%s: %s", name, w.Body.String())
-		requireNoSecretWindowPh(t, name, w.Body.String())
+		requireNoSecretWindowPh(t, name, lockedLintBodySiou(t, h, id, compose))
 	}
 }
 
 func TestComposePut_LockedNeverSeesSecretPieces_siou(t *testing.T) {
-	// The file on disk holds references only, so the locked save is allowed
-	// (nothing masked) and reaches the lint.
+	// The file on disk holds references only: before agent-os-ly6i the
+	// locked save was allowed and reached the lint. It is refused now.
 	h, id, _ := composeStackSiou(t, "services:\n  db:\n    image: nginx:1.27\n    environment:\n      X: ${DB_PASSWORD}\n", stackEnvPh)
 	router := gin.New()
 	router.PUT("/stacks/:id/compose", h.Put) // locked
 
 	for name, compose := range probesPh {
 		w := doJSONSiou(t, router, http.MethodPut, "/stacks/"+id+"/compose", map[string]string{"content": compose})
-		require.NotEqual(t, http.StatusForbidden, w.Code, "%s: the save must reach the lint: %s", name, w.Body.String())
+		// Refused before the lint since agent-os-ly6i; the lint's locked arm
+		// is TestStackComposeLint_LockedNeverSeesSecretPieces_siou.
+		require.Equal(t, http.StatusForbidden, w.Code, "%s: %s", name, w.Body.String())
 		requireNoSecretWindowPh(t, name, w.Body.String())
 	}
 }
 
 // globalEnvStacksPh is a StacksHandler whose DataDir holds global.env.
-func globalEnvStacksPh(t *testing.T) (*gin.Engine, string, *database.DB) {
+func globalEnvStacksPh(t *testing.T) (*gin.Engine, string, *database.DB, *config.Config) {
 	t.Helper()
 	tempDir := t.TempDir()
 	dataDir := t.TempDir()
@@ -146,25 +145,25 @@ func globalEnvStacksPh(t *testing.T) (*gin.Engine, string, *database.DB) {
 	router := gin.New()
 	router.POST("/compose/lint", handler.Lint)
 	router.POST("/stacks", authContextMiddleware("test-user-id"), handler.Create)
-	return router, tempDir, db
+	return router, tempDir, db, cfg
 }
 
 func TestGlobalComposeLint_LockedNeverSeesSecretPieces_siou(t *testing.T) {
-	router, _, _ := globalEnvStacksPh(t)
+	_, _, _, cfg := globalEnvStacksPh(t)
+	// The route refuses a locked session (agent-os-ly6i); the linter's
+	// locked arm is driven with the env the route lints with.
 	for name, compose := range probesPh {
 		if strings.Contains(compose, "DB_PASSWORD") {
 			// global.env holds API_TOKEN and CONN only; DB_PASSWORD is the
 			// create request's own env.
 			continue
 		}
-		w := doJSONSiou(t, router, http.MethodPost, "/compose/lint", map[string]string{"compose": compose})
-		require.Equal(t, http.StatusOK, w.Code, "%s: %s", name, w.Body.String())
-		requireNoSecretWindowPh(t, name, w.Body.String())
+		requireNoSecretWindowPh(t, name, lockedLintEnvBodySiou(t, compose, "", services.NewLintEnv(globalEnvPath(cfg), "")))
 	}
 }
 
 func TestStacksCreate_LockedNeverSeesSecretPieces_siou(t *testing.T) {
-	router, tempDir, db := globalEnvStacksPh(t)
+	router, tempDir, db, _ := globalEnvStacksPh(t)
 	i := 0
 	for name, compose := range probesPh {
 		i++

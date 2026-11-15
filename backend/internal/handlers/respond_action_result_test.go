@@ -362,7 +362,7 @@ func newActionLogFixture(t *testing.T, docker *fakeStackDocker) *actionLogFixtur
 
 	router := gin.New()
 	router.Use(middleware.RequestID())
-	router.POST("/stacks", authContextMiddleware("test-user-id"), handler.Create)
+	router.POST("/stacks", authContextMiddleware("test-user-id"), envUnlockedMiddleware(), handler.Create) // unlocked: a locked create is refused (agent-os-ly6i)
 	router.DELETE("/stacks/:id", authContextMiddleware("test-user-id"), handler.Delete)
 
 	return &actionLogFixture{tempDir: tempDir, db: db, router: router}

@@ -152,7 +152,7 @@ func TestStacksCreate_WritesComposeAndEnvWithModes(t *testing.T) {
 
 func newCreateRouter(handler *StacksHandler) *gin.Engine {
 	router := gin.New()
-	router.POST("/stacks", authContextMiddleware("test-user-id"), handler.Create)
+	router.POST("/stacks", authContextMiddleware("test-user-id"), envUnlockedMiddleware(), handler.Create) // unlocked: a locked create is refused (agent-os-ly6i)
 	return router
 }
 

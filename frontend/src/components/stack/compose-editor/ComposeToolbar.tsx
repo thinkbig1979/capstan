@@ -17,6 +17,8 @@ interface ComposeToolbarProps {
   masked?: boolean
   /** The editor shows masked text and cannot be edited: Save would send "***" (agent-os-w6wx). */
   readOnly?: boolean
+  /** Env values are locked: the server refuses save and lint (agent-os-ly6i). */
+  locked?: boolean
 }
 
 export function ComposeToolbar({
@@ -32,15 +34,25 @@ export function ComposeToolbar({
   errorCount,
   masked = false,
   readOnly = false,
+  locked = false,
 }: ComposeToolbarProps) {
   return (
     <div className="flex items-center justify-between gap-2">
       <div className="flex items-center gap-2 flex-wrap">
-        <Button onClick={onSave} disabled={isLoading || isSaving || !hasUnsavedChanges || isLintingBeforeSave || readOnly}>
+        <Button
+          onClick={onSave}
+          disabled={isLoading || isSaving || !hasUnsavedChanges || isLintingBeforeSave || readOnly || locked}
+          title={locked ? 'Unlock env values to save' : undefined}
+        >
           <Save className="mr-2 h-4 w-4" />
           {isLintingBeforeSave ? 'Validating...' : isSaving ? 'Saving...' : 'Save'}
         </Button>
-        <Button variant="outline" onClick={onLint} disabled={isLoading || isLinting}>
+        <Button
+          variant="outline"
+          onClick={onLint}
+          disabled={isLoading || isLinting || locked}
+          title={locked ? 'Unlock env values to lint' : undefined}
+        >
           <FileCheck className="mr-2 h-4 w-4" />
           {isLinting ? 'Linting...' : 'Lint'}
         </Button>

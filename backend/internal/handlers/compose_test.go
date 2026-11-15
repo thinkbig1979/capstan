@@ -124,7 +124,8 @@ func TestComposeHandler_Put_Success(t *testing.T) {
 	reqBytes := mustMarshal(t, reqBody)
 
 	router := gin.New()
-	router.PUT("/stacks/:id/compose", authContextMiddleware("test-user-id"), handler.Put)
+	// Unlocked: a locked save is refused (agent-os-ly6i).
+	router.PUT("/stacks/:id/compose", authContextMiddleware("test-user-id"), envUnlockedMiddleware(), handler.Put)
 
 	req := httptest.NewRequest(http.MethodPut, "/stacks/"+filepath.Base(tempDir)+"~stack1:default/compose", bytes.NewReader(reqBytes))
 	req.Header.Set("Content-Type", "application/json")
@@ -179,7 +180,8 @@ func TestComposeHandler_Put_ValidationError(t *testing.T) {
 	reqBytes := mustMarshal(t, reqBody)
 
 	router := gin.New()
-	router.PUT("/stacks/:id/compose", authContextMiddleware("test-user-id"), handler.Put)
+	// Unlocked: a locked save is refused (agent-os-ly6i).
+	router.PUT("/stacks/:id/compose", authContextMiddleware("test-user-id"), envUnlockedMiddleware(), handler.Put)
 
 	req := httptest.NewRequest(http.MethodPut, "/stacks/"+filepath.Base(tempDir)+"~stack1:default/compose", bytes.NewReader(reqBytes))
 	req.Header.Set("Content-Type", "application/json")
@@ -207,7 +209,7 @@ func TestComposeHandler_Lint_Valid(t *testing.T) {
 	reqBytes := mustMarshal(t, reqBody)
 
 	router := gin.New()
-	router.POST("/stacks/:id/compose/lint", handler.Lint)
+	router.POST("/stacks/:id/compose/lint", envUnlockedMiddleware(), handler.Lint) // unlocked: a locked lint is refused (agent-os-ly6i)
 
 	req := httptest.NewRequest(http.MethodPost, "/stacks/any/compose/lint", bytes.NewReader(reqBytes))
 	req.Header.Set("Content-Type", "application/json")
@@ -341,7 +343,7 @@ func TestComposeHandler_Lint_Invalid(t *testing.T) {
 	reqBytes := mustMarshal(t, reqBody)
 
 	router := gin.New()
-	router.POST("/stacks/:id/compose/lint", handler.Lint)
+	router.POST("/stacks/:id/compose/lint", envUnlockedMiddleware(), handler.Lint) // unlocked: a locked lint is refused (agent-os-ly6i)
 
 	req := httptest.NewRequest(http.MethodPost, "/stacks/any/compose/lint", bytes.NewReader(reqBytes))
 	req.Header.Set("Content-Type", "application/json")

@@ -34,7 +34,7 @@ func TestStacksHandler_Create_Success(t *testing.T) {
 	handler := NewStacksHandler(nil, scanner, linter, db, cfg, services.NewActionLogger(db), services.NewOperationLock())
 
 	router := gin.New()
-	router.POST("/stacks", authContextMiddleware("test-user-id"), handler.Create)
+	router.POST("/stacks", authContextMiddleware("test-user-id"), envUnlockedMiddleware(), handler.Create) // unlocked: a locked create is refused (agent-os-ly6i)
 
 	user := models.User{
 		ID:        "test-user-id",
@@ -116,7 +116,7 @@ func TestStacksHandler_Create_UnindexedDirectory_FKEnforced(t *testing.T) {
 	handler := NewStacksHandler(nil, scanner, linter, db, cfg, services.NewActionLogger(db), services.NewOperationLock())
 
 	router := gin.New()
-	router.POST("/stacks", authContextMiddleware("test-user-id"), handler.Create)
+	router.POST("/stacks", authContextMiddleware("test-user-id"), envUnlockedMiddleware(), handler.Create) // unlocked: a locked create is refused (agent-os-ly6i)
 
 	user := models.User{
 		ID:        "test-user-id",
@@ -178,7 +178,7 @@ func TestStacksHandler_Create_ValidationError(t *testing.T) {
 	handler := NewStacksHandler(nil, nil, linter, db, cfg, services.NewActionLogger(db), services.NewOperationLock())
 
 	router := gin.New()
-	router.POST("/stacks", handler.Create)
+	router.POST("/stacks", envUnlockedMiddleware(), handler.Create) // unlocked: a locked create is refused (agent-os-ly6i)
 
 	reqBody := map[string]interface{}{
 		"name":           "my-stack",
@@ -585,7 +585,7 @@ func TestStacksHandler_Create_SameBasenameRootsGetDistinctIDs(t *testing.T) {
 	handler := NewStacksHandler(nil, scanner, services.NewLinterService(), db, cfg, services.NewActionLogger(db), services.NewOperationLock())
 
 	router := gin.New()
-	router.POST("/stacks", authContextMiddleware("test-user-id"), handler.Create)
+	router.POST("/stacks", authContextMiddleware("test-user-id"), envUnlockedMiddleware(), handler.Create) // unlocked: a locked create is refused (agent-os-ly6i)
 	require.NoError(t, db.CreateUser(models.User{
 		ID: "test-user-id", Username: "testuser", CreatedAt: testTime, UpdatedAt: testTime,
 	}))
@@ -640,7 +640,7 @@ func TestStacksHandler_Create_SingleRootIDIsUnchanged(t *testing.T) {
 	handler := NewStacksHandler(nil, scanner, services.NewLinterService(), db, cfg, services.NewActionLogger(db), services.NewOperationLock())
 
 	router := gin.New()
-	router.POST("/stacks", authContextMiddleware("test-user-id"), handler.Create)
+	router.POST("/stacks", authContextMiddleware("test-user-id"), envUnlockedMiddleware(), handler.Create) // unlocked: a locked create is refused (agent-os-ly6i)
 	require.NoError(t, db.CreateUser(models.User{
 		ID: "test-user-id", Username: "testuser", CreatedAt: testTime, UpdatedAt: testTime,
 	}))
@@ -701,7 +701,7 @@ func TestStacksHandler_Create_MkdirFailureLogsCause(t *testing.T) {
 	handler := NewStacksHandler(nil, scanner, linter, db, cfg, services.NewActionLogger(db), services.NewOperationLock())
 
 	router := gin.New()
-	router.POST("/stacks", authContextMiddleware("test-user-id"), handler.Create)
+	router.POST("/stacks", authContextMiddleware("test-user-id"), envUnlockedMiddleware(), handler.Create) // unlocked: a locked create is refused (agent-os-ly6i)
 
 	user := models.User{ID: "test-user-id", Username: "testuser", Password: "", CreatedAt: testTime, UpdatedAt: testTime}
 	require.NoError(t, db.CreateUser(user))

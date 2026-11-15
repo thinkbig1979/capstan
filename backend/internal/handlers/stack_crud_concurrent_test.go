@@ -39,7 +39,7 @@ func concurrentCreateRouter(t *testing.T) (*gin.Engine, *database.DB, string) {
 		services.NewLinterService(), db, cfg, services.NewActionLogger(db), services.NewOperationLock())
 
 	router := gin.New()
-	router.POST("/stacks", authContextMiddleware("test-user-id"), handler.Create)
+	router.POST("/stacks", authContextMiddleware("test-user-id"), envUnlockedMiddleware(), handler.Create) // unlocked: a locked create is refused (agent-os-ly6i)
 	return router, db, tempDir
 }
 

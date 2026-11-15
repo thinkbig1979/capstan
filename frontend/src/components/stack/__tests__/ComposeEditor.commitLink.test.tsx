@@ -4,7 +4,8 @@
  * first request is a read. Every git endpoint is a mock, so the call log is
  * the whole truth about what was sent.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { useAuthStore } from '@/stores/authStore'
 import { act, screen, waitFor } from '@testing-library/react'
 import { renderWithProviders } from '../../../test/utils'
 import { useRef } from 'react'
@@ -127,6 +128,13 @@ describe('ComposeEditor: the save toast\'s Commit and push link', () => {
       pushEnabled: true, identityConfigured: true, changes: [{ path: 'compose.yaml', status: '.M', isEnv: false }],
     })
     git.changesDiff.mockResolvedValue({ path: 'compose.yaml', hidden: false, diff: '' })
+    // Auth off: with auth on and no unlock window the editor is locked, and a
+    // locked editor sends no save (agent-os-ly6i).
+    useAuthStore.setState({ authDisabled: true })
+  })
+
+  afterEach(() => {
+    useAuthStore.setState({ authDisabled: false })
   })
 
   it('a git stack\'s toast carries the link; save and toast call no git endpoint; the click opens the dialog, which only reads', async () => {
