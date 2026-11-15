@@ -705,10 +705,15 @@ func containerStateStopped(state string) bool {
 	return state == "exited" || state == "dead" || state == "created"
 }
 
+// composeOneOffLabel is the label, as `compose ps` prints it in Labels, that
+// compose puts on a `compose run` container.
+const composeOneOffLabel = "com.docker.compose.oneoff=True"
+
 // composePSOneOff reports a `compose ps` row's comma-joined Labels carrying
-// com.docker.compose.oneoff=True.
+// composeOneOffLabel. Compose labels, not an env file: nothing here reads a
+// KEY=value pair, it matches one whole label.
 func composePSOneOff(labels string) bool {
-	return slices.Contains(strings.Split(labels, ","), "com.docker.compose.oneoff=True")
+	return slices.Contains(strings.Split(labels, ","), composeOneOffLabel)
 }
 
 // RunStreaming executes a compose subcommand and emits each output line on the
