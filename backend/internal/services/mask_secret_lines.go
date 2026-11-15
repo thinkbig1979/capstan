@@ -591,9 +591,11 @@ func (m *lineMasker) linePass() {
 	}
 }
 
-// authHeaderRe is an Authorization or Proxy-Authorization header in free
-// text, up to where its value starts; group 1 is the quote before it, if any.
-var authHeaderRe = regexp.MustCompile(`(?i)([\s"'\[\{,(])(?:proxy-)?authorization\s*[:=]\s*`)
+// authHeaderRe is an Authorization, Proxy-Authorization, Cookie or
+// Set-Cookie header in free text or as a quoted JSON field, up to where its
+// value starts; group 1 is the quote before it, if any, group 2 the name and
+// group 3 the name's closing quote (the JSON form, agent-os-qmw2).
+var authHeaderRe = regexp.MustCompile(`(?i)([\s"'\[\{,(])((?:proxy-)?authorization|(?:set-)?cookie)(["']?)\s*[:=]\s*`)
 
 // authSchemeRe is the scheme word at the start of a header value.
 var authSchemeRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9\-]*\s+`)
@@ -601,22 +603,35 @@ var authSchemeRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9\-]*\s+`)
 // maskAuthHeader masks the credential of every Authorization header on line
 // i (agent-os-w4p2): what follows the scheme word (Bearer, Basic, ...), up to
 // the quote that opened the header, or to the line's end, since a Digest
-// value runs over several tokens. One pass along the line.
+// value runs over several tokens. A JSON field's value ends at its own
+// closing quote; a cookie has no scheme word. One pass along the line.
 func (m *lineMasker) maskAuthHeader(i int) {
 	line := m.lines[i]
 	w := m.newLineWalk(line)
 	forwardMatches(authHeaderRe, line, func(loc []int) (int, bool) {
-		start := loc[1]
-		if sc := authSchemeRe.FindString(line[start:]); sc != "" && strings.TrimSpace(line[start+len(sc):]) != "" {
+		start, end := loc[1], len(line)
+		json := loc[6] < loc[7] && start < len(line) && (line[start] == '"' || line[start] == '\'')
+		if json {
+			if e := closingQuote(line, start+1, line[start]); e >= 0 {
+				end = e
+			}
+			start++
+		}
+		cookie := strings.HasSuffix(strings.ToLower(line[loc[4]:loc[5]]), "cookie")
+		if sc := authSchemeRe.FindString(line[start:end]); !cookie && sc != "" && strings.TrimSpace(line[start+len(sc):end]) != "" {
 			start += len(sc)
 		}
-		end := len(line)
-		if loc[2] >= 0 {
+		if loc[2] >= 0 && !json {
 			if q := line[loc[2]]; q == '"' || q == '\'' {
 				if e := strings.IndexByte(line[start:], q); e >= 0 {
 					end = start + e
 				}
 			}
+		}
+		// A header inside the value would have masked further than the
+		// value's end: fail closed, to the line's end.
+		if end < len(line) && authHeaderRe.MatchString(line[start:end]) {
+			end = len(line)
 		}
 		for end > start && (line[end-1] == ' ' || line[end-1] == '\t') {
 			end--
