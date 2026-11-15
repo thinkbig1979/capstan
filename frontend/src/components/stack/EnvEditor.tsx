@@ -237,6 +237,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   // (agent-os-yt2f). A file appearing or going away keeps the plain hydrate.
   const { changedOnDisk, reload } = useExternalFileChange(envData, {
     isDirty: hasUnsavedChanges,
+    lockedNow,
     hydrate,
     rebaseWhileDirty: (next, prev) => {
       if (!next.hasEnvFile || !prev?.hasEnvFile) return false

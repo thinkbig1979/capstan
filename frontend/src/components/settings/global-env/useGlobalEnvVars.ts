@@ -128,6 +128,7 @@ export function useGlobalEnvVars(
 
   const { changedOnDisk, reload } = useExternalFileChange(data, {
     isDirty: dirty,
+    lockedNow,
     hydrate,
     rebaseWhileDirty: (next, prev) => {
       if (!prev || Boolean(next.locked) === Boolean(prev.locked)) return false

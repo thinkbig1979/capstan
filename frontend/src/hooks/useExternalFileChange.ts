@@ -25,6 +25,13 @@ interface UseExternalFileChangeOptions<T> {
    * during render, like `hydrate`.
    */
   rebaseWhileDirty?: (next: T, prev: T | undefined) => boolean
+  /**
+   * The env values are locked now (useEnvLockedNow). A held version fetched
+   * before a lock was served unlocked, and Reload would load it into a locked
+   * view, so the lock drops it; the lock's own refetch raises the notice again
+   * with the masked file (agent-os-9wp3).
+   */
+  lockedNow?: boolean
 }
 
 /**
@@ -41,10 +48,16 @@ interface UseExternalFileChangeOptions<T> {
  */
 export function useExternalFileChange<T>(
   data: T | undefined,
-  { isDirty, hydrate, canHydrateWhileDirty, isOwnSave, onOwnSave, rebaseWhileDirty }: UseExternalFileChangeOptions<T>,
+  { isDirty, hydrate, canHydrateWhileDirty, isOwnSave, onOwnSave, rebaseWhileDirty, lockedNow = false }: UseExternalFileChangeOptions<T>,
 ) {
   const [prevData, setPrevData] = useState<T | undefined>(undefined)
   const [pending, setPending] = useState<{ value: T } | null>(null)
+  const [prevLockedNow, setPrevLockedNow] = useState(lockedNow)
+
+  if (lockedNow !== prevLockedNow) {
+    setPrevLockedNow(lockedNow)
+    if (lockedNow) setPending(null)
+  }
 
   if (data !== prevData) {
     setPrevData(data)
