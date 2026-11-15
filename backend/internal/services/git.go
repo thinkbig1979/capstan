@@ -527,33 +527,59 @@ func (s *GitService) gitCommandUnredacted(dirPath string, cred gitCreds, args ..
 //
 // An *models.AppError is copied with its message and a string Details masked:
 // a handler renders those fields, not Error(), so wrapping it would leave the
-// token in the response.
+// token in the response. An AppError wrapped further down the chain is masked
+// the same way and handed to errors.As by redactedError.As (agent-os-1vla).
 func redactErr(err error, token string) error {
 	if err == nil || token == "" {
 		return err
 	}
-	if ae, ok := err.(*models.AppError); ok { //nolint:errorlint // only the AppError itself is rendered; a wrapped one is masked through Error() below
-		cp := *ae
-		cp.Message = redactToken(ae.Message, token)
-		if d, ok := ae.Details.(string); ok {
-			cp.Details = redactToken(d, token)
-		}
-		cp.Cause = redactErr(ae.Cause, token)
-		return &cp
+	if ae, ok := err.(*models.AppError); ok { //nolint:errorlint // the AppError itself is copied; a wrapped one is reached through As below
+		return redactAppError(ae, token)
 	}
-	if !strings.Contains(err.Error(), token) {
+	// A wrapped AppError is what a handler's errors.As finds, and it renders
+	// that AppError's fields (agent-os-1vla): As hands back a masked copy.
+	var app *models.AppError
+	if errors.As(err, &app) {
+		app = redactAppError(app, token)
+	} else if !strings.Contains(err.Error(), token) {
 		return err
 	}
-	return &redactedError{msg: redactToken(err.Error(), token), err: err}
+	return &redactedError{msg: redactToken(err.Error(), token), err: err, app: app}
+}
+
+// redactAppError is a copy of ae with token masked in the fields a handler
+// renders, Message and a string Details, and in its Cause.
+func redactAppError(ae *models.AppError, token string) *models.AppError {
+	cp := *ae
+	cp.Message = redactToken(ae.Message, token)
+	if d, ok := ae.Details.(string); ok {
+		cp.Details = redactToken(d, token)
+	}
+	cp.Cause = redactErr(ae.Cause, token)
+	return &cp
 }
 
 type redactedError struct {
 	msg string
 	err error
+	// app is the chain's first AppError with token masked, nil when the
+	// chain holds none.
+	app *models.AppError
 }
 
 func (e *redactedError) Error() string { return e.msg }
 func (e *redactedError) Unwrap() error { return e.err }
+
+// As answers errors.As for an AppError with the masked copy. errors.As asks
+// this error before it unwraps, so the unmasked original is never reached.
+func (e *redactedError) As(target any) bool {
+	t, ok := target.(**models.AppError)
+	if !ok || e.app == nil {
+		return false
+	}
+	*t = e.app
+	return true
+}
 
 // gitDiagnostic reassembles both halves of a failed git child for an error
 // message.
