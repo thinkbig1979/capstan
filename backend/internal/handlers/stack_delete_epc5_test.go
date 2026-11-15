@@ -108,6 +108,8 @@ func TestDeleteEpc5_GoneComposeFileWithNoContainersDeletesTheRow(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 	assert.False(t, f.rowExists(t), "the row must be gone")
 	assert.Zero(t, docker.deleteCalls, "compose down -f <missing file> must not run")
+	assert.Contains(t, w.Body.String(), "networks and named volumes left in place",
+		"skipping compose down leaves the project's networks and volumes; the response says so")
 	assert.FileExists(t, filepath.Join(f.app, "compose.yaml"), "the sibling's compose file stays")
 }
 

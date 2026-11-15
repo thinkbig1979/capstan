@@ -724,8 +724,9 @@ func (h *StacksHandler) composeDownForDelete(c *gin.Context, stack models.Stack)
 		))
 		return truth.ActionResult{}, "", true
 	}
-	return truth.Success("compose file is gone and the project has no containers; compose down skipped"),
-		"compose file " + stack.ComposeFile + " is gone; no containers for project " + stack.ProjectName, false
+	return truth.Success("compose file is gone and the project has no containers; compose down skipped, so the project's networks and named volumes were left in place"),
+		"compose file " + stack.ComposeFile + " is gone; no containers for project " + stack.ProjectName +
+			"; compose down skipped, networks and named volumes left in place", false
 }
 
 // listSurvivors returns the other stacks registered in stack's folder
