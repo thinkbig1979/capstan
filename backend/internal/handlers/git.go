@@ -394,7 +394,36 @@ func (h *GitHandler) GetChanges(c *gin.Context) {
 		handleError(c, err)
 		return
 	}
+	// A file name can hold a secret, as in /git/diff (agent-os-3ajm). A
+	// locked session cannot commit, so a masked path breaks no locked flow.
+	if !envUnlocked(c) {
+		secrets := h.stackSecrets(stackID)
+		for i := range result.Changes {
+			result.Changes[i].Path = maskGitText(result.Changes[i].Path, secrets)
+			result.Changes[i].OrigPath = maskGitText(result.Changes[i].OrigPath, secrets)
+		}
+	}
 	c.JSON(http.StatusOK, result)
+}
+
+// lockedChangeDiffAllowed reports whether a locked session may read the diff
+// of path: exactly one change must show under that name in the locked list,
+// and the name must be its real one (agent-os-3ajm). A masked name, a
+// guessed real name and an ambiguous one are all refused alike, so a guess
+// cannot tell a file that exists from one that does not.
+func (h *GitHandler) lockedChangeDiffAllowed(absPath, path string, secrets []string) (bool, error) {
+	changes, err := h.git.GetChanges(absPath)
+	if err != nil {
+		return false, err
+	}
+	matches, real := 0, false
+	for _, ch := range changes.Changes {
+		if masked := maskGitText(ch.Path, secrets); masked == path {
+			matches++
+			real = masked == ch.Path
+		}
+	}
+	return matches == 1 && real, nil
 }
 
 // GetChangeDiff answers the uncommitted diff of one listed file
@@ -417,7 +446,21 @@ func (h *GitHandler) GetChangeDiff(c *gin.Context) {
 	if envUnlocked(c) {
 		result, err = h.git.GetChangeDiff(absPath, path)
 	} else {
-		result, err = h.git.GetChangeDiffMasked(absPath, path, h.stackSecrets(stackID))
+		secrets := h.stackSecrets(stackID)
+		allowed, aerr := h.lockedChangeDiffAllowed(absPath, path, secrets)
+		if aerr != nil {
+			handleError(c, aerr)
+			return
+		}
+		if !allowed {
+			handleError(c, models.NewAppError(http.StatusBadRequest, models.ErrValidation,
+				"That file is not a changed tracked file in this stack's folder, or its name can only be read unlocked"))
+			return
+		}
+		result, err = h.git.GetChangeDiffMasked(absPath, path, secrets)
+		if err == nil {
+			result.Diff = maskDiffHeaders(result.Diff, secrets)
+		}
 	}
 	if err != nil {
 		handleError(c, err)
