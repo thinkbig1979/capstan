@@ -309,9 +309,16 @@ put every stack's `.env` in the caller's hands:
 
 A locked caller can still read the backup settings (the password is never
 sent; the repository and rclone remote come back with their credentials
-removed), list snapshots and their file names, read status and history, edit
+removed), list snapshots and their file names, read status and history, list
 stack backup policies, and run a backup, sync or verify against the repository
 that is already configured.
+
+A locked caller reads `GET /api/v1/settings/audit-log` without the entries'
+details (agent-os-3ajm): every entry comes back with `detail` empty and the
+reply carries `detailsHidden: true`. A detail is free text (a commit's file
+names, an operation's output) that can hold a secret. A `search` matches the
+details, so a locked request with one is refused with **403 `ENV_LOCKED`**,
+whatever it would have matched. The action, date and paging filters still work.
 
 ## Git
 
