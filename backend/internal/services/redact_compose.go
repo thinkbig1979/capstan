@@ -2,6 +2,7 @@ package services
 
 import (
 	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -68,7 +69,7 @@ func HasURLUserinfo(s string) bool {
 		return true
 	}
 	for _, tok := range urlTokenRe.FindAllString(s, -1) {
-		if RedactURLUserinfo(tok) != tok {
+		if redactURLToken(tok) != tok {
 			return true
 		}
 	}
@@ -76,9 +77,140 @@ func HasURLUserinfo(s string) bool {
 }
 
 // RedactURLUserinfoInText stars the userinfo of every scheme://... token in
-// free text, leaving the rest byte-for-byte.
+// free text, and of every URL nested in one (redactURLToken), leaving the
+// rest byte-for-byte.
 func RedactURLUserinfoInText(s string) string {
-	return urlTokenRe.ReplaceAllStringFunc(s, RedactURLUserinfo)
+	return urlTokenRe.ReplaceAllStringFunc(s, redactURLToken)
+}
+
+// nestedSchemeRe finds each "scheme://" in a URL token, where a nested URL
+// starts.
+var nestedSchemeRe = regexp.MustCompile(`[a-zA-Z][a-zA-Z0-9+.\-]*://`)
+
+// redactURLToken is RedactURLUserinfo for one scheme://... token, plus the
+// userinfo of every URL nested in it (agent-os-caeh): url.Parse reads
+// "https://proxy/fetch?url=https://user:pw@host/x" as one URL whose query
+// holds the inner one, so its userinfo was never seen. The token is redacted
+// whole, as before; then each nested piece, from one "scheme://" to the next,
+// has its userinfo spliced out by position (redactUnparseableUserinfo, which
+// never re-encodes: a url.String() round trip of a piece such as
+// "http://***@" appends text); and last every percent-encoded nested URL
+// (redactEncodedNestedUserinfo). Each step only ever puts the placeholder in,
+// so the result hides at least what the whole-token pass hid. Every byte is
+// read a fixed number of times, whatever the nesting.
+func redactURLToken(tok string) string {
+	out := RedactURLUserinfo(tok)
+	if starts := nestedSchemeRe.FindAllStringIndex(out, -1); len(starts) > 1 {
+		var b strings.Builder
+		b.Grow(len(out))
+		b.WriteString(out[:starts[1][0]])
+		for i := 1; i < len(starts); i++ {
+			end := len(out)
+			if i+1 < len(starts) {
+				end = starts[i+1][0]
+			}
+			b.WriteString(redactUnparseableUserinfo(out[starts[i][0]:end]))
+		}
+		out = b.String()
+	}
+	return redactEncodedNestedUserinfo(out)
+}
+
+// encodedSchemeSep is "://" percent-encoded, as a URL nested in a query
+// parameter carries it, compared ASCII case-insensitively.
+const encodedSchemeSep = "%3a%2f%2f"
+
+// redactEncodedNestedUserinfo stars the userinfo of every percent-encoded
+// nested URL in tok ("?url=https%3A%2F%2Fuser%3Apw%40host%2Fx"), keeping
+// every other byte. One level of encoding only: "%253A" and a "+" are not
+// decoded. The nested URL runs to the next "&" or "#", or the token's end.
+func redactEncodedNestedUserinfo(tok string) string {
+	lower := asciiLower(tok)
+	var b strings.Builder
+	at := 0
+	for i := 0; i < len(tok); {
+		j := strings.Index(lower[i:], encodedSchemeSep)
+		if j < 0 {
+			break
+		}
+		start := i + j + len(encodedSchemeSep)
+		end := len(tok)
+		if k := strings.IndexAny(tok[start:], "&#"); k >= 0 {
+			end = start + k
+		}
+		if ui, ok := encodedUserinfoEnd(lower[start:end]); ok {
+			b.WriteString(tok[at:start])
+			b.WriteString(userinfoPlaceholder)
+			at = start + ui
+		}
+		i = max(start, at)
+	}
+	if at == 0 {
+		return tok
+	}
+	b.WriteString(tok[at:])
+	return b.String()
+}
+
+// encodedAuthorityEnd is where an encoded authority ends in seg (lower case):
+// its first encoded or plain "/", "?" or "#", or len(seg).
+func encodedAuthorityEnd(seg string) int {
+	end := len(seg)
+	for _, stop := range []string{"%2f", "%3f", "%23", "/", "?", "#"} {
+		if k := strings.Index(seg[:end], stop); k >= 0 {
+			end = k
+		}
+	}
+	return end
+}
+
+// encodedUserinfoEnd is the index of the "%40" that ends the userinfo of the
+// encoded URL whose authority starts seg (lower case), by the rule
+// redactUnparseableUserinfo applies to a plain one: the last "%40" inside the
+// authority; failing that, when the text before the authority's first "/" is
+// not a host on its own (a password holding an encoded "/"), the last "%40"
+// in seg, provided a host follows it. ok is false when there is none, or the
+// userinfo holds no non-empty component, as spliceUserinfo reads it.
+func encodedUserinfoEnd(seg string) (int, bool) {
+	end := encodedAuthorityEnd(seg)
+	at := strings.LastIndex(seg[:end], "%40")
+	if at < 0 {
+		if isParseableAuthority(percentDecoded(seg[:end])) {
+			return 0, false
+		}
+		at = strings.LastIndex(seg, "%40")
+		if at < 0 {
+			return 0, false
+		}
+		host := seg[at+3:]
+		if !isParseableAuthority(percentDecoded(host[:encodedAuthorityEnd(host)])) {
+			return 0, false
+		}
+	}
+	user, password, _ := strings.Cut(seg[:at], "%3a")
+	return at, user != "" || password != ""
+}
+
+// percentDecoded is s with its percent-escapes decoded, or "" when one is
+// malformed: "" is never a host, so a malformed escape decides nothing.
+func percentDecoded(s string) string {
+	d, err := url.PathUnescape(s)
+	if err != nil {
+		return ""
+	}
+	return d
+}
+
+// asciiLower lower-cases ASCII letters only, so every index into the result
+// is an index into s (strings.ToLower can change a rune's length).
+func asciiLower(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if 'A' <= c && c <= 'Z' {
+			b[i] = c + 'a' - 'A'
+		}
+	}
+	return string(b)
 }
 
 // sensitiveEnvWords are the words that make a key sensitive on their own.
