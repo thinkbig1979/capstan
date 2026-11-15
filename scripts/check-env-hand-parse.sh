@@ -68,13 +68,14 @@ backend/internal/services/redact_compose.go|sensitiveEnvValues
 backend/internal/services/compose_env.go|resolveComposeEnv
 backend/internal/services/exec_env.go|stripCapstanSecrets
 backend/internal/services/redact_url.go|parseRcloneConnectionString
+backend/internal/services/redact_url.go|redactURLUserinfoDepth
 backend/internal/services/backup_rclone_redact.go|RedactRcloneRemote
 backend/internal/services/backup_rclone_redact.go|rcloneSecrets
 backend/internal/services/linter.go|processComposeEnv
 backend/internal/handlers/resources.go|maskContainerEnv
 backend/internal/services/mask_secret_lines.go|walk
 backend/internal/services/mask_secret_lines.go|maskItemAfterEquals
-backend/internal/services/mask_secret_lines.go|envTailStatements
+backend/internal/services/mask_secret_lines.go|envStatementsFrom
 "
 # Why each entry is allowed:
 #   handlers/env.go parseEnvFile: the env table's own line parser; it keys rows
@@ -105,6 +106,10 @@ backend/internal/services/mask_secret_lines.go|envTailStatements
 #     which hold no quotes or comments, not .env text.
 #   services/redact_url.go parseRcloneConnectionString: rclone's inline
 #     key=value option grammar in a remote string, not .env text.
+#   services/redact_url.go redactURLUserinfoDepth: the restic prefix walk's
+#     fail-closed gate asks whether a nested remainder holds an "@" or an
+#     rclone "name=value", to decide whether anything could be starred
+#     (agent-os-h4ts); it splits nothing.
 #   services/backup_rclone_redact.go RedactRcloneRemote, rcloneSecrets: the same
 #     rclone key=value option grammar, split to mask or collect a remote's
 #     credential values (agent-os-qnso), not .env text.
@@ -115,11 +120,12 @@ backend/internal/services/mask_secret_lines.go|envTailStatements
 #   services/mask_secret_lines.go walk, maskItemAfterEquals: find where a
 #     KEY=value list item's value starts so it can be masked for a locked
 #     view (agent-os-w6wx); they never resolve or return a value.
-#   services/mask_secret_lines.go envTailStatements: finds the statements
-#     compose reads after a closing quote on an env line, by compose's "=" or
-#     ":" rule, so maskEnvTail can mask a sensitive one in a diff or compose
-#     file (agent-os-n30e). It returns where each value sits, to be masked;
-#     no value is resolved or used.
+#   services/mask_secret_lines.go envStatementsFrom: finds the statements
+#     compose reads on an env line, after a closing quote too, by compose's
+#     "=" or ":" rule, so maskEnvTail and envQuotePass can mask a sensitive
+#     one in a diff or compose file (agent-os-n30e, agent-os-f3a5);
+#     envTailStatements is its wrapper. It returns where each value sits, to
+#     be masked; no value is resolved or used.
 
 # The awk program receives the pattern through -v, so no regex escapes are
 # needed: bracket expressions only, which gawk and mawk read alike.
@@ -290,6 +296,12 @@ func parseRcloneConnectionString(opaque string) ([]rcloneParam, bool) {
 	eq := strings.IndexAny(opaque[i:], "=,:")
 	return nil, false
 }
+
+func redactURLUserinfoDepth(raw string, depth, limit int) string {
+	if !strings.ContainsAny(u.Opaque, "@=") {
+		return raw
+	}
+}
 EOF
   cat > "$d/backend/internal/services/backup_rclone_redact.go" <<'EOF'
 package services
@@ -381,7 +393,7 @@ func (m *lineMasker) maskItemAfterEquals(n *yaml.Node) {
 	eq := strings.IndexByte(line[col:], '=')
 }
 
-func envTailStatements(line string) []envStatement {
+func envStatementsFrom(line string, pos int) []envStatement {
 	sep := strings.IndexAny(line[pos:], "=:")
 }
 EOF
@@ -396,7 +408,7 @@ self_test() {
 
   local d="$tmp/clean"
   write_base "$d"
-  selftest_case "clean tree" 0 '0 violations in 11 files [(]18 allowlisted splits[)]' "$d"
+  selftest_case "clean tree" 0 '0 violations in 11 files [(]19 allowlisted splits[)]' "$d"
 
   d="$tmp/planted"
   write_base "$d"

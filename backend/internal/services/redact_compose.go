@@ -2,6 +2,7 @@ package services
 
 import (
 	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -53,9 +54,57 @@ func IsSensitiveEnvKey(key string) bool {
 
 // IsSensitiveEnvVar is IsSensitiveEnvKey widened by the value: a value that
 // carries a URL credential (postgres://user:pw@host/db) is a secret whatever
-// its key is called (agent-os-yt2f). The locked env views mask by this.
+// its key is called (agent-os-yt2f), and so is an opaque one
+// (sftp:user:pw@host, user:pw@host) or JSON with a sensitive field
+// ({"password":"x"}, agent-os-3mjw). The locked env views mask by this.
 func IsSensitiveEnvVar(key, value string) bool {
-	return IsSensitiveEnvKey(key) || HasURLUserinfo(value)
+	return IsSensitiveEnvKey(key) || HasURLUserinfo(value) || hasOpaqueCredential(value) || hasSensitiveJSONField(value)
+}
+
+// opaqueCredentialRe is a whole value of the shape [scheme:]user:password@host,
+// optionally followed by ":..." or "/...", with no whitespace.
+var opaqueCredentialRe = regexp.MustCompile(`^(?:[A-Za-z][A-Za-z0-9+.\-]*:)?[^\s:@/]+:[^\s@]+@([A-Za-z0-9][A-Za-z0-9.\-]*|\[[0-9A-Fa-f:.]+\])(?:[:/]\S*)?$`)
+
+// digestAlgorithmRe is what follows the "@" of an image pinned by digest
+// (nginx:1.25@sha256:...), which has the user:password@host shape.
+var digestAlgorithmRe = regexp.MustCompile(`(?i)^sha[0-9]+$`)
+
+// hasOpaqueCredential reports whether value, trimmed and unquoted, is an
+// inline credential with no "//": "sftp:user:pw@host", "user:pw@host:/p".
+// RedactURLUserinfo reads only the per-scheme forms restic accepts, because
+// what it stars locks the backup repository field (agent-os-zzhs); this is
+// the env views' wider rule, where a wrongly hidden value costs one unlock.
+// A "://" value is HasURLUserinfo's: its path can hold "x:y@z".
+func hasOpaqueCredential(value string) bool {
+	v := strings.TrimSpace(value)
+	if len(v) >= 2 && (v[0] == '"' || v[0] == '\'') && v[len(v)-1] == v[0] {
+		v = v[1 : len(v)-1]
+	}
+	if strings.Contains(v, "://") {
+		return false
+	}
+	m := opaqueCredentialRe.FindStringSubmatch(v)
+	return m != nil && !digestAlgorithmRe.MatchString(m[1])
+}
+
+// jsonFieldNameRe is a JSON object field name and its colon, its quotes
+// optionally backslash-escaped: JSON written inside a double-quoted .env
+// value reads {\"password\":\"x\"} (review of run/mask2, D1).
+var jsonFieldNameRe = regexp.MustCompile(`\\?"([^"\\]{1,128})\\?"\s*:`)
+
+// hasSensitiveJSONField reports whether value holds a JSON field whose name
+// IsSensitiveEnvKey matches: {"password":"x"}, a service account's
+// "private_key". The same over-masking as the key rule: {"key": ...} counts.
+func hasSensitiveJSONField(value string) bool {
+	if !strings.Contains(value, `"`) {
+		return false
+	}
+	for _, m := range jsonFieldNameRe.FindAllStringSubmatch(value, -1) {
+		if IsSensitiveEnvKey(m[1]) {
+			return true
+		}
+	}
+	return false
 }
 
 // HasURLUserinfo reports whether s, or any scheme://... token in it, carries a
@@ -67,18 +116,166 @@ func HasURLUserinfo(s string) bool {
 	if t := strings.TrimSpace(s); RedactURLUserinfo(t) != t {
 		return true
 	}
-	for _, tok := range urlTokenRe.FindAllString(s, -1) {
-		if RedactURLUserinfo(tok) != tok {
-			return true
-		}
-	}
-	return false
+	return RedactURLUserinfoInText(s) != s
 }
 
 // RedactURLUserinfoInText stars the userinfo of every scheme://... token in
-// free text, leaving the rest byte-for-byte.
+// free text, and of every URL nested in one (redactURLToken), and the inline
+// credential of every sftp: or s3: opaque token (agent-os-vq3i), leaving the
+// rest byte-for-byte.
 func RedactURLUserinfoInText(s string) string {
-	return urlTokenRe.ReplaceAllStringFunc(s, RedactURLUserinfo)
+	s = urlTokenRe.ReplaceAllStringFunc(s, redactURLToken)
+	return opaqueTokenRe.ReplaceAllStringFunc(s, func(tok string) string {
+		redacted, _ := redactOpaqueCredential(tok)
+		return redacted
+	})
+}
+
+// opaqueTokenRe finds the sftp: and s3: opaque repository forms in free text,
+// the two whose grammar redactOpaqueCredential reads a credential from
+// ("sftp:user:pw@host:/path"). A word boundary keeps "xsftp:" out; a
+// "sftp://" token is urlTokenRe's, and splitOpaque leaves it alone.
+var opaqueTokenRe = regexp.MustCompile(`(?i)\b(?:sftp|s3):[^\s"'<>]+`)
+
+// nestedSchemeRe finds each "scheme://" in a URL token, where a nested URL
+// starts.
+var nestedSchemeRe = regexp.MustCompile(`[a-zA-Z][a-zA-Z0-9+.\-]*://`)
+
+// redactURLToken is RedactURLUserinfo for one scheme://... token, plus the
+// userinfo of every URL nested in it (agent-os-caeh): url.Parse reads
+// "https://proxy/fetch?url=https://user:pw@host/x" as one URL whose query
+// holds the inner one, so its userinfo was never seen. The token is redacted
+// whole, as before; then each nested piece, from one "scheme://" to the next,
+// has its userinfo spliced out by position (redactUnparseableUserinfo, which
+// never re-encodes: a url.String() round trip of a piece such as
+// "http://***@" appends text); and last every percent-encoded nested URL
+// (redactEncodedNestedUserinfo). Each step only ever puts the placeholder in,
+// so the result hides at least what the whole-token pass hid. Every byte is
+// read a fixed number of times, whatever the nesting.
+func redactURLToken(tok string) string {
+	out := RedactURLUserinfo(tok)
+	if starts := nestedSchemeRe.FindAllStringIndex(out, -1); len(starts) > 1 {
+		var b strings.Builder
+		b.Grow(len(out))
+		b.WriteString(out[:starts[1][0]])
+		for i := 1; i < len(starts); i++ {
+			end := len(out)
+			if i+1 < len(starts) {
+				end = starts[i+1][0]
+			}
+			b.WriteString(redactUnparseableUserinfo(out[starts[i][0]:end]))
+		}
+		out = b.String()
+	}
+	return redactEncodedNestedUserinfo(out)
+}
+
+// maxEncodedNestedURLs is how many percent-encoded nested URLs one token is
+// read for; no real URL nests more than a couple.
+const maxEncodedNestedURLs = 16
+
+// encodedSchemeSep is "://" percent-encoded, as a URL nested in a query
+// parameter carries it, compared ASCII case-insensitively.
+const encodedSchemeSep = "%3a%2f%2f"
+
+// redactEncodedNestedUserinfo stars the userinfo of every percent-encoded
+// nested URL in tok ("?url=https%3A%2F%2Fuser%3Apw%40host%2Fx"), keeping
+// every other byte. One level of encoding only: "%253A" and a "+" are not
+// decoded. The nested URL runs to the next "&" or "#", or the token's end.
+func redactEncodedNestedUserinfo(tok string) string {
+	lower := asciiLower(tok)
+	var b strings.Builder
+	at := 0
+	for i, n := 0, 0; i < len(tok); n++ {
+		j := strings.Index(lower[i:], encodedSchemeSep)
+		if j < 0 {
+			break
+		}
+		start := i + j + len(encodedSchemeSep)
+		if n == maxEncodedNestedURLs {
+			// Each nested URL reads on to its token's end, so this bounds
+			// the work (review of run/mask2, F1): fail closed on the rest.
+			b.WriteString(tok[at:start])
+			b.WriteString(userinfoPlaceholder)
+			return b.String()
+		}
+		end := len(tok)
+		if k := strings.IndexAny(tok[start:], "&#"); k >= 0 {
+			end = start + k
+		}
+		if ui, ok := encodedUserinfoEnd(lower[start:end]); ok {
+			b.WriteString(tok[at:start])
+			b.WriteString(userinfoPlaceholder)
+			at = start + ui
+		}
+		i = max(start, at)
+	}
+	if at == 0 {
+		return tok
+	}
+	b.WriteString(tok[at:])
+	return b.String()
+}
+
+// encodedAuthorityEnd is where an encoded authority ends in seg (lower case):
+// its first encoded or plain "/", "?" or "#", or len(seg).
+func encodedAuthorityEnd(seg string) int {
+	end := len(seg)
+	for _, stop := range []string{"%2f", "%3f", "%23", "/", "?", "#"} {
+		if k := strings.Index(seg[:end], stop); k >= 0 {
+			end = k
+		}
+	}
+	return end
+}
+
+// encodedUserinfoEnd is the index of the "%40" that ends the userinfo of the
+// encoded URL whose authority starts seg (lower case), by the rule
+// redactUnparseableUserinfo applies to a plain one: the last "%40" inside the
+// authority; failing that, when the text before the authority's first "/" is
+// not a host on its own (a password holding an encoded "/"), the last "%40"
+// in seg, provided a host follows it. ok is false when there is none, or the
+// userinfo holds no non-empty component, as spliceUserinfo reads it.
+func encodedUserinfoEnd(seg string) (int, bool) {
+	end := encodedAuthorityEnd(seg)
+	at := strings.LastIndex(seg[:end], "%40")
+	if at < 0 {
+		if isParseableAuthority(percentDecoded(seg[:end])) {
+			return 0, false
+		}
+		at = strings.LastIndex(seg, "%40")
+		if at < 0 {
+			return 0, false
+		}
+		host := seg[at+3:]
+		if !isParseableAuthority(percentDecoded(host[:encodedAuthorityEnd(host)])) {
+			return 0, false
+		}
+	}
+	user, password, _ := strings.Cut(seg[:at], "%3a")
+	return at, user != "" || password != ""
+}
+
+// percentDecoded is s with its percent-escapes decoded, or "" when one is
+// malformed: "" is never a host, so a malformed escape decides nothing.
+func percentDecoded(s string) string {
+	d, err := url.PathUnescape(s)
+	if err != nil {
+		return ""
+	}
+	return d
+}
+
+// asciiLower lower-cases ASCII letters only, so every index into the result
+// is an index into s (strings.ToLower can change a rune's length).
+func asciiLower(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if 'A' <= c && c <= 'Z' {
+			b[i] = c + 'a' - 'A'
+		}
+	}
+	return string(b)
 }
 
 // sensitiveEnvWords are the words that make a key sensitive on their own.
@@ -137,8 +334,31 @@ func redactComposeOutput(s string, secrets []string) string {
 	if s == "" {
 		return s
 	}
-	s, _ = maskNeedleUnion(RedactURLUserinfoInText(s), secrets, userinfoPlaceholder)
+	s, _ = maskNeedleUnion(RedactURLUserinfoInText(s), withURLRedactedForms(secrets), userinfoPlaceholder)
 	return s
+}
+
+// withURLRedactedForms is needles plus, for each one RedactURLUserinfoInText
+// changes, that changed form. The needles are looked for in text the URL pass
+// has already starred, where a value holding a URL credential no longer
+// matches as written: `DB_PASSWORD="pw sftp:u:x@h:/p"` would show "pw" once
+// its sftp token is starred (found by the agent-os-caeh/vq3i superset corpus,
+// which starred more tokens than before). needles is not changed.
+func withURLRedactedForms(needles []string) []string {
+	out := needles
+	for i, v := range needles {
+		// Every credential the URL pass stars sits before an "@" or "%40".
+		if !strings.ContainsAny(v, "@%") {
+			continue
+		}
+		if r := RedactURLUserinfoInText(v); r != v {
+			if len(out) == len(needles) {
+				out = append(make([]string, 0, len(needles)+len(needles)-i), needles...)
+			}
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // maskNeedleUnion replaces with mask each run of overlapping occurrences of
@@ -150,6 +370,15 @@ func redactComposeOutput(s string, secrets []string) string {
 // O(len(s) + len(v)) per needle v that occurs, and one strings.Index per
 // needle that does not; it allocates nothing for an s without a needle.
 func maskNeedleUnion(s string, needles []string, mask string) (string, int) {
+	runs, found := needleUnionRuns(s, needles)
+	return writeMaskedRuns(s, runs, func(string) string { return mask }), found
+}
+
+// needleUnionRuns returns, left to right, each maximal run [start, end) of
+// overlapping occurrences of needles in s, and how many needles occur.
+// maskNeedleUnion masks them; a caller that picks the mask per run
+// (scrubRclone) writes them with writeMaskedRuns.
+func needleUnionRuns(s string, needles []string) ([][2]int, int) {
 	var ends []int // ends[p] is the furthest end of an occurrence starting at p
 	found := 0
 	for _, v := range needles {
@@ -167,11 +396,9 @@ func maskNeedleUnion(s string, needles []string, mask string) (string, int) {
 		found++
 	}
 	if found == 0 {
-		return s, 0
+		return nil, 0
 	}
-	var b strings.Builder
-	b.Grow(len(s))
-	at := 0
+	var runs [][2]int
 	for p := 0; p < len(s); p++ {
 		if ends[p] == 0 {
 			continue
@@ -180,13 +407,27 @@ func maskNeedleUnion(s string, needles []string, mask string) (string, int) {
 		for q := p + 1; q < end; q++ {
 			end = max(end, ends[q])
 		}
-		b.WriteString(s[at:p])
-		b.WriteString(mask)
-		at = end
+		runs = append(runs, [2]int{p, end})
 		p = end - 1
 	}
+	return runs, found
+}
+
+// writeMaskedRuns is s with each of runs replaced by maskFor(the run's text).
+func writeMaskedRuns(s string, runs [][2]int, maskFor func(string) string) string {
+	if len(runs) == 0 {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	at := 0
+	for _, r := range runs {
+		b.WriteString(s[at:r[0]])
+		b.WriteString(maskFor(s[r[0]:r[1]]))
+		at = r[1]
+	}
 	b.WriteString(s[at:])
-	return b.String(), found
+	return b.String()
 }
 
 // markOccurrences records in ends every occurrence of v in s from first (an
@@ -321,7 +562,7 @@ func StackSecretValues(stack models.Stack, globalPath string) []string {
 				"stack", stack.ProjectName)
 		}
 		for k, v := range env {
-			if IsSensitiveEnvKey(k) {
+			if IsSensitiveEnvVar(k, v) {
 				add(v)
 			}
 		}
@@ -337,7 +578,7 @@ func StackSecretValues(stack models.Stack, globalPath string) []string {
 	}
 	for _, env := range envs {
 		for k, v := range env {
-			if IsSensitiveEnvKey(k) {
+			if IsSensitiveEnvVar(k, v) {
 				add(v)
 			}
 		}
@@ -382,24 +623,30 @@ func sensitiveEnvValues(content string) []string {
 			seps = append(seps, sep)
 		}
 		for _, sep := range seps {
-			if sep < 0 || !IsSensitiveEnvKey(strings.TrimSpace(line[:sep])) {
+			if sep < 0 {
 				continue
 			}
+			key := strings.TrimSpace(line[:sep])
 			raw := strings.TrimSpace(line[sep+1:])
-			add(raw)
 			clean := raw
 			if len(clean) >= 2 && (clean[0] == '"' || clean[0] == '\'') && clean[len(clean)-1] == clean[0] {
 				clean = clean[1 : len(clean)-1]
 			} else if c := strings.Index(clean, " #"); c != -1 {
 				clean = strings.TrimSpace(clean[:c])
 			}
+			// The value counts too (agent-os-vq3i): a URL credential is a
+			// secret under any key, as IsSensitiveEnvVar has it.
+			if !IsSensitiveEnvVar(key, raw) && !IsSensitiveEnvVar(key, clean) {
+				continue
+			}
+			add(raw)
 			if clean != raw {
 				add(clean)
 			}
 			if raw != "" && (raw[0] == '"' || raw[0] == '\'') && envQuoteEnd(raw, 1, raw[0]) < 0 {
 				// The value goes on past this line: up to its closing quote.
-				text := raw + "\n" + strings.Join(lines[i+1:], "\n")
-				if end := envQuoteEnd(text, 1, raw[0]); end >= 0 {
+				text, end := followQuotedValue(raw, lines[i+1:], 1, raw[0], false)
+				if end >= 0 {
 					text = text[:end+1]
 				}
 				add(text)
@@ -407,8 +654,77 @@ func sensitiveEnvValues(content string) []string {
 				add(strings.TrimSuffix(text[1:], raw[:1]))
 			}
 		}
+		// Every statement compose reads after a closing quote (agent-os-czik):
+		// `NOTES="a" DB_PASSWORD=x` is two variables. compose-go finds them
+		// only in a file it parses, and gives the unescaped value; this reads
+		// them in every file, as written and unescaped.
+		for _, st := range envTailStatements(line) {
+			v := line[st.start:st.end]
+			if !IsSensitiveEnvVar(st.key, v) {
+				continue
+			}
+			if st.open {
+				// The value goes on past this line: up to its closing quote.
+				text, end := followQuotedValue(line[st.start:], lines[i+1:], 0, st.quote, true)
+				v = text
+				if end >= 0 {
+					v = text[:end]
+				}
+			}
+			add(v)
+			if u := envUnescaped(v); u != v {
+				add(u)
+			}
+		}
 	}
 	return values
+}
+
+// followQuotedValue is head followed by "\n" and each of rest in turn, read
+// only up to the line holding the quote q that closes a value opened just
+// before from in head, and that quote's index in the text (-1 when it never
+// closes, and the text is all of it). A backslash escapes the next byte, a
+// newline included, inside double quotes, and inside single quotes too when
+// escapeSingle: envQuoteEnd's and envClosingQuote's rules on the joined text.
+// Joining every later line for each open value made a file of them
+// quadratic (review of run/mask2, F2).
+func followQuotedValue(head string, rest []string, from int, q byte, escapeSingle bool) (string, int) {
+	var b strings.Builder
+	b.WriteString(head)
+	pos := from
+	for k := 0; ; k++ {
+		s := b.String()
+		for ; pos < len(s); pos++ {
+			switch c := s[pos]; {
+			case c == '\\' && (q == '"' || escapeSingle):
+				pos++
+			case c == q:
+				return s, pos
+			}
+		}
+		if k == len(rest) {
+			return s, -1
+		}
+		b.WriteByte('\n')
+		b.WriteString(rest[k])
+	}
+}
+
+// envUnescaped is v with each backslash escape replaced by the byte it
+// escapes, as compose-go reads a quoted value's \" and \\ (an approximation:
+// it also maps \n to "n"; the escaped form is added beside it, never instead).
+func envUnescaped(v string) string {
+	if !strings.Contains(v, `\`) {
+		return v
+	}
+	var b strings.Builder
+	for i := 0; i < len(v); i++ {
+		if v[i] == '\\' && i+1 < len(v) {
+			i++
+		}
+		b.WriteByte(v[i])
+	}
+	return b.String()
 }
 
 // envQuoteEnd is the index in s of the quote q that closes a value opened

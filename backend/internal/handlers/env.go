@@ -183,6 +183,11 @@ func redactEnvResponse(resp *EnvResponse) {
 			e.Value = ""
 			e.Quote = ""
 			e.InlineComment = ""
+		default:
+			// A comment row's URL credential is starred; so is one in an
+			// inline comment (agent-os-vq3i). The value stays: it is not the
+			// secret, so Sensitive, which hides it, is left as it is.
+			e.InlineComment = services.RedactURLUserinfoInText(e.InlineComment)
 		}
 	}
 }
@@ -1132,7 +1137,7 @@ func statementsLookSensitive(line string) bool {
 			return services.IsSensitiveEnvKey(strings.TrimSpace(s))
 		}
 		value, next, more := statementValue(s[sep+1:])
-		if services.IsSensitiveEnvKey(strings.TrimSpace(s[:sep])) || services.HasURLUserinfo(value) {
+		if services.IsSensitiveEnvVar(strings.TrimSpace(s[:sep]), value) {
 			return true
 		}
 		if !more {

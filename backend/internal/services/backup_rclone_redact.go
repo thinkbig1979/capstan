@@ -110,16 +110,25 @@ func rcloneSecrets(remote string) []string {
 	return secrets
 }
 
-// scrubRclone masks remote's credential parts in s.
+// scrubRclone masks remote's credential parts in s: secrets as rcloneSecrets
+// returns them, the remote first, and masked its redacted form. Every secret
+// is found on s itself and the overlapping ones are masked as one run
+// (needleUnionRuns): masking one at a time let a masked value break the match
+// of another that overlapped it, leaving part of that one shown
+// (agent-os-0mwy). A run that is exactly the remote reads as masked, so an
+// echoed connection string keeps its backend and key names; any other run,
+// a value alone or a merge of overlapping ones, is the placeholder.
 func scrubRclone(s string, secrets []string, masked string) string {
 	if len(secrets) == 0 {
 		return s
 	}
-	s = strings.ReplaceAll(s, secrets[0], masked)
-	for _, v := range secrets[1:] {
-		s = strings.ReplaceAll(s, v, userinfoPlaceholder)
-	}
-	return s
+	runs, _ := needleUnionRuns(s, secrets)
+	return writeMaskedRuns(s, runs, func(run string) string {
+		if run == secrets[0] {
+			return masked
+		}
+		return userinfoPlaceholder
+	})
 }
 
 // scrubbingRunner is a commandRunner whose output lines have an rclone
