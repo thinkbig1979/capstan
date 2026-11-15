@@ -244,6 +244,11 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
     lockedNow,
     hydrate,
     rebaseWhileDirty: (next, prev) => {
+      // The removed file is back as it was loaded (agent-os-wn5h review F1):
+      // the held edits are edits to it again, with no notice.
+      if (next.hasEnvFile && prev && !prev.hasEnvFile && showEnvSection) {
+        return sameEntries(next.entries, loadedEnv.rows) && (next.raw ?? '') === loadedEnv.raw
+      }
       if (!next.hasEnvFile || !prev?.hasEnvFile) return false
       if (Boolean(next.locked) === Boolean(prev.locked)) return false
       // Locked: the payload is redacted and carries nothing to rebase onto, but
@@ -309,9 +314,11 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
     },
     canHydrateWhileDirty: (next, prev) => {
       // The file went away under unsaved edits (agent-os-wn5h): hydrating would
-      // hide them behind the no-file state. Hold it; Save is refused below.
-      if (!next.hasEnvFile && prev?.hasEnvFile) return false
-      if (!next.hasEnvFile || !prev?.hasEnvFile) return true
+      // hide them behind the no-file state. Hold it; Save is refused below. When
+      // it comes back, the edits are still to that file, so the rule below
+      // decides, against the baseline the edits started from (review F1).
+      if (!next.hasEnvFile) return !showEnvSection
+      if (!prev?.hasEnvFile && !showEnvSection) return true
       // Every representation the user edited must already equal the new
       // file. Matching only one of them hydrates over edits in the other.
       const rawEdited = rawContent !== loadedEnv.raw

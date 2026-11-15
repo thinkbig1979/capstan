@@ -35,6 +35,12 @@ import { EnvEditor } from '../EnvEditor'
 
 const FILE = {"hasEnvFile":true,"filename":".env","entries":[{"key":"PORT","value":"8080","line":1,"sensitive":false},{"key":"TZ","value":"UTC","line":2,"sensitive":false}],"raw":"PORT=8080\nTZ=UTC\n"}
 const NO_FILE = { hasEnvFile: false }
+/** The file back on disk, with the given PORT. */
+const fileWith = (port: string) => ({
+  ...FILE,
+  entries: FILE.entries.map((e) => (e.key === 'PORT' ? { ...e, value: port } : e)),
+  raw: `PORT=${port}\nTZ=UTC\n`,
+})
 
 type Payload = typeof FILE | typeof NO_FILE
 let server: Payload
@@ -42,6 +48,16 @@ let queryClient: ReturnType<typeof renderWithProviders>['queryClient']
 
 const input = (n: number) => screen.getAllByLabelText(`Environment variable value ${n}`)[0] as HTMLInputElement
 const saveButton = () => screen.getAllByRole('button', { name: /^Save$/ })[0] as HTMLButtonElement
+
+/** PORT edited to 9090, then the file removed on disk: the edits are held. */
+async function editThenRemove() {
+  ;({ queryClient } = renderWithProviders(<EnvEditor stackId="s1" />))
+  await waitFor(() => expect(input(1).value).toBe('8080'))
+  fireEvent.change(input(1), { target: { value: '9090' } })
+  await serve(NO_FILE)
+  await afterATick()
+  expect(screen.getByRole('alert')).toHaveTextContent(/removed/)
+}
 
 async function serve(next: Payload) {
   server = next
@@ -98,6 +114,43 @@ describe('EnvEditor: the env file removed on disk under unsaved edits (agent-os-
     await serve(NO_FILE)
 
     await waitFor(() => expect(screen.queryByLabelText('Environment variable value 1')).not.toBeInTheDocument())
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  // Review F1: restoring the file is the natural way out of the notice. It must
+  // not load over the held edits.
+  it('wn5h: the file comes back changed: the edits stay, with the changed-on-disk notice', async () => {
+    await editThenRemove()
+
+    await serve(fileWith('7000'))
+    await afterATick()
+
+    expect(input(1).value).toBe('9090')
+    expect(screen.getByRole('alert')).toHaveTextContent(/changed on disk/)
+    expect(saveButton()).not.toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Reload' }))
+    await waitFor(() => expect(input(1).value).toBe('7000'))
+  })
+
+  it('wn5h: the file comes back as it was loaded: the edits stay, no notice, Save works', async () => {
+    await editThenRemove()
+
+    await serve(fileWith('8080'))
+    await afterATick()
+
+    expect(input(1).value).toBe('9090')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    fireEvent.click(saveButton())
+    await waitFor(() => expect(mockUpdateEnv).toHaveBeenCalledTimes(1))
+  })
+
+  it('wn5h: the file comes back holding the edits: the editor takes it and is clean', async () => {
+    await editThenRemove()
+
+    await serve(fileWith('9090'))
+
+    await waitFor(() => expect(saveButton()).toBeDisabled())
+    expect(input(1).value).toBe('9090')
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 })
