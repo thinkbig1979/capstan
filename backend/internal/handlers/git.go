@@ -94,6 +94,27 @@ func maskGitText(s string, secrets []string) string {
 	return out
 }
 
+// diffHeaderPrefixes start the lines of a git patch that name a file.
+var diffHeaderPrefixes = []string{"diff --git ", "--- ", "+++ ", "rename from ", "rename to ", "copy from ", "copy to ", "Binary files "}
+
+// maskDiffHeaders masks the file names in a patch's header lines for a locked
+// session, each header line on its own (agent-os-xmbg): a pass over the whole
+// patch carried an unclosed quote in one file into every later file (review
+// F1). A body line that happens to start like a header ("--- x" deletes
+// "-- x") gets the same one-line pass, which can only mask more.
+func maskDiffHeaders(diff string, secrets []string) string {
+	lines := strings.Split(diff, "\n")
+	for i, line := range lines {
+		for _, p := range diffHeaderPrefixes {
+			if strings.HasPrefix(line, p) {
+				lines[i] = maskGitText(line, secrets)
+				break
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 // maskCommit masks a commit's free text for a locked session: a message, an
 // author or an email can hold a secret value as well as a patch can
 // (agent-os-xmbg). The hash, short hash and date carry none.
@@ -596,13 +617,11 @@ func (h *GitHandler) GetDiff(c *gin.Context) {
 		result, err = h.git.GetDiffMasked(absPath, hash, secrets)
 		if err == nil {
 			// The service masks the patch's content lines; the commit's free
-			// text and the file names are masked here (agent-os-xmbg). The
-			// patch gets one more pass for the names in its own header
-			// lines (diff --git, ---, +++), which can only mask more. Files
-			// and HiddenFiles take the same rule, so a hidden file still
-			// matches.
+			// text and the file names are masked here (agent-os-xmbg): the
+			// names in the patch's header lines (maskDiffHeaders), Files and
+			// HiddenFiles by the same rule, so a hidden file still matches.
 			maskCommit(&result.Commit, secrets)
-			result.Diff = maskGitText(result.Diff, secrets)
+			result.Diff = maskDiffHeaders(result.Diff, secrets)
 			for i := range result.Files {
 				result.Files[i] = maskGitText(result.Files[i], secrets)
 			}
