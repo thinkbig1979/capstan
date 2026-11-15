@@ -2,7 +2,8 @@
  * agent-os-tthh, the global twin of agent-os-ocnh: a row edited blind while
  * locked refuses Save after the unlock. Once its value is in view, what the
  * user types into it is a choice, not a blind edit, so Save must take it. An
- * edit while the value is masked, and a return to the blind content, stay
+ * edit while the value is masked, an edit while the session is locked again,
+ * and an edit that leaves the key blank (the save would drop the real row) stay
  * refused.
  *
  * Payloads as in GlobalEnvSettingsContent.yt2f.test.tsx (redactGlobalEnvVars'
@@ -118,6 +119,33 @@ describe('global env: an edit made with the value in view lifts the blind-edit r
     expect(value(2).type).toBe('password')
 
     fireEvent.change(value(2), { target: { value: 'guess' } })
+    await expectSaveRefused()
+  })
+
+  // D1 amendment (review F1, probe P-e): a row whose key stays blank is dropped
+  // by the save, so typing into it in view would let Save drop the real row the
+  // user never saw (DB_PASSWORD here), with no notice. Such an edit is not informed.
+  it('tthh: an edit that leaves the key blank does not lift the refusal (review F1)', async () => {
+    await editBlindThenUnlock(() => fireEvent.change(value(2), { target: { value: 'typed' } }))
+    expect(keyInput(2).value).toBe('')
+    expect(value(2).type).toBe('text') // the value is in view
+    fireEvent.change(value(2), { target: { value: 'guess' } })
+
+    await expectSaveRefused()
+  })
+
+  // Review F2, probe P-b: an edit made after a lock lands, before its payload,
+  // is not informed even though the row still shows the unlocked value.
+  it('tthh: an edit made while the session is locked again is refused after the next unlock (review F2)', async () => {
+    await editBlindThenUnlock(() => fireEvent.change(value(2), { target: { value: 'typed' } }))
+    fireEvent.change(keyInput(2), { target: { value: 'FOO' } })
+    await waitFor(() => expect(saveButton()).not.toBeDisabled())
+
+    act(() => useEnvUnlockStore.getState().lock()) // the lock's refetch has not landed
+    fireEvent.change(value(2), { target: { value: 'while-stale' } })
+    await serve(locked)
+    act(() => useEnvUnlockStore.getState().unlock('tok'))
+    await serve(unlocked)
     await expectSaveRefused()
   })
 

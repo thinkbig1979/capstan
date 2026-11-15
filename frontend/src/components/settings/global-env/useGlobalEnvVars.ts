@@ -204,16 +204,22 @@ export function useGlobalEnvVars(
     // A key or value typed into a blind-edited row while its value is in view is
     // the user's choice, not a blind edit (agent-os-tthh, as agent-os-ocnh in
     // the stack editor). "In view" is the row as it was before this edit, by the
-    // same rule the table masks it by, and never while locked.
+    // same rule the table masks it by, and never while locked. A row left with a
+    // blank key is not informed either (review F1): the save drops it, and with
+    // it the real row the user never saw.
     const row = vars[index]
     const inView =
       row !== undefined &&
       !lockedNow &&
+      // Redundant today (the guard is set and reset by the unlock's rebase) and
+      // so unpinnable by a test (review F2b); kept so the gate does not lean on that.
       data?.locked !== true &&
       !((row.sensitive === true || isSensitiveKey(row.key)) && !visible[row._rowId])
     if (blindGuard?.ids.has(row?._rowId) && inView) {
       const typed = { key: row.key, value: row.value, [field]: value }
-      setBlindGuard({ ...blindGuard, informed: new Map(blindGuard.informed).set(row._rowId, typed) })
+      if (typed.key.trim() !== '') {
+        setBlindGuard({ ...blindGuard, informed: new Map(blindGuard.informed).set(row._rowId, typed) })
+      }
     }
     setVars((prev) => {
       const next = [...prev]
