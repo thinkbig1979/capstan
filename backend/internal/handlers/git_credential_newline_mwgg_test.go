@@ -85,6 +85,7 @@ func TestDirectoryCredentials_Mwgg_ControlCharRefusedNothingStored(t *testing.T)
 			require.NoError(t, db.UpsertDirectory(models.Directory{Path: "/opt/stacks/app", Name: "app", IsGitRepo: true, ScannedAt: testTime}))
 
 			router := gin.New()
+			router.Use(envUnlockedMiddleware()) // a credential save needs an unlock (agent-os-mu4z)
 			handler.RegisterRoutes(router.Group("/directories"))
 			body := `{"path":"/opt/stacks/app","authType":"https","httpsUser":"` + tc.user + `","httpsToken":"` + tc.token + `"}`
 			req := httptest.NewRequest(http.MethodPut, "/directories/credentials", strings.NewReader(body))

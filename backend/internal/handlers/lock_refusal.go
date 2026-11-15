@@ -26,6 +26,9 @@ import (
 // repository, use it too (agent-os-h71i): a locked session that could point
 // the repository at a place it controls would read every stack's .env.
 //
+// The git credential writes use it too (agent-os-mu4z): the global SSH key,
+// HTTPS user and token, and a folder's own credentials.
+//
 // A handler whose request may not need the refusal (an empty env create, a
 // backup settings save that only edits the schedule) gates with
 // `if <needs it> && refuseLocked(...)`, still before the lock and the disk.
@@ -51,7 +54,15 @@ const (
 	// lockedBackupReason: the request changes where backups go, with what
 	// credential, or what they keep (agent-os-h71i).
 	lockedBackupReason = "this needs your password, because it changes where backups go or what they keep"
+	// lockedGitCredentialReason: the request changes the credential git uses
+	// to reach the remote (agent-os-mu4z).
+	lockedGitCredentialReason = "pushes and pulls use them"
 )
+
+// gitFieldsAllowedLocked are the git settings a locked session may change:
+// the commit author. The SSH key, HTTPS user and token, and any field added
+// later, need an unlock (agent-os-mu4z).
+var gitFieldsAllowedLocked = []string{"authorName", "authorEmail"}
 
 // setsFieldOutside reports whether req, a pointer to a request struct, sets a
 // field whose json name is not in allowed. A field is set when it is not its

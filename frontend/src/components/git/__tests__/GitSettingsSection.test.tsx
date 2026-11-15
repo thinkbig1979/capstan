@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { fireEvent, screen, waitFor } from '@testing-library/react'
 import { toast } from 'sonner'
 import { renderWithProviders } from '../../../test/utils'
+import { useEnvUnlockStore } from '@/stores/envUnlockStore'
 
 const mockList = vi.fn().mockResolvedValue([])
 const mockCredentialStatus = vi.fn()
@@ -29,6 +30,9 @@ import { GitSettingsSection } from '../GitSettingsSection'
 describe('GitSettingsSection', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    // Unlocked: these tests save credentials, which a locked session cannot
+    // (agent-os-mu4z, covered in GitSettingsSection.locked.test.tsx).
+    useEnvUnlockStore.getState().unlock('t')
     mockList.mockResolvedValue([])
     mockCredentialStatus.mockResolvedValue({ path: '/opt/stacks/app', status: 'ok' })
     mockUpdateCredentials.mockResolvedValue({})

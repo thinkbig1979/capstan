@@ -114,6 +114,7 @@ func TestDirectoriesHandler_UpdateCredentials_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	router := gin.New()
+	router.Use(envUnlockedMiddleware()) // a credential save needs an unlock (agent-os-mu4z)
 	group := router.Group("/directories")
 	handler.RegisterRoutes(group)
 

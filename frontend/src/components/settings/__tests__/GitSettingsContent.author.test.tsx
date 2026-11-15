@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { GitSettingsContent } from '../GitSettingsContent'
 import { toast } from 'sonner'
+import { useEnvUnlockStore } from '@/stores/envUnlockStore'
 
 /**
  * The commit author fields (agent-os-k81p.3): loaded from GET /settings/git,
@@ -35,6 +36,9 @@ function renderPanel() {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // Unlocked: these tests edit the HTTPS user, which a locked session cannot
+  // (agent-os-mu4z, covered in GitSettingsContent.locked.test.tsx).
+  useEnvUnlockStore.getState().unlock('t')
   mockGetGit.mockResolvedValue({
     sshKey: '', httpsUser: '', hasHttpsToken: false, httpsTokenUnreadable: false,
     authorName: 'Stored Name', authorEmail: 'stored@example.invalid',

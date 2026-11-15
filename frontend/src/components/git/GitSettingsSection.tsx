@@ -20,6 +20,10 @@ import { presentFault } from '@/lib/error-handler'
 import { queryKeys } from '@/lib/query-keys'
 import type { DirectoryCredentialStatusValue } from '@/types'
 import { messageOrNull } from '@/lib/narrow'
+import { EnvLockedNotice } from '@/components/EnvLockedNotice'
+import { EnvUnlockDialog } from '@/components/EnvUnlockDialog'
+import { useEnvLockedNow } from '@/hooks/useEnvLockedNow'
+import { LOCKED_CREDENTIAL_TITLE, LOCKED_FOLDER_CREDENTIALS_NOTICE } from '@/lib/locked-copy'
 
 /**
  * The credentials save's two ACTIONABLE wire codes. UpdateCredentials MINTS four
@@ -139,6 +143,11 @@ export function GitSettingsSection({
   const [pushEnabled, setPushEnabled] = useState(false)
   const [loaded, setLoaded] = useState(false)
   const [credentialStatus, setCredentialStatus] = useState<DirectoryCredentialStatusValue | null>(null)
+  const [unlockOpen, setUnlockOpen] = useState(false)
+  // Locked, the server refuses every change to this folder's credentials
+  // (agent-os-mu4z). The push switch has its own route and stays usable.
+  const locked = useEnvLockedNow()
+  const lockedTitle = locked ? LOCKED_CREDENTIAL_TITLE : undefined
 
   const isSSH = remoteURL?.startsWith('git@') || remoteURL?.startsWith('ssh://')
   const isHTTPS = remoteURL?.startsWith('https://') || remoteURL?.startsWith('http://')
@@ -227,11 +236,17 @@ export function GitSettingsSection({
 
       {open && (
         <form onSubmit={(e) => { e.preventDefault(); saveMutation.mutate() }} className="mt-3 space-y-3 pl-5">
+          {locked && (
+            <EnvLockedNotice onUnlock={() => setUnlockOpen(true)} className="max-w-md">
+              {LOCKED_FOLDER_CREDENTIALS_NOTICE}
+            </EnvLockedNotice>
+          )}
+          <EnvUnlockDialog open={unlockOpen} onOpenChange={setUnlockOpen} />
           <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-3 items-center max-w-md">
             <Label className="text-sm text-right">Method</Label>
             <div>
-              <Select value={authType} onValueChange={setAuthType}>
-                <SelectTrigger className="h-8 text-sm" aria-label="Authentication method">
+              <Select value={authType} onValueChange={setAuthType} disabled={locked}>
+                <SelectTrigger className="h-8 text-sm" aria-label="Authentication method" title={lockedTitle}>
                   <SelectValue placeholder="Select method" />
                 </SelectTrigger>
                 <SelectContent>
@@ -269,6 +284,8 @@ export function GitSettingsSection({
                   placeholder="/path/to/id_rsa (inside container)"
                   value={sshKeyPath}
                   onChange={(e) => setSshKeyPath(e.target.value)}
+                  disabled={locked}
+                  title={lockedTitle}
                   className="h-8 text-sm"
                 />
               </>
@@ -282,6 +299,8 @@ export function GitSettingsSection({
                   placeholder="git"
                   value={httpsUser}
                   onChange={(e) => setHttpsUser(e.target.value)}
+                  disabled={locked}
+                  title={lockedTitle}
                   className="h-8 text-sm"
                 />
                 <Label className="text-sm text-right">
@@ -293,6 +312,8 @@ export function GitSettingsSection({
                   placeholder={hasToken ? 'Leave blank to keep current' : 'ghp_xxxx'}
                   value={httpsToken}
                   onChange={(e) => setHttpsToken(e.target.value)}
+                  disabled={locked}
+                  title={lockedTitle}
                   className="h-8 text-sm"
                 />
               </>
@@ -320,7 +341,8 @@ export function GitSettingsSection({
               type="submit"
               size="sm"
               className="h-7 text-xs"
-              disabled={saveMutation.isPending}
+              disabled={saveMutation.isPending || locked}
+              title={lockedTitle}
             >
               {saveMutation.isPending ? 'Saving...' : 'Save Credentials'}
             </Button>

@@ -28,7 +28,7 @@ func setupSettingsFullRouter(handler *SettingsHandler) *gin.Engine {
 	router.GET("/settings/updates", handler.GetUpdateSettings)
 	router.PUT("/settings/updates", handler.UpdateUpdateSettings)
 	router.GET("/settings/git", handler.GetGitSettings)
-	router.PUT("/settings/git", handler.UpdateGitSettings)
+	router.PUT("/settings/git", envUnlockedMiddleware(), handler.UpdateGitSettings)
 	router.GET("/settings/directories", handler.GetConfiguredDirectories)
 	router.PUT("/settings/directories", handler.UpdateConfiguredDirectories)
 	return router

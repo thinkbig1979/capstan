@@ -1273,6 +1273,14 @@ func (h *SettingsHandler) UpdateGitSettings(c *gin.Context) {
 		return
 	}
 
+	// A credential field present needs an unlock, even with the stored value,
+	// so the answer says nothing about what is stored (agent-os-mu4z). Before
+	// the validation, which would otherwise answer about a locked caller's
+	// input. The author fields stay allowed.
+	if setsFieldOutside(&req, gitFieldsAllowedLocked...) && refuseLocked(c, "change the git credentials", lockedGitCredentialReason) {
+		return
+	}
+
 	// "" means "no change", like the other fields; a non-empty value is
 	// validated, so whitespace-only is a 400 rather than a quiet skip.
 	if req.AuthorName != "" {

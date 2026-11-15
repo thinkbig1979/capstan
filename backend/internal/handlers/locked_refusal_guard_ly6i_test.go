@@ -27,6 +27,8 @@ var lockedRefusalSinks = map[string]bool{
 	"LaunchDRRestore":  true,
 	"LaunchPrune":      true,
 	"EnsureRepository": true,
+	// agent-os-mu4z: a folder's own git credential.
+	"UpdateDirectoryCredentials": true,
 }
 
 // lockedSettingKeys are the settings a locked session must not write
@@ -44,6 +46,8 @@ var lockedSettingKeys = map[string]bool{
 	"backup_keep_daily": true, "backup_keep_weekly": true,
 	"backup_keep_monthly": true, "backup_keep_yearly": true,
 	"backup_auto_prune": true,
+	// agent-os-mu4z: the credential git uses to reach the remote.
+	"git_ssh_key": true, "git_https_user": true, "git_https_token": true,
 }
 
 // lockedRefusalExempt names the handlers that reach a sink without
@@ -67,6 +71,9 @@ var lockedRefusalConditional = map[string]string{
 	// Refused when the body changes where or with what credential backups
 	// go, or the retention; a schedule edit stays allowed (agent-os-h71i).
 	"backup.go:updateSettings": "refused only when a destination, credential or retention field is present",
+	// Refused when a credential field is present; the author stays allowed
+	// (agent-os-mu4z).
+	"settings.go:UpdateGitSettings": "refused only when a credential field is present",
 }
 
 // TestLockedRefusalGuard_ly6i keeps every handler that lints or writes
@@ -110,7 +117,7 @@ func TestLockedRefusalGuard_ly6i(t *testing.T) {
 			// A conditional entry is used only while its gate really is the
 			// `<cond> && refuseLocked` form (review F8).
 			used[key] = used[key] || (conditional && viaCond)
-			if !assert.NotEqual(t, token.NoPos, gate, "%s lints or writes request text, or starts a restore, prune or repository change, with no top-level `if refuseLocked(c, ...) { return }`: a locked session would read its own text back through the secret masking (agent-os-ly6i) or reach secrets through backups (agent-os-h71i)", fset.Position(sink)) {
+			if !assert.NotEqual(t, token.NoPos, gate, "%s lints or writes request text, or starts a restore, prune or repository change, with no top-level `if refuseLocked(c, ...) { return }`: a locked session would read its own text back through the secret masking (agent-os-ly6i) or reach secrets through backups (agent-os-h71i) or git credentials (agent-os-mu4z)", fset.Position(sink)) {
 				continue
 			}
 			assert.Less(t, gate, sink, "%s: refuseLocked must come before the first lint or write at %s", key, fset.Position(sink))
@@ -129,6 +136,7 @@ func TestLockedRefusalGuard_ly6i(t *testing.T) {
 		"stack_crud.go:Create", "stacks.go:Lint", "env.go:Create",
 		"backup.go:runRestore", "backup.go:runDRRestore", "backup.go:runPrune",
 		"backup.go:repoInit", "backup.go:updateSettings",
+		"settings.go:UpdateGitSettings", "directories.go:UpdateCredentials",
 	} {
 		assert.Contains(t, inScope, want)
 	}
