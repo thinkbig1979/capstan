@@ -11,9 +11,9 @@ import type { IndexedEnvVar } from '../global-env/types'
 
 const PEM = '"-----BEGIN PRIVATE KEY-----\nruuwpemsecret\n-----END PRIVATE KEY-----"'
 const ROWS: IndexedEnvVar[] = [
-  { key: 'NOTES', value: 'https://u:ruuwurlsecret@example.com', sensitive: true, _originalIndex: 0 },
-  { key: 'TLS', value: PEM, sensitive: true, _originalIndex: 1 },
-  { key: 'TZ', value: 'UTC', _originalIndex: 2 },
+  { key: 'NOTES', value: 'https://u:ruuwurlsecret@example.com', sensitive: true, _originalIndex: 0, _rowId: 0, keyHidden: false },
+  { key: 'TLS', value: PEM, sensitive: true, _originalIndex: 1, _rowId: 1, keyHidden: false },
+  { key: 'TZ', value: 'UTC', _originalIndex: 2, _rowId: 2, keyHidden: false },
 ]
 
 const views = [

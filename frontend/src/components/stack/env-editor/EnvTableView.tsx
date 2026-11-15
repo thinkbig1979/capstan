@@ -7,6 +7,8 @@ import type { EnvEntryDraft } from '@/types'
 import { useTextFilter } from '@/hooks/useTextFilter'
 import { TableSearch } from '@/components/ui/table-search'
 import type { EnvEntryRow, IndexedEnvEntry } from './types'
+import { valuePlaceholder } from './hiddenValue'
+import { searchable } from './envSearch'
 
 const NO_HIDDEN_KEYS: ReadonlySet<number> = new Set()
 
@@ -111,8 +113,8 @@ export function EnvTableView({
   // locked user what it contains, one substring at a time (agent-os-kxag, y6e8).
   const searchFields = useMemo(
     () => [
-      (e: IndexedEnvEntry) => (keyHidden(e, hiddenKeyIds) ? '' : e.key),
-      (e: IndexedEnvEntry) => (e.sensitive ? '' : e.value),
+      (e: IndexedEnvEntry) => searchable(e.key, keyHidden(e, hiddenKeyIds)),
+      (e: IndexedEnvEntry) => searchable(e.value, e.sensitive),
     ],
     [hiddenKeyIds],
   )
@@ -182,7 +184,7 @@ export function EnvTableView({
                         type={entry.sensitive ? 'password' : 'text'}
                         value={entry.value}
                         onChange={(e) => onEntryChange(i, 'value', e.target.value)}
-                        placeholder="value"
+                        placeholder={valuePlaceholder(locked, entry.sensitive, entry.value)}
                         aria-label={`Environment variable value ${i + 1}`}
                       />
                       <Button
@@ -263,7 +265,7 @@ export function EnvTableView({
                     type={entry.sensitive ? 'password' : 'text'}
                     value={entry.value}
                     onChange={(e) => onEntryChange(i, 'value', e.target.value)}
-                    placeholder="value"
+                    placeholder={valuePlaceholder(locked, entry.sensitive, entry.value)}
                     className="flex-1"
                     aria-label={`Environment variable value ${i + 1}`}
                   />

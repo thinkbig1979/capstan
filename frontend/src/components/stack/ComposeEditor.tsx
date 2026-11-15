@@ -17,8 +17,7 @@ import { useExternalFileChange } from '@/hooks/useExternalFileChange'
 import { EnvUnlockDialog } from '@/components/EnvUnlockDialog'
 import { Button } from '@/components/ui/button'
 import { Lock } from 'lucide-react'
-import { useAuth } from '@/hooks/useAuth'
-import { useEnvUnlockStore } from '@/stores/envUnlockStore'
+import { useEnvLockedNow } from '@/hooks/useEnvLockedNow'
 
 /**
  * One load of the compose file. `masked` is true when the server masked
@@ -72,13 +71,12 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
       return load
     },
   })
-  const { authDisabled } = useAuth()
-  const unlockedUntil = useEnvUnlockStore((s) => s.unlockedUntil)
+  const lockedNow = useEnvLockedNow()
   // After a lock the last payload is still the one loaded while unlocked, with
   // the secrets in the clear, until the lock's refetch lands, and for good if
   // it fails (agent-os-xz6h). A clean view drops that text and waits for the
   // masked file; unsaved edits stay, as a re-lock keeps them (agent-os-w6wx).
-  const staleUnlocked = !authDisabled && unlockedUntil === null && data !== undefined && !data.locked
+  const staleUnlocked = lockedNow && data !== undefined && !data.locked
   const hideText = staleUnlocked && content === lastSaved
   const masked = (data?.masked ?? false) || staleUnlocked
   const [unlockOpen, setUnlockOpen] = useState(false)
@@ -122,6 +120,9 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
   const hasUnsavedChanges = content !== lastSaved
   const { changedOnDisk, reload } = useExternalFileChange(data, {
     isDirty: hasUnsavedChanges,
+    // A file held behind the notice was served unlocked: a lock drops it, as
+    // the env editors do (agent-os-9wp3).
+    lockedNow,
     hydrate: (next) => {
       // '' is an absent body (see the queryFn), not a file to load.
       if (!next.text) return

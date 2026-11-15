@@ -5,6 +5,7 @@ import type { ActionResult } from '@/lib/action-result'
 import { useActionMutation } from '@/hooks/useActionMutation'
 import { queryKeys } from '@/lib/query-keys'
 import { stringOr } from '@/lib/narrow'
+import { useEnvUnlockStore } from '@/stores/envUnlockStore'
 
 export function useGitStatus(stackId: string) {
   return useQuery({
@@ -34,10 +35,27 @@ export function useGitLog(stackId: string, limit = 50, offset = 0, file?: string
   })
 }
 
+/**
+ * A diff as the cache holds it, with whether its request carried an unlock
+ * token. The server masks a diff only for a locked session and the wire shape
+ * has no `locked` flag, so after a lock this is how a view tells the diff on
+ * screen still holds the unlocked text (agent-os-npxh). Read before the request
+ * is sent: a lock while it is in flight still counts it as unlocked.
+ */
+export type ServedDiff<T> = T & { servedUnlocked: boolean }
+
+async function stampServed<T extends object>(request: () => Promise<T>): Promise<ServedDiff<T>> {
+  const servedUnlocked = useEnvUnlockStore.getState().token !== null
+  const result = await request()
+  // A response with no body passes through as it came: the views report it as
+  // a failed load, and a stamp would turn it into an empty diff.
+  return result == null ? result : { ...result, servedUnlocked }
+}
+
 export function useGitDiff(stackId: string, hash: string) {
   return useQuery({
     queryKey: queryKeys.git.diff(stackId, hash),
-    queryFn: () => gitApi.diff(stackId, hash),
+    queryFn: () => stampServed(() => gitApi.diff(stackId, hash)),
     enabled: !!hash,
     staleTime: 60000,
   })
@@ -74,7 +92,7 @@ export function useGitChanges(stackId: string, enabled = true) {
 export function useGitChangesDiff(stackId: string, path: string | null) {
   return useQuery({
     queryKey: changesDiffKey(stackId, path ?? ''),
-    queryFn: () => gitApi.changesDiff(stackId, path ?? ''),
+    queryFn: () => stampServed(() => gitApi.changesDiff(stackId, path ?? '')),
     enabled: path !== null,
     // Same as useGitChanges: a save since the last read changes the diff.
     refetchOnMount: 'always',

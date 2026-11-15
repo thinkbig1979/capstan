@@ -15,6 +15,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { LoadFailedNotice } from '@/components/LoadFailedNotice'
 import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 import { ParsedDiffView } from '@/components/git/DiffViewer'
+import { useEnvLockedNow } from '@/hooks/useEnvLockedNow'
 import { useGitChanges, useGitChangesDiff, useGitCommit, useGitPush } from '@/hooks/useGit'
 import { isActionResult } from '@/lib/action-result'
 import type { GitCommitResult, GitPushResult } from '@/lib/api'
@@ -463,12 +464,16 @@ function BlockedNotes({ result }: { result: GitChangesResult }) {
 /** The selected file's diff; an env file's is never requested (D136). */
 function ChangeDiff({ stackId, change }: { stackId: string; change: GitChange }) {
   const diffQuery = useGitChangesDiff(stackId, change.isEnv ? null : change.path)
-  const { data, error, refetch } = diffQuery
+  const { error, refetch } = diffQuery
   const fresh = useReadSinceMount(diffQuery)
+  // A diff fetched while unlocked holds secrets in the clear: once locked it is
+  // treated as not loaded (agent-os-npxh).
+  const lockedNow = useEnvLockedNow()
+  const data = lockedNow && diffQuery.data?.servedUnlocked === true ? undefined : diffQuery.data
   if (change.isEnv || data?.hidden) {
     return <p className="rounded-md border px-3 py-2 text-sm text-muted-foreground">{ENV_DIFF_HIDDEN}</p>
   }
-  if (!fresh && error && !diffQuery.isFetching) {
+  if ((!fresh || !data) && error && !diffQuery.isFetching) {
     return (
       <div className="space-y-1">
         <LoadFailedNotice what="the diff" onRetry={() => void refetch()} />

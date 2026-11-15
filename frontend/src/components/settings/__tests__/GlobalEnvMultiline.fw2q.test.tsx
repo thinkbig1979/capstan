@@ -12,8 +12,8 @@ import { GlobalEnvCards } from '../global-env/GlobalEnvCards'
 import type { IndexedEnvVar } from '../global-env/types'
 
 const ROWS: IndexedEnvVar[] = [
-  { key: 'TZ', value: 'Europe/Amsterdam', _originalIndex: 0 },
-  { key: 'BANNER', value: 'line one\nline two', _originalIndex: 1 },
+  { key: 'TZ', value: 'Europe/Amsterdam', _originalIndex: 0, _rowId: 0, keyHidden: false },
+  { key: 'BANNER', value: 'line one\nline two', _originalIndex: 1, _rowId: 1, keyHidden: false },
 ]
 
 function renderBoth(rows: IndexedEnvVar[], visible: Record<number, boolean> = {}) {
@@ -52,14 +52,14 @@ describe('Global env multi-line values (fw2q C2)', () => {
   })
 
   it('masks a multi-line value under a sensitive key until revealed', () => {
-    const rows: IndexedEnvVar[] = [{ key: 'TLS_PRIVATE_KEY', value: 'c2secret\nmore', _originalIndex: 0 }]
+    const rows: IndexedEnvVar[] = [{ key: 'TLS_PRIVATE_KEY', value: 'c2secret\nmore', _originalIndex: 0, _rowId: 0, keyHidden: false }]
     renderBoth(rows)
     expect(screen.queryByText(/c2secret/)).toBeNull()
     expect(screen.getAllByLabelText('Show value 1')).toHaveLength(2)
   })
 
   it('shows a revealed sensitive multi-line value', () => {
-    const rows: IndexedEnvVar[] = [{ key: 'TLS_PRIVATE_KEY', value: 'c2secret\nmore', _originalIndex: 0 }]
+    const rows: IndexedEnvVar[] = [{ key: 'TLS_PRIVATE_KEY', value: 'c2secret\nmore', _originalIndex: 0, _rowId: 0, keyHidden: false }]
     renderBoth(rows, { 0: true })
     expect(screen.getAllByText(/c2secret/)).toHaveLength(2)
   })

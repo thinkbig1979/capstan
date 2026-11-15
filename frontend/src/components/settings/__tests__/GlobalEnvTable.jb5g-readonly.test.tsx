@@ -10,10 +10,10 @@ import type { IndexedEnvVar } from '../global-env/types'
 // page shows them read-only with a marker, as it does a multi-line value.
 
 const ROWS: IndexedEnvVar[] = [
-  { key: 'FOO', value: '', readOnly: true, _originalIndex: 0 },
-  { key: 'BAR', value: '1', readOnly: true, _originalIndex: 1 },
-  { key: 'API_TOKEN', value: 'jb5gsecret', readOnly: true, sensitive: true, _originalIndex: 2 },
-  { key: 'A', value: '1', _originalIndex: 3 },
+  { key: 'FOO', value: '', readOnly: true, _originalIndex: 0, _rowId: 0, keyHidden: false },
+  { key: 'BAR', value: '1', readOnly: true, _originalIndex: 1, _rowId: 1, keyHidden: false },
+  { key: 'API_TOKEN', value: 'jb5gsecret', readOnly: true, sensitive: true, _originalIndex: 2, _rowId: 2, keyHidden: false },
+  { key: 'A', value: '1', _originalIndex: 3, _rowId: 3, keyHidden: false },
 ]
 
 const views = [
