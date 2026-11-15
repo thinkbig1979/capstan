@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -92,10 +93,10 @@ func classifyContainers(
 		// container is an acceptable "stopped" end state), ANY container still
 		// listed by `compose ps` after a delete — running, paused, restarting,
 		// or otherwise — means the delete did not fully succeed and the caller
-		// must not proceed to remove the stack directory (see parseComposePSOutput:
-		// its "stopped" aggregate is only ever produced when len(containers)==0,
-		// so checking len(containers) here is equivalent to checking status but
-		// makes the real invariant explicit).
+		// must not proceed to remove the stack directory. Checked on
+		// len(containers), not on status: since rpbx's compose ps -a a stack of
+		// exited containers is also "stopped", and those containers still
+		// exist.
 		if len(containers) == 0 {
 			return truth.Success("stack and volumes removed", truth.KV("status", status))
 		}
@@ -110,6 +111,14 @@ func classifyContainers(
 	case actionStart, actionRestart:
 		if len(containers) == 0 {
 			return truth.Failed("stack did not start: no containers found", cmdErr,
+				truth.KV("status", status))
+		}
+
+		// A one-shot container that exited 0 is done, not failed (Edwin,
+		// agent-os-rpbx F1): only the others must be running.
+		containers = withoutCompleted(containers)
+		if len(containers) == 0 {
+			return truth.Success("stack ran: every container exited cleanly",
 				truth.KV("status", status))
 		}
 
@@ -180,6 +189,25 @@ func (s *DockerService) verifyLifecycle(stack models.Stack, action lifecycleActi
 	// final snapshot.
 	finalStatus, finalContainers := s.pollUntilSettled(stack, status, containers)
 	return classifyContainers(action, cmdErr, finalStatus, finalContainers, nil)
+}
+
+// completedCleanly reports a container that exited with code 0, as a one-shot
+// init or job container does when it has done its work. An exit code compose
+// did not report is not clean (fail closed).
+func completedCleanly(c models.Container) bool {
+	return c.State == "exited" && c.ExitCode != nil && *c.ExitCode == 0
+}
+
+// withoutCompleted returns the containers start verification waits on: all but
+// those that completedCleanly.
+func withoutCompleted(containers []models.Container) []models.Container {
+	out := make([]models.Container, 0, len(containers))
+	for _, c := range containers {
+		if !completedCleanly(c) {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // countRunning returns the number of containers in the "running" state.
@@ -333,6 +361,9 @@ func (s *DockerService) pollUntilSettledWithParams(
 // state "running" and none is "unhealthy". An empty slice returns false (no
 // containers = did not start).
 func allRunningNoUnhealthy(containers []models.Container) bool {
+	// Containers that exited 0 are done (agent-os-rpbx F1); the dwell is about
+	// the rest. With nothing else left there is nothing to wait for.
+	containers = withoutCompleted(containers)
 	if len(containers) == 0 {
 		return false
 	}
@@ -559,7 +590,10 @@ func (s *DockerService) Status(stack models.Stack) (string, []models.Container, 
 		return "", nil, ErrDockerUnavailable
 	}
 
-	args := s.buildComposeArgs(stack, "ps", []string{"--format", "json"})
+	// -a lists stopped containers too, so a partly stopped stack reads
+	// "partial" (agent-os-rpbx). It also lists one-off containers from
+	// `compose run`, which parseComposePSOutput drops.
+	args := s.buildComposeArgs(stack, "ps", []string{"-a", "--format", "json"})
 
 	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
 	cmd, ctx, cancel := commandWithDeadline(context.Background(), s.composeTimeout(), "docker", args...)
@@ -621,8 +655,10 @@ func (s *DockerService) Status(stack models.Stack) (string, []models.Container, 
 	return parseComposePSOutput(stdout.Bytes())
 }
 
-// parseComposePSOutput parses NDJSON lines from `docker compose ps --format json`
-// and returns the aggregate status and per-container list.
+// parseComposePSOutput parses NDJSON lines from `docker compose ps -a --format json`
+// and returns the aggregate status and per-container list. One-off containers
+// (`compose run`, Labels carries com.docker.compose.oneoff=True) are left out:
+// they are not part of the stack's status (agent-os-dn1z).
 func parseComposePSOutput(output []byte) (string, []models.Container, error) {
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	containers := make([]models.Container, 0, len(lines))
@@ -640,40 +676,77 @@ func parseComposePSOutput(output []byte) (string, []models.Container, error) {
 			Health  string `json:"Health"`
 			Image   string `json:"Image"`
 			Ports   string `json:"Ports"`
+			Labels  string `json:"Labels"`
+			// A pointer so a row without it reads as unknown, not exit 0.
+			ExitCode *int `json:"ExitCode"`
 		}
 
 		if err := json.Unmarshal([]byte(line), &composePS); err != nil {
+			continue
+		}
+		if composePSOneOff(composePS.Labels) {
 			continue
 		}
 
 		ports := parsePorts(composePS.Ports)
 
 		c := models.Container{
-			ID:     composePS.ID,
-			Name:   composePS.Name,
-			Image:  composePS.Image,
-			State:  composePS.State,
-			Status: composePS.State,
-			Ports:  ports,
-			Health: composePS.Health,
+			ID:       composePS.ID,
+			Name:     composePS.Name,
+			Image:    composePS.Image,
+			State:    composePS.State,
+			Status:   composePS.State,
+			Ports:    ports,
+			Health:   composePS.Health,
+			ExitCode: composePS.ExitCode,
 		}
 
 		containers = append(containers, c)
 	}
 
-	status := string(StackStatusRunning)
-	if len(containers) == 0 {
-		status = string(StackStatusStopped)
-	} else {
-		for _, c := range containers {
-			if c.State != "running" {
-				status = string(StackStatusPartial)
-				break
-			}
+	return composeStackStatus(containers), containers, nil
+}
+
+// composeStackStatus is the stack status Status reports for its containers:
+// "stopped" when none is left running (no containers, or every one exited,
+// dead or only created), "running" when every one runs, else "partial".
+// "stopped" must not read "partial" now that -a lists exited containers: the
+// restart wait loop waits for "stopped", and a backup restarts a stack it
+// read as running or partial (agent-os-rpbx).
+func composeStackStatus(containers []models.Container) string {
+	allRunning, allStopped := true, true
+	for _, c := range containers {
+		if c.State != "running" {
+			allRunning = false
+		}
+		if !containerStateStopped(c.State) {
+			allStopped = false
 		}
 	}
+	switch {
+	case allStopped:
+		return string(StackStatusStopped)
+	case allRunning:
+		return string(StackStatusRunning)
+	}
+	return string(StackStatusPartial)
+}
 
-	return status, containers, nil
+// containerStateStopped reports a Docker container state that is not running
+// and is not on its way back (restarting) or held (paused).
+func containerStateStopped(state string) bool {
+	return state == "exited" || state == "dead" || state == "created"
+}
+
+// composeOneOffLabel is the label, as `compose ps` prints it in Labels, that
+// compose puts on a `compose run` container.
+const composeOneOffLabel = "com.docker.compose.oneoff=True"
+
+// composePSOneOff reports a `compose ps` row's comma-joined Labels carrying
+// composeOneOffLabel. Compose labels, not an env file: nothing here reads a
+// KEY=value pair, it matches one whole label.
+func composePSOneOff(labels string) bool {
+	return slices.Contains(strings.Split(labels, ","), composeOneOffLabel)
 }
 
 // RunStreaming executes a compose subcommand and emits each output line on the

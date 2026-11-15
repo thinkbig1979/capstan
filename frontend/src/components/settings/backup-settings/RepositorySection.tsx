@@ -281,6 +281,14 @@ export function RepositorySection({
           Leave blank to keep the current password unchanged. Corresponds to{' '}
           <code>RESTIC_PASSWORD</code>.
         </p>
+        {/* agent-os-v8ig: the typed value, or the stored one while the field is
+            blank (a blank field keeps the stored password). */}
+        {(password ? password !== password.trim() : settings.passwordEdgeWhitespace === true) && (
+          <p className="text-xs text-warning">
+            Restic ignores spaces at the start and end of the password. Capstan saves it as typed,
+            but a manual restore needs it without those spaces.
+          </p>
+        )}
         {settings.hasPassword && settings.passwordSource === 'db' && (
           <Button
             type="button"

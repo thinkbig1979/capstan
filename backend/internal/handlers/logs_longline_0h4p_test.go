@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -69,11 +70,45 @@ func TestPumpLogLines_LineOver64KiBThenShort_0h4p(t *testing.T) {
 	assert.Equal(t, "web | short", lines[1])
 }
 
-func TestPumpLogLines_LineOverLimitReturnsError_0h4p(t *testing.T) {
-	huge := strings.Repeat("a", 1<<20+1)
+// Was TestPumpLogLines_LineOverLimitReturnsError_0h4p, which pinned the stream
+// STOPPING at a line over 1 MiB. Edwin ruled (2026-11-15, agent-os-v8ig) that
+// such a line is cut at 1 MiB with a note and the stream goes on: the client
+// reconnects and replays the last 100 lines, so a stop happened again on every
+// reconnect while that line was among them.
+func TestPumpLogLines_LineOverLimitIsTruncatedAndStreamGoesOn_V8ig(t *testing.T) {
+	huge := "web | " + strings.Repeat("a", 1<<20+512*1024)
 
-	_, err := pumpOnce(t, "web | first\nweb | "+huge+"\nweb | short\n")
+	lines, err := pumpOnce(t, "web | first\n"+huge+"\nweb | short\nweb | last-no-newline")
 
-	require.Error(t, err, "a line over the limit ended the stream with no error")
-	assert.Contains(t, err.Error(), "too long")
+	require.NoError(t, err)
+	require.Len(t, lines, 4, "every line arrives, the long one cut")
+	assert.Equal(t, "web | first", lines[0])
+	assert.True(t, strings.HasPrefix(lines[1], huge[:1<<20]), "the first 1 MiB of the long line is kept")
+	assert.True(t, strings.HasSuffix(lines[1], logLineTruncatedNote), "the cut is marked")
+	assert.Len(t, lines[1], 1<<20+len(logLineTruncatedNote))
+	assert.Equal(t, "web | short", lines[2])
+	assert.Equal(t, "web | last-no-newline", lines[3])
+}
+
+func TestPumpLogLines_LineAtLimitIsNotTruncated_V8ig(t *testing.T) {
+	exact := strings.Repeat("b", 1<<20)
+
+	lines, err := pumpOnce(t, exact+"\r\nnext\n")
+
+	require.NoError(t, err)
+	require.Len(t, lines, 2)
+	assert.Equal(t, exact, lines[0], "a line of exactly 1 MiB is whole, CR dropped as bufio.ScanLines does")
+	assert.Equal(t, "next", lines[1])
+}
+
+func TestPumpLogLines_CutKeepsUTF8Whole_V8ig(t *testing.T) {
+	// 1 MiB - 1 ASCII bytes, then a 3-byte rune straddling the limit.
+	text := strings.Repeat("c", 1<<20-1) + "€€€"
+
+	lines, err := pumpOnce(t, text+"\n")
+
+	require.NoError(t, err)
+	require.Len(t, lines, 1)
+	assert.True(t, utf8.ValidString(lines[0]), "the cut must not split a rune")
+	assert.Equal(t, strings.Repeat("c", 1<<20-1)+logLineTruncatedNote, lines[0])
 }

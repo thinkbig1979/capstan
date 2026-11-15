@@ -423,3 +423,48 @@ describe('RepositorySection repository state', () => {
     })
   })
 })
+
+// agent-os-v8ig part 1 (Edwin, 2026-11-15): restic ignores spaces at either end
+// of the password. Capstan saves it as typed and warns, for the typed value and
+// for a stored one the server flags.
+describe('RepositorySection password edge-space warning', () => {
+  const WARNING = 'Restic ignores spaces at the start and end of the password. Capstan saves it as typed, but a manual restore needs it without those spaces.'
+
+  function renderWithPassword(settings: BackupSettings, password: string) {
+    return render(
+      <RepositorySection
+        settings={settings}
+        repository={settings.repository}
+        onRepositoryChange={vi.fn()}
+        password={password}
+        onPasswordChange={vi.fn()}
+        showPassword={false}
+        onTogglePasswordReveal={vi.fn()}
+        onClearPassword={vi.fn()}
+        isSaving={false}
+        onInitRepo={vi.fn()}
+        isInitializing={false}
+      />,
+    )
+  }
+
+  it('warns while the typed password has a leading or trailing space', () => {
+    renderWithPassword(makeSettings(), ' secret')
+    expect(screen.getByText(WARNING)).toBeInTheDocument()
+  })
+
+  it('warns about a stored password the server flags, while the field is blank', () => {
+    renderWithPassword(makeSettings({ passwordEdgeWhitespace: true }), '')
+    expect(screen.getByText(WARNING)).toBeInTheDocument()
+  })
+
+  it('does not warn for a password with inner spaces only', () => {
+    renderWithPassword(makeSettings(), 'sec ret')
+    expect(screen.queryByText(WARNING)).not.toBeInTheDocument()
+  })
+
+  it('does not warn once a clean password is typed over a flagged stored one', () => {
+    renderWithPassword(makeSettings({ passwordEdgeWhitespace: true }), 'secret')
+    expect(screen.queryByText(WARNING)).not.toBeInTheDocument()
+  })
+})

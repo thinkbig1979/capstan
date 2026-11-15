@@ -317,11 +317,14 @@ func (h *BackupHandler) getSettings(c *gin.Context) {
 	repoStatus := h.svc.CheckRepository(c.Request.Context())
 
 	c.JSON(http.StatusOK, gin.H{
-		"repository":                repository,
-		"hasEmbeddedCredential":     hasEmbeddedCredential,
-		"repositorySource":          repoSrc,
-		"hasPassword":               hasPassword,
-		"passwordSource":            pwSrc,
+		"repository":            repository,
+		"hasEmbeddedCredential": hasEmbeddedCredential,
+		"repositorySource":      repoSrc,
+		"hasPassword":           hasPassword,
+		"passwordSource":        pwSrc,
+		// One bit, never the password: the effective password has spaces at
+		// an end that restic ignores (agent-os-v8ig).
+		"passwordEdgeWhitespace":    services.ResticPasswordHasEdgeSpaces(bc.ResticPassword),
 		"keepDaily":                 bc.KeepDaily,
 		"keepWeekly":                bc.KeepWeekly,
 		"keepMonthly":               bc.KeepMonthly,

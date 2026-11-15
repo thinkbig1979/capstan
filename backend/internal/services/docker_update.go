@@ -184,6 +184,22 @@ func resolveUpdateStrategy(db DashboardDB, projectName, serviceName string) (com
 // unexported and no caller matches on it, so it is a shared literal, not an API.
 const refusedUpdateReason = "cannot determine update strategy: the stacks table could not be read"
 
+// oneOffUpdateReason is why an update aimed at a one-off container is refused
+// (agent-os-dn1z, Edwin 2026-11-15): its project and service labels route it
+// to the compose path, which recreates the SERVICE container, not the one-off.
+const oneOffUpdateReason = "This is a one-off container from docker compose run; update its service instead."
+
+// errOneOffUpdate is the refusal's cause. It is wrapped in updateRefusedError,
+// so the stack's stored status is left alone: nothing ran.
+var errOneOffUpdate = errors.New("one-off containers (docker compose run) are not updated")
+
+// isOneOffContainer reports a container made by `docker compose run`, which
+// compose labels com.docker.compose.oneoff=True (its service containers carry
+// False, see serviceContainers).
+func isOneOffContainer(labels map[string]string) bool {
+	return labels["com.docker.compose.oneoff"] == "True"
+}
+
 // updateRefusedError marks an update refused before anything ran because its
 // strategy could not be decided: the stack's stored status must not change
 // (StoreObservedStackStatus, agent-os-txqx). It reads and unwraps as its
@@ -228,6 +244,10 @@ func (s *DockerService) CheckForUpdates(ctx context.Context, db DashboardDB) ([]
 	stackLookupFailed := false
 
 	for _, c := range containers {
+		// Hidden from Updates (agent-os-dn1z): an update to it would be refused.
+		if isOneOffContainer(c.Labels) {
+			continue
+		}
 		name := ""
 		if len(c.Names) > 0 {
 			name = strings.TrimPrefix(c.Names[0], "/")
@@ -426,6 +446,10 @@ func (s *DockerService) UpdateContainer(ctx context.Context, containerID string,
 		projectName = inspect.Config.Labels["com.docker.compose.project"]
 		serviceName = inspect.Config.Labels["com.docker.compose.service"]
 	}
+	if inspect.Config != nil && isOneOffContainer(inspect.Config.Labels) {
+		return models.UpdateResult{DurationMs: time.Since(start).Milliseconds()},
+			truth.Failed(oneOffUpdateReason, updateRefusedError{errOneOffUpdate})
+	}
 
 	var applyErr error
 	// Set by the standalone paths, which recreate the container and so change its
@@ -537,13 +561,15 @@ func (s *DockerService) findComposeContainer(ctx context.Context, projectName, s
 // last, so trimOutput's first-500-bytes cut would drop the diagnosis.
 func (s *DockerService) updateComposeContainer(ctx context.Context, stack models.Stack, serviceName string, wasRunning bool) error {
 	// Both built before anything runs, so a refusal leaves the service untouched.
+	// A refusal is typed so startedNothing sees it and the stack's stored
+	// status is left alone (agent-os-pusq).
 	pullArgs, err := s.mutatingComposeArgs(stack, "pull", []string{"--", serviceName})
 	if err != nil {
-		return err
+		return composeRefusedError{err}
 	}
 	upArgs, err := s.mutatingComposeArgs(stack, "up", []string{"-d", "--force-recreate", "--no-deps", "--", serviceName})
 	if err != nil {
-		return err
+		return composeRefusedError{err}
 	}
 	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
 	pullCmd, pullCtx, cancelPull := commandWithDeadline(ctx, s.composeTimeout(), "docker", pullArgs...)
@@ -1218,6 +1244,10 @@ func (s *DockerService) UpdateContainerStreaming(
 		projectName = inspect.Config.Labels["com.docker.compose.project"]
 		serviceName = inspect.Config.Labels["com.docker.compose.service"]
 	}
+	if inspect.Config != nil && isOneOffContainer(inspect.Config.Labels) {
+		return models.UpdateResult{DurationMs: time.Since(start).Milliseconds()},
+			truth.Failed(oneOffUpdateReason, updateRefusedError{errOneOffUpdate})
+	}
 
 	var applyErr error
 	// See UpdateContainer: only the standalone paths recreate the container and so
@@ -1299,13 +1329,15 @@ func (s *DockerService) updateComposeContainerStreaming(
 	imageRef := serviceName
 
 	// Both built before anything runs, so a refusal leaves the service untouched.
+	// A refusal is typed so startedNothing sees it and the stack's stored
+	// status is left alone (agent-os-pusq).
 	pullArgs, err := s.mutatingComposeArgs(stack, "pull", []string{"--", serviceName})
 	if err != nil {
-		return err
+		return composeRefusedError{err}
 	}
 	upArgs, err := s.mutatingComposeArgs(stack, "up", []string{"-d", "--force-recreate", "--no-deps", "--", serviceName})
 	if err != nil {
-		return err
+		return composeRefusedError{err}
 	}
 
 	setStatus(StatusPulling)

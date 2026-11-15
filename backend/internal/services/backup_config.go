@@ -342,6 +342,16 @@ const (
 	settingSourceDefault settingSourceKind = "default"
 )
 
+// ResticPasswordHasEdgeSpaces reports a restic password with whitespace at
+// either end. restic trims it from the password file it reads (strings.TrimSpace;
+// probed on restic 0.18.0 for agent-os-1zpq), so inside Capstan the effective
+// password is the trimmed one, and a manual restore with the password as typed
+// is refused. Capstan saves it as typed and warns (agent-os-v8ig, Edwin
+// 2026-11-15).
+func ResticPasswordHasEdgeSpaces(password string) bool {
+	return password != strings.TrimSpace(password)
+}
+
 // RepoSettingSources returns the source classifications for restic_repository
 // and restic_password given the raw DB values and the live config.
 // It determines sources without exposing the password value.

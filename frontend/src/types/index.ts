@@ -132,11 +132,12 @@ export type StackStatusMatchesWire = AssertTrue<Exact<StackStatus, WireStackStat
  */
 type NarrowedArray<Wire, Element> = Element[] | Extract<Wire, null>
 
-// narrows models.Stack.Status, a Go string, and re-points Containers at the
-// narrowed Container above
-export type Stack = Omit<WireStack, 'status' | 'containers'> & {
+// narrows models.Stack.Status, a Go string, and re-points Containers and
+// OneOffContainers (agent-os-dn1z) at the narrowed Container above
+export type Stack = Omit<WireStack, 'status' | 'containers' | 'oneOffContainers'> & {
   status: StackStatus
   containers: NarrowedArray<WireStack['containers'], Container>
+  oneOffContainers?: NarrowedArray<WireStack['oneOffContainers'], Container>
 }
 
 // narrows models.Container.State, a Go string
@@ -399,6 +400,11 @@ export interface BackupSettings {
   repositorySource: 'env' | 'db' | 'default'
   hasPassword: boolean
   passwordSource: 'env' | 'db' | 'default'
+  /**
+   * The effective restic password has whitespace at either end, which restic
+   * ignores (agent-os-v8ig). Absent reads as false.
+   */
+  passwordEdgeWhitespace?: boolean
   keepDaily: number
   keepWeekly: number
   keepMonthly: number

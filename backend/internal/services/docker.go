@@ -613,6 +613,7 @@ func (s *DockerService) GetAllContainersWithDetails(ctx context.Context, db Dash
 			ProjectName:        projectName,
 			ComposeWorkingDir:  workingDir,
 			ComposeConfigFiles: c.Labels["com.docker.compose.project.config_files"],
+			OneOff:             isOneOffContainer(c.Labels),
 			RestartCount:       restartCount,
 			Created:            time.Unix(c.Created, 0),
 			DiskSize:           c.SizeRw,
@@ -770,13 +771,17 @@ func resolveDashboardStackAssociation(db DashboardDB, projectName string) (dashb
 type LiveStatus struct {
 	Status     string
 	Containers []models.Container
+	// OneOffs are the project's `docker compose run` containers, kept out of
+	// Containers and Status (agent-os-dn1z).
+	OneOffs []models.Container
 }
 
 // BuildStackStatuses buckets a single container snapshot by compose project and
 // derives each project's live status and container list — no Docker calls and no
 // per-stack `docker compose ps`. Status mirrors Status(): "running" when every
-// container in the project is running, "partial" when the project has containers
-// but not all are running. One exception Status() does not share: "paused" when
+// container in the project is running, "stopped" when none is left running
+// (every one exited, dead or created; Edwin 2026-11-15, agent-os-rpbx D2),
+// "partial" otherwise. One exception Status() does not share: "paused" when
 // every container is paused, matching the /ws/events stack_status frame for a
 // Docker pause (agent-os-n97z). Status() still says "partial" there, because
 // BackupService.observeRunState reads that as running. A project with no containers is simply absent from the
@@ -794,22 +799,14 @@ func BuildStackStatuses(containers []models.DashboardContainerInfo) map[string]L
 	byProject := make(map[string][]models.Container)
 	allRunning := make(map[string]bool)
 	allPaused := make(map[string]bool)
+	allStopped := make(map[string]bool)
+	oneOffs := make(map[string][]models.Container)
 
 	for _, c := range containers {
 		if c.ProjectName == "" {
 			continue
 		}
-		if _, seen := allRunning[c.ProjectName]; !seen {
-			allRunning[c.ProjectName] = true
-			allPaused[c.ProjectName] = true
-		}
-		if c.State != "running" {
-			allRunning[c.ProjectName] = false
-		}
-		if c.State != "paused" {
-			allPaused[c.ProjectName] = false
-		}
-		byProject[c.ProjectName] = append(byProject[c.ProjectName], models.Container{
+		row := models.Container{
 			ID:     c.ID,
 			Name:   c.Name,
 			Image:  c.Image,
@@ -817,19 +814,49 @@ func BuildStackStatuses(containers []models.DashboardContainerInfo) map[string]L
 			Status: c.Status,
 			Ports:  c.Ports,
 			Health: c.Health,
-		})
+		}
+		// A one-off is listed apart and does not count toward the status
+		// (agent-os-dn1z). Its project is still present, with no service
+		// containers, so it reads "stopped" (the len(list) == 0 case below).
+		if _, seen := allRunning[c.ProjectName]; !seen {
+			allRunning[c.ProjectName] = true
+			allPaused[c.ProjectName] = true
+			allStopped[c.ProjectName] = true
+		}
+		if c.OneOff {
+			oneOffs[c.ProjectName] = append(oneOffs[c.ProjectName], row)
+			continue
+		}
+		if !containerStateStopped(c.State) {
+			allStopped[c.ProjectName] = false
+		}
+		if c.State != "running" {
+			allRunning[c.ProjectName] = false
+		}
+		if c.State != "paused" {
+			allPaused[c.ProjectName] = false
+		}
+		byProject[c.ProjectName] = append(byProject[c.ProjectName], row)
 	}
 
-	result := make(map[string]LiveStatus, len(byProject))
-	for project, list := range byProject {
+	result := make(map[string]LiveStatus, len(allRunning))
+	for project := range allRunning {
+		list := byProject[project]
+		if list == nil {
+			list = []models.Container{}
+		}
 		status := string(StackStatusPartial)
 		switch {
+		case len(list) == 0:
+			status = string(StackStatusStopped)
 		case allRunning[project]:
 			status = string(StackStatusRunning)
 		case allPaused[project]:
 			status = string(StackStatusPaused)
+		case allStopped[project]:
+			status = string(StackStatusStopped)
 		}
-		result[project] = LiveStatus{Status: status, Containers: list}
+		result[project] = LiveStatus{Status: status, Containers: list, OneOffs: oneOffs[project]}
 	}
 	return result
 }
