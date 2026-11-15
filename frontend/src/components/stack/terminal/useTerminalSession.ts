@@ -3,13 +3,18 @@ import type { Terminal as XTerm } from '@xterm/xterm'
 import type { FitAddon } from '@xterm/addon-fit'
 import type { SearchAddon } from '@xterm/addon-search'
 import { useWebSocketBinary } from '@/hooks/useWebSocket'
-import { WS_CLOSE_AUTH_FAILURE, WS_CLOSE_RATE_LIMIT, WS_CLOSE_NOT_FOUND } from '@/lib/ws'
+import { WS_CLOSE_AUTH_FAILURE, WS_CLOSE_RATE_LIMIT, WS_CLOSE_NOT_FOUND, WS_CLOSE_UNLOCK_REQUIRED } from '@/lib/ws'
+import { useEnvLockedNow } from '@/hooks/useEnvLockedNow'
+import { useEnvUnlockStore } from '@/stores/envUnlockStore'
 import { toast } from 'sonner'
 import { toastInvalid } from '@/lib/error-handler'
 import type { Stack } from '@/types'
 import { useXtermLifecycle } from './useXtermLifecycle'
 import { useInactivityTimer } from './useInactivityTimer'
 import { DEFAULT_FONT_SIZE, FONT_SIZE_KEY, HINTS_SHOWN_KEY, MAX_FONT_SIZE, MIN_FONT_SIZE } from './constants'
+
+const TERMINAL_LOCKED_LINE =
+  '\r\n\x1b[33mEnvironment variables are locked, so the terminal closed. Unlock to open it again.\x1b[0m\r\n'
 
 interface UseTerminalSessionParams {
   stack: Stack
@@ -48,6 +53,13 @@ export function useTerminalSession({ stack, initialContainer }: UseTerminalSessi
 
   const runningContainers = stack.containers?.filter((c) => c.state === 'running') || []
 
+  // A shell shows the container's env values (`env`), so a session that has
+  // not unlocked them gets no terminal: no dial while locked, and the server
+  // refuses one anyway (agent-os-rbmi).
+  const locked = useEnvLockedNow()
+  const unlockToken = useEnvUnlockStore((s) => s.token)
+  const isConnectedRef = useRef(false)
+
   const handleBinaryMessage = useCallback((data: ArrayBuffer) => {
     const terminal = xtermRef.current
     if (terminal) {
@@ -59,7 +71,11 @@ export function useTerminalSession({ stack, initialContainer }: UseTerminalSessi
     selectedContainer ? `/ws/terminal/${stack.id}/${selectedContainer}` : '',
     handleBinaryMessage,
     {
-      skip: !selectedContainer,
+      skip: !selectedContainer || locked,
+      sendUnlockToken: true,
+      // A locked dial is refused with 403 before the upgrade, which the
+      // browser reports as a failed handshake; redialing it changes nothing.
+      redialIfNeverOpened: false,
       onOpen: () => {
         setIsConnected(true)
         setIsConnecting(false)
@@ -86,6 +102,9 @@ export function useTerminalSession({ stack, initialContainer }: UseTerminalSessi
           terminal?.writeln(
             `\r\n\x1b[31m${event.reason || 'Terminal session refused.'}\x1b[0m\r\n`,
           )
+        } else if (event?.code === WS_CLOSE_UNLOCK_REQUIRED) {
+          toastInvalid('Terminal closed: environment variables are locked')
+          terminal?.writeln(TERMINAL_LOCKED_LINE)
         } else if (event?.code === WS_CLOSE_NOT_FOUND) {
           // A permanent condition (agent-os-vi0o): the stack is gone, so
           // "Press Reconnect" below would be misleading — reconnecting can't
@@ -122,6 +141,32 @@ export function useTerminalSession({ stack, initialContainer }: UseTerminalSessi
 
   const { disconnectCountdown, resetInactivityTimer, clearInactivityTimers, clearDisconnectCountdown } =
     useInactivityTimer(disconnectForInactivity)
+
+  useEffect(() => {
+    isConnectedRef.current = isConnected
+  }, [isConnected])
+
+  // Locking (the Lock button, or the window running out) closes an open
+  // terminal at once. skip already tears the socket down; WSClient reports no
+  // close for a socket it closed itself, so the state is reset here.
+  useEffect(() => {
+    if (!locked || !isConnectedRef.current) return
+    disconnect()
+    setIsConnected(false)
+    setIsConnecting(false)
+    setSessionDuration(0)
+    clearInactivityTimers()
+    xtermRef.current?.writeln(TERMINAL_LOCKED_LINE)
+  }, [locked, disconnect, clearInactivityTimers])
+
+  // A fresh unlock while the terminal is open renews the session in-band, so
+  // the shell outlives the token it was opened with; the server checks the
+  // new token exactly as it checked the first.
+  useEffect(() => {
+    if (unlockToken && isConnectedRef.current) {
+      send(JSON.stringify({ type: 'unlock', token: unlockToken }))
+    }
+  }, [unlockToken, send])
 
   useEffect(() => {
     if (isConnected) {
@@ -300,6 +345,7 @@ export function useTerminalSession({ stack, initialContainer }: UseTerminalSessi
   const hasRunningContainers = runningContainers.length > 0
 
   return {
+    locked,
     selectedContainer,
     isConnected,
     isConnecting,

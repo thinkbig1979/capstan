@@ -3,6 +3,7 @@ import { useWebSocketJSON } from '@/hooks/useWebSocket'
 import { stripAnsi, hasAnsi } from '@/lib/ansi'
 import { frameValidator, record, str } from '@/lib/wsFrames'
 import { useUIStore, type LogTimeRange } from '@/stores/uiStore'
+import { useEnvUnlockStore } from '@/stores/envUnlockStore'
 import { getLogLevel } from './log-utils'
 import { isEditableTarget } from '@/lib/editable-target'
 import { MAX_LOG_BUFFER, CONTAINER_COLORS, TIME_RANGE_OPTIONS } from './constants'
@@ -131,8 +132,26 @@ export function useLogStream({ stackId, initialContainer, hasRunningContainers }
     {
       parse: parseLogMessage,
       skip: !hasRunningContainers,
+      // A locked session reads the lines masked; the token makes them raw
+      // (agent-os-rbmi).
+      sendUnlockToken: true,
     }
   )
+
+  // Lines arrive masked or raw by the unlock the socket carries. When the
+  // token changes (an unlock, the Lock button, the window running out) the
+  // lines on screen were served under the old one, so they are dropped and
+  // the stream reopens under the new one: a lock hides what was shown raw.
+  const unlockToken = useEnvUnlockStore((s) => s.token)
+  const streamTokenRef = useRef(unlockToken)
+  useEffect(() => {
+    if (streamTokenRef.current === unlockToken) return
+    streamTokenRef.current = unlockToken
+    batchRef.current = []
+    logsRef.current = []
+    setLogs([])
+    reconnect()
+  }, [unlockToken, reconnect])
 
   // The client drops frames sent while the socket is not open, and the server
   // keeps the filter per connection, so a new connection starts unfiltered.

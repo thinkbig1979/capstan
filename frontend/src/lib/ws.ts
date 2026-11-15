@@ -1,4 +1,5 @@
 import { useAuthStore } from '@/stores/authStore'
+import { currentUnlockToken } from '@/stores/envUnlockStore'
 
 export type WSState = 'CONNECTING' | 'OPEN' | 'CLOSING' | 'CLOSED' | 'RECONNECTING'
 
@@ -11,6 +12,17 @@ export const WS_CLOSE_RATE_LIMIT = 4429
  *  not exist (e.g. a deleted stack), so retrying cannot change the outcome
  *  (agent-os-vi0o). */
 export const WS_CLOSE_NOT_FOUND = 4404
+/** The env unlock the socket was opened under has ended. Only re-entering
+ *  the password changes that, so it is not redialed (agent-os-rbmi). Mirrors
+ *  CloseCodeUnlockRequired in backend/internal/handlers/ws.go. */
+export const WS_CLOSE_UNLOCK_REQUIRED = 4403
+
+/** A browser cannot set X-Unlock-Token on an upgrade, so a socket that needs
+ *  the unlock offers the token as a subprotocol beside "capstan"; the server
+ *  selects only "capstan", so the token is never echoed back. Mirrors
+ *  middleware.WSSubprotocol and EnvUnlockSubprotocolPrefix. */
+const WS_SUBPROTOCOL = 'capstan'
+const WS_UNLOCK_SUBPROTOCOL_PREFIX = 'capstan-unlock.'
 
 /** A policy refusal is a decision, not a blip. Retrying cannot change the
  *  outcome, and for the connection cap the retry loop *is* the problem the cap
@@ -19,7 +31,12 @@ export const WS_CLOSE_NOT_FOUND = 4404
 // A missing code means we cannot tell, so reconnect — the reconnect ladder is
 // the safe default and only an explicit policy code suppresses it.
 function shouldReconnectAfter(code: number | undefined): boolean {
-  return code !== WS_CLOSE_AUTH_FAILURE && code !== WS_CLOSE_RATE_LIMIT && code !== WS_CLOSE_NOT_FOUND
+  return (
+    code !== WS_CLOSE_AUTH_FAILURE &&
+    code !== WS_CLOSE_RATE_LIMIT &&
+    code !== WS_CLOSE_NOT_FOUND &&
+    code !== WS_CLOSE_UNLOCK_REQUIRED
+  )
 }
 
 export interface WSClientOptions {
@@ -30,6 +47,15 @@ export interface WSClientOptions {
    *  re-dial routes, the backoff ladder and the online/visibilitychange
    *  recovery, so onReconnecting/onReconnectFailed never fire. */
   reconnect?: boolean
+  /** Send the current env-unlock token with each dial, read at dial time so
+   *  a redial after a fresh unlock carries the fresh token (agent-os-rbmi). */
+  sendUnlockToken?: boolean
+  /** Default true. false: a socket that closes before it ever opened is not
+   *  redialed. The server refuses a locked terminal with 403 before the
+   *  upgrade, which the browser reports only as a failed handshake (1006),
+   *  indistinguishable from a network fault; redialing it would just be
+   *  refused again (agent-os-rbmi). */
+  redialIfNeverOpened?: boolean
   onOpen?: () => void
   /** Receives the close event so callers can distinguish a policy refusal
    *  (4401/4429/4404) from an ordinary disconnect. */
@@ -111,12 +137,17 @@ export class WSClient {
     // one. close() and a redial both replace this.ws while the old socket's
     // close event is still to come, and that late event must not null the live
     // socket or schedule another dial (agent-os-z91e.13).
-    const ws = new WebSocket(url)
+    const unlockToken = options.sendUnlockToken ? currentUnlockToken() : null
+    const ws = unlockToken
+      ? new WebSocket(url, [WS_SUBPROTOCOL, WS_UNLOCK_SUBPROTOCOL_PREFIX + unlockToken])
+      : new WebSocket(url)
     this.ws = ws
+    let opened = false
     ws.binaryType = options.binary ? 'arraybuffer' : 'blob'
 
     ws.onopen = () => {
       if (this.ws !== ws) return
+      opened = true
       // Not a reset yet: see RECONNECT_RESET_AFTER_MS. A close before the timer
       // fires clears it, so an upgrade-then-close still counts as an attempt.
       this.clearResetAttemptsTimer()
@@ -138,7 +169,8 @@ export class WSClient {
       this.clearResetAttemptsTimer()
       this.ws = null
       options.onClose?.(event)
-      if (options.reconnect === false || !shouldReconnectAfter(event?.code)) {
+      const refusedBeforeOpen = !opened && options.redialIfNeverOpened === false
+      if (options.reconnect === false || refusedBeforeOpen || !shouldReconnectAfter(event?.code)) {
         // Stop retrying and stop tracking the path, and drop the recovery
         // listeners, so a later focus/online cannot resurrect the loop and
         // the window no longer pins this client (agent-os-s3fo).
