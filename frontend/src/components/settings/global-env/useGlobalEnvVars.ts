@@ -50,11 +50,14 @@ export function useGlobalEnvVars(
   // locked view (agent-os-yt2f): Save is refused until Reload.
   const [saveRefused, setSaveRefused] = useState(false)
   // Rows the user edited or deleted while the locked view hid them, keys and all
-  // (agent-os-yt2f review S1, S2), with the unlocked rows they were lined up with.
-  // Save stays refused while any of them does not hold its real content.
-  const [blindGuard, setBlindGuard] = useState<{ ids: ReadonlySet<number>; aligned: ReadonlyMap<number, EnvVar> } | null>(
-    null,
-  )
+  // (agent-os-yt2f review S1, S2), with the unlocked rows they were lined up with
+  // and what the user last typed into each with its value in view (`informed`,
+  // agent-os-tthh). Save stays refused while any of them holds neither.
+  const [blindGuard, setBlindGuard] = useState<{
+    ids: ReadonlySet<number>
+    aligned: ReadonlyMap<number, EnvVar>
+    informed: ReadonlyMap<number, EnvVar>
+  } | null>(null)
   // Rows whose key the locked payload blanked while a dirty lock kept the
   // unlocked one: a multi-line secret's body line read as a key (agent-os-f3am).
   const [hiddenKeyIds, setHiddenKeyIds] = useState<ReadonlySet<number>>(NO_REDACTED_ROWS)
@@ -149,7 +152,7 @@ export function useGlobalEnvVars(
       // (locked again, unlocked again) keeps the guard it set.
       if (aligned.size > 0) {
         const ids = blindEditedRowIds([vars], loaded, aligned)
-        setBlindGuard(ids.size > 0 ? { ids, aligned } : null)
+        setBlindGuard(ids.size > 0 ? { ids, aligned, informed: new Map() } : null)
       }
       const baseline = refillRedactedRows(loaded, loaded, aligned, REDACTABLE_FIELDS)
       setVars(refillRedactedRows(vars, loaded, aligned, REDACTABLE_FIELDS))
@@ -166,7 +169,7 @@ export function useGlobalEnvVars(
 
   const refusal = saveRefused
     ? ('unaligned' as const)
-    : blindGuard && holdsBlindEdit(vars, blindGuard.ids, blindGuard.aligned)
+    : blindGuard && holdsBlindEdit(vars, blindGuard.ids, blindGuard.aligned, blindGuard.informed)
       ? ('blind' as const)
       : null
 
@@ -198,6 +201,20 @@ export function useGlobalEnvVars(
   const { query, setQuery, filtered } = useTextFilter(indexedVars, searchFields)
 
   const handleChange = (index: number, field: EditableField, value: string) => {
+    // A key or value typed into a blind-edited row while its value is in view is
+    // the user's choice, not a blind edit (agent-os-tthh, as agent-os-ocnh in
+    // the stack editor). "In view" is the row as it was before this edit, by the
+    // same rule the table masks it by, and never while locked.
+    const row = vars[index]
+    const inView =
+      row !== undefined &&
+      !lockedNow &&
+      data?.locked !== true &&
+      !((row.sensitive === true || isSensitiveKey(row.key)) && !visible[row._rowId])
+    if (blindGuard?.ids.has(row?._rowId) && inView) {
+      const typed = { key: row.key, value: row.value, [field]: value }
+      setBlindGuard({ ...blindGuard, informed: new Map(blindGuard.informed).set(row._rowId, typed) })
+    }
     setVars((prev) => {
       const next = [...prev]
       next[index] = { ...next[index], [field]: value }
