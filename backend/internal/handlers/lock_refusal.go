@@ -22,11 +22,12 @@ import (
 // to <action>: <reason>".
 //
 // The backup routes that change where backups go, with what credential or
-// what they keep, and the ones that restore, prune or initialise a
-// repository, use it too (agent-os-h71i): a locked session that could point
+// what they keep, which stacks are backed up (agent-os-tp3g), and the ones
+// that restore, prune or initialise a repository, use it too (agent-os-h71i): a locked session that could point
 // the repository at a place it controls would read every stack's .env.
 //
-// A git pull uses it too (agent-os-hblm): it lands the remote's text in a
+// A git commit uses it too (agent-os-xmbg): its message is masked in a
+// locked log. A git pull uses it too (agent-os-hblm): it lands the remote's text in a
 // stack folder, which a locked view then masks. The git credential writes use
 // it too (agent-os-mu4z): the global SSH key,
 // HTTPS user and token, and a folder's own credentials.
@@ -58,22 +59,35 @@ const (
 	lockedPullReason = "a pull writes the remote's files into your stacks, and a redeploy runs them"
 	// The backup refusals (agent-os-h71i), one reason per action (zp59).
 	lockedBackupSettingsReason = "backups hold every stack's .env, so whoever picks the repository can read them"
-	lockedRestoreReason        = "a restore writes backed-up files, secrets included, into your stacks"
-	lockedDRRestoreReason      = "it writes backed-up files, secrets included, into your stacks"
-	lockedPruneReason          = "pruning deletes backups"
-	lockedRepoInitReason       = "the repository will hold every stack's .env"
+	// lockedBackupRetentionReason: a retention-only change (agent-os-wxap).
+	lockedBackupRetentionReason = "a shorter retention lets the next prune delete backups"
+	lockedRestoreReason         = "a restore writes backed-up files, secrets included, into your stacks"
+	lockedDRRestoreReason       = "it writes backed-up files, secrets included, into your stacks"
+	lockedPruneReason           = "pruning deletes backups"
+	lockedRepoInitReason        = "the repository will hold every stack's .env"
+	// lockedBackupPolicyReason: a policy write switches a stack's backups on
+	// or off, or changes how they run (agent-os-tp3g).
+	lockedBackupPolicyReason = "a backup policy decides which stacks are backed up and how"
 	// lockedBlankedReason: a locked session was handed the env values blanked,
 	// so a save from that state would write the blanks (agent-os-d1ue).
 	lockedBlankedReason = "while locked, the values you see are blanked, so saving would overwrite every secret with them"
+	// lockedAuditSearchReason: an audit-log search matches the entries'
+	// details, hidden while locked (agent-os-3ajm).
+	lockedAuditSearchReason = "the search reads the entries' details, which are hidden while locked"
 	// lockedGitCredentialReason: the request changes the credential git uses
 	// to reach the remote (agent-os-mu4z).
 	lockedGitCredentialReason = "pushes and pulls use them"
+	// lockedGitAuthorReason: the author lands in commits a locked log masks
+	// (agent-os-xmbg).
+	lockedGitAuthorReason = "a locked history masks the author with your secrets"
 )
 
-// gitFieldsAllowedLocked are the git settings a locked session may change:
-// the commit author. The SSH key, HTTPS user and token, and any field added
-// later, need an unlock (agent-os-mu4z).
-var gitFieldsAllowedLocked = []string{"authorName", "authorEmail"}
+// gitAuthorFields are the git settings that set the commit author. Every git
+// setting needs an unlock: the credentials because pushes and pulls use them
+// (agent-os-mu4z), the author because a locked log masks it with the stack's
+// secrets (agent-os-xmbg, review F3). A request setting only these gets the
+// author's reason.
+var gitAuthorFields = []string{"authorName", "authorEmail"}
 
 // setsFieldOutside reports whether req, a pointer to a request struct, sets a
 // field whose json name is not in allowed. A field is set when it is not its

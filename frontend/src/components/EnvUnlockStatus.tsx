@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Lock, Unlock } from 'lucide-react'
+import { toast } from 'sonner'
+import { authApi } from '@/lib/api'
 import { useEnvUnlockStore } from '@/stores/envUnlockStore'
 
 function formatRemaining(ms: number): string {
@@ -27,6 +29,18 @@ export function EnvUnlockStatus() {
 
   const remaining = unlockedUntil - now
 
+  // The server revokes the token first (agent-os-qxio); this tab locks
+  // whatever the answer, and says so when the server could not be told.
+  const lockNow = async () => {
+    try {
+      await authApi.lockEnv()
+    } catch {
+      toast.warning('Locked here; the server could not be told, so the unlock may stay valid for up to 5 minutes')
+    } finally {
+      lock()
+    }
+  }
+
   return (
     <div className="inline-flex items-center gap-2 rounded-md border border-info/30 bg-info/10 px-3 py-1.5 text-sm">
       <Unlock className="h-4 w-4 text-info" />
@@ -38,7 +52,7 @@ export function EnvUnlockStatus() {
         variant="ghost"
         size="sm"
         className="h-7 px-2 text-info hover:text-info"
-        onClick={lock}
+        onClick={() => void lockNow()}
         title="Lock now"
         aria-label="Lock environment variables now"
       >

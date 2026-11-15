@@ -97,6 +97,9 @@ honest answer rather than a blank.
   window, is bound to the account that minted it, and is revoked on logout. With
   `AUTH_DISABLED` there is no password to re-check, so a token is minted
   unconditionally and the gate is open. See [Secret reveal](#secret-reveal).
+- `POST /api/v1/auth/lock` — the Lock button: revoke every unlock token of the
+  current user before it expires (204). Open terminal and log streams opened
+  under one close with code 4403 within a few seconds.
 - `PUT /api/v1/auth/password` — change the current user's password
 
 Every route that checks a password is rate-limited per account and per client
@@ -128,7 +131,9 @@ password is checked.
   update-scan scheduler settings
 - `GET /api/v1/settings/git` / `PUT /api/v1/settings/git` — Git integration
   settings (SSH key, etc.). Also carries the commit author, `authorName` and
-  `authorEmail`, which are not credentials. On PUT an empty or omitted field
+  `authorEmail`, which are not credentials. While env values are locked a PUT
+  that sets any field, the author included, is refused with **403
+  `ENV_LOCKED`** (a locked log masks the author). On PUT an empty or omitted field
   means "no change"; a non-empty value is trimmed and validated, and anything
   invalid answers **400 `VALIDATION_ERROR`** with nothing in the request saved:
   both must be one line, the name at most 200 characters, the email at most
@@ -280,6 +285,8 @@ caller's own text through that masking are refused without a live token, with
 - `POST /api/v1/stacks` (create)
 - `POST /api/v1/stacks/:id/env` when the body carries content; an empty create
   carries no text and is still allowed
+- `POST /api/v1/git/commit`: a locked log or diff masks the commit message with
+  the stack's secrets (agent-os-xmbg). Push is still allowed
 
 The refusal comes before the lint, the operation lock and any read of the
 disk, so its body is the same whatever the request held. A locked caller can
@@ -297,12 +304,21 @@ put every stack's `.env` in the caller's hands:
   `hostname` is still saved.
 - `POST /api/v1/backups/repo/init`, `POST /api/v1/backups/restore`,
   `POST /api/v1/backups/dr-restore` and `POST /api/v1/backups/prune`
+- `PUT` and `DELETE /api/v1/backups/policies/stack/:stackId`: a policy decides
+  which stacks are backed up (agent-os-tp3g). Listing policies stays allowed.
 
 A locked caller can still read the backup settings (the password is never
 sent; the repository and rclone remote come back with their credentials
-removed), list snapshots and their file names, read status and history, edit
+removed), list snapshots and their file names, read status and history, list
 stack backup policies, and run a backup, sync or verify against the repository
 that is already configured.
+
+A locked caller reads `GET /api/v1/settings/audit-log` without the entries'
+details (agent-os-3ajm): every entry comes back with `detail` empty and the
+reply carries `detailsHidden: true`. A detail is free text (a commit's file
+names, an operation's output) that can hold a secret. A `search` matches the
+details, so a locked request with one is refused with **403 `ENV_LOCKED`**,
+whatever it would have matched. The action, date and paging filters still work.
 
 ## Git
 

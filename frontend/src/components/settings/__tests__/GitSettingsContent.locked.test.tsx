@@ -11,8 +11,10 @@ import { toast } from 'sonner'
 /**
  * agent-os-mu4z: while env values are locked the server refuses a change to
  * the SSH key, HTTPS user or token, even one that resends the stored value.
- * So the three are disabled with the unlock notice beside them, the author
- * stays editable, and a save sends only what was edited.
+ * So the three are disabled with the unlock notice beside them, and a save
+ * sends only what was edited. Since agent-os-xmbg (review F3) the author is
+ * refused while locked too (a locked log masks it), so it is disabled as
+ * well, and Save with it.
  */
 
 const mockGetGit = vi.fn()
@@ -49,18 +51,20 @@ beforeEach(() => {
 })
 
 describe('GitSettingsContent while env values are locked', () => {
-  it('disables the SSH key, HTTPS user and token, keeps the author editable, and offers an unlock', async () => {
+  it('disables the SSH key, HTTPS user and token, the author and Save, and offers an unlock', async () => {
     renderPanel()
     expect(await screen.findByLabelText('SSH Private Key Path')).toBeDisabled()
     expect(screen.getByLabelText('Username')).toBeDisabled()
     expect(screen.getByLabelText(/Personal Access Token/)).toBeDisabled()
-    expect(screen.getByLabelText('Author name')).toBeEnabled()
-    expect(screen.getByLabelText('Author email')).toBeEnabled()
+    expect(screen.getByLabelText('Author name')).toBeDisabled()
+    expect(screen.getByLabelText('Author email')).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Save Git Settings' })).toBeDisabled()
     expect(screen.getByRole('status')).toHaveTextContent('Env values are locked')
     expect(screen.getByRole('button', { name: 'Unlock' })).toBeInTheDocument()
   })
 
   it('an author-only save sends only the author, never the stored credentials', async () => {
+    useEnvUnlockStore.getState().unlock('t')
     const user = userEvent.setup()
     renderPanel()
     const name = await screen.findByLabelText('Author name')

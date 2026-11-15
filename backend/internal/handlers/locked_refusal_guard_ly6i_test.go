@@ -29,6 +29,9 @@ var lockedRefusalSinks = map[string]bool{
 	"EnsureRepository": true,
 	// agent-os-mu4z: a folder's own git credential.
 	"UpdateDirectoryCredentials": true,
+	// agent-os-tp3g: a backup policy decides which stacks are backed up.
+	"UpsertBackupPolicy": true,
+	"DeleteBackupPolicy": true,
 }
 
 // lockedRefusalFieldSinks are sinks named with the handler field they are
@@ -38,6 +41,9 @@ var lockedRefusalSinks = map[string]bool{
 // reached through a field not named git is not seen.
 var lockedRefusalFieldSinks = map[string]bool{
 	"git.PullVerified": true,
+	// agent-os-xmbg: a commit lands the caller's message where a locked log
+	// masks it.
+	"git.CommitVerified": true,
 }
 
 // lockedSettingKeys are the settings a locked session must not write
@@ -46,8 +52,10 @@ var lockedRefusalFieldSinks = map[string]bool{
 // naming one of them is a sink in ANY handlers file, so moving the write out
 // of backup.go does not move it out of the guard.
 //
-// Blind spot: a key that is not a string literal (a variable, a constant) is
-// not seen. Today one site builds keys that way, settings.go's
+// A key is seen as a string literal or as a package-level string constant
+// of the handlers package (agent-os-wxap, mutant m10). Blind spot: a key held
+// in a variable, built at run time or taken from another package is not
+// seen. Today one site builds keys that way, settings.go's
 // UpdateLogRetention, from a fixed list of four history-retention keys.
 var lockedSettingKeys = map[string]bool{
 	"restic_repository": true, "restic_password": true,
@@ -76,9 +84,9 @@ var lockedRefusalConditional = map[string]string{
 	// Refused when the body changes where or with what credential backups
 	// go, or the retention; a schedule edit stays allowed (agent-os-h71i).
 	"backup.go:updateSettings": "refused only when a destination, credential or retention field is present",
-	// Refused when a credential field is present; the author stays allowed
-	// (agent-os-mu4z).
-	"settings.go:UpdateGitSettings": "refused only when a credential field is present",
+	// Refused when any field is set; an empty body writes nothing
+	// (agent-os-mu4z, the author since agent-os-xmbg).
+	"settings.go:UpdateGitSettings": "refused only when the body sets a field",
 }
 
 // TestLockedRefusalGuard_ly6i keeps every handler that lints or writes
@@ -89,6 +97,7 @@ var lockedRefusalConditional = map[string]string{
 func TestLockedRefusalGuard_ly6i(t *testing.T) {
 	entries, err := handlerSources4hxa.ReadDir(".")
 	require.NoError(t, err)
+	lockedGuardConsts = handlerConstsLy6i(t)
 
 	var inScope []string
 	used := map[string]bool{}
@@ -143,6 +152,7 @@ func TestLockedRefusalGuard_ly6i(t *testing.T) {
 		"backup.go:repoInit", "backup.go:updateSettings",
 		"settings.go:UpdateGitSettings", "directories.go:UpdateCredentials",
 		"env.go:Put", "settings.go:UpdateGlobalEnv", "git.go:Pull",
+		"backup.go:upsertPolicy", "backup.go:deletePolicy", "git.go:Commit",
 	} {
 		assert.Contains(t, inScope, want)
 	}
@@ -192,9 +202,86 @@ func firstLockedRefusalSink(body *ast.BlockStmt) token.Pos {
 	return first
 }
 
-// isLockedSettingKey reports whether e is a string literal naming a key in
-// lockedSettingKeys.
+// guardConsts are the package-level constants of the handlers sources: every
+// name, and the value of each string one.
+type guardConsts struct {
+	names   map[string]bool
+	strings map[string]string
+}
+
+// lockedGuardConsts is set by TestLockedRefusalGuard_ly6i before it walks the
+// handlers.
+var lockedGuardConsts guardConsts
+
+// handlerConstsLy6i collects the package-level constants of every non-test
+// handlers source (go:embed, so an -overlay mutant's constants are seen).
+func handlerConstsLy6i(t *testing.T) guardConsts {
+	t.Helper()
+	gc := guardConsts{names: map[string]bool{}, strings: map[string]string{}}
+	entries, err := handlerSources4hxa.ReadDir(".")
+	require.NoError(t, err)
+	fset := token.NewFileSet()
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		src, err := handlerSources4hxa.ReadFile(e.Name())
+		require.NoError(t, err)
+		f, err := parser.ParseFile(fset, e.Name(), src, 0)
+		require.NoError(t, err, e.Name())
+		for _, d := range f.Decls {
+			gd, ok := d.(*ast.GenDecl)
+			if !ok || gd.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				vs := spec.(*ast.ValueSpec)
+				for i, n := range vs.Names {
+					gc.names[n.Name] = true
+					if i < len(vs.Values) {
+						if lit, ok := vs.Values[i].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+							if v, err := strconv.Unquote(lit.Value); err == nil {
+								gc.strings[n.Name] = v
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return gc
+}
+
+// isConstantCond reports whether e is a condition fixed at compile time: a
+// literal, true or false, a package constant, one of those negated or in
+// parentheses, or a binary expression of two such operands (`1 == 2`, review
+// F4). A gate `if <constant> && refuseLocked(...)` never refuses, or always
+// does whatever the request (agent-os-wxap, mutant m7). Syntax only, not
+// go/types: types.Eval without the package cannot resolve the package
+// constants this does. Blind: a binary expression constant by short circuit
+// (`false && x`), and a constant reached through a call (`len("ab") == 3`).
+func isConstantCond(e ast.Expr) bool {
+	switch x := e.(type) {
+	case *ast.BasicLit:
+		return true
+	case *ast.Ident:
+		return x.Name == "true" || x.Name == "false" || lockedGuardConsts.names[x.Name]
+	case *ast.ParenExpr:
+		return isConstantCond(x.X)
+	case *ast.UnaryExpr:
+		return isConstantCond(x.X)
+	case *ast.BinaryExpr:
+		return isConstantCond(x.X) && isConstantCond(x.Y)
+	}
+	return false
+}
+
+// isLockedSettingKey reports whether e is a string literal, or a package
+// string constant, naming a key in lockedSettingKeys.
 func isLockedSettingKey(e ast.Expr) bool {
+	if id, ok := e.(*ast.Ident); ok {
+		return lockedSettingKeys[lockedGuardConsts.strings[id.Name]]
+	}
 	lit, ok := e.(*ast.BasicLit)
 	if !ok || lit.Kind != token.STRING {
 		return false
@@ -206,8 +293,12 @@ func isLockedSettingKey(e ast.Expr) bool {
 // topLevelRefuseLocked is the position of the first top-level statement of
 // body shaped `if refuseLocked(...) { ...; return }`, or NoPos, and whether it
 // matched the `if <cond> && refuseLocked(...)` form, which counts only with
-// conditional. A call whose result is dropped, or one nested in a branch, does
-// not count.
+// conditional and only when <cond> is not a constant (isConstantCond). A call
+// whose result is dropped, or one nested in a branch, does not count.
+// Blind spot: a <cond> that is a variable or a call fixed to false (a local
+// `off := false`, a func that always returns false) is not told apart from a
+// real condition; lockedRefusalConditional names each such handler, so a
+// reviewer reads the condition there.
 func topLevelRefuseLocked(body *ast.BlockStmt, conditional bool) (token.Pos, bool) {
 	for _, st := range body.List {
 		ifs, ok := st.(*ast.IfStmt)
@@ -216,6 +307,9 @@ func topLevelRefuseLocked(body *ast.BlockStmt, conditional bool) (token.Pos, boo
 		}
 		cond, viaCond := ifs.Cond, false
 		if bin, ok := cond.(*ast.BinaryExpr); ok && conditional && bin.Op == token.LAND {
+			if isConstantCond(bin.X) {
+				continue
+			}
 			cond, viaCond = bin.Y, true
 		}
 		call, ok := cond.(*ast.CallExpr)

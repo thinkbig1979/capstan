@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { AuditLogContent } from '../AuditLogContent'
 import { expectSpansItsHeader } from '@/test/tableSpan'
+import { useEnvUnlockStore } from '@/stores/envUnlockStore'
 
 /**
  * SettingsPage.test.tsx:49 replaces this panel with an empty div, so nothing
@@ -28,6 +29,9 @@ vi.mock('../HistoryRetentionSection', () => ({
 }))
 
 beforeEach(() => {
+  // Unlocked: a locked session gets no details and no search (agent-os-3ajm,
+  // AuditLogContent.locked.test.tsx), and these tests read both.
+  useEnvUnlockStore.getState().unlock('test-token')
   Element.prototype.hasPointerCapture = () => false
   Element.prototype.setPointerCapture = () => {}
   Element.prototype.releasePointerCapture = () => {}

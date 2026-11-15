@@ -29,7 +29,7 @@ export const LOCKED_RESTORE_NOTICE =
  * folder, because pushes and pulls use them.
  */
 export const LOCKED_GIT_CREDENTIALS_NOTICE =
-  'Env values are locked. Changing the SSH key, HTTPS username or token needs an unlock, because pushes and pulls use them. The commit author stays editable.'
+  'Env values are locked. Changing the SSH key, HTTPS username or token needs an unlock, because pushes and pulls use them. The commit author does too, because a locked history masks it with your secrets.'
 
 export const LOCKED_FOLDER_CREDENTIALS_NOTICE =
   'Env values are locked. Changing this folder\'s git credentials needs an unlock, because pushes and pulls use them.'
@@ -41,6 +41,13 @@ export const LOCKED_FOLDER_CREDENTIALS_NOTICE =
  */
 export const LOCKED_PULL_NOTICE =
   "Env values are locked. Pulling needs an unlock, because a pull writes the remote's files into your stacks and a redeploy runs them."
+
+/**
+ * Why Commit is off while locked (agent-os-xmbg): a locked log masks the
+ * commit message with the stack's secrets, so the server refuses a commit.
+ */
+export const LOCKED_COMMIT_NOTICE =
+  'Env values are locked. Committing needs an unlock, because the history masks commit messages with your secrets. Pushing stays available.'
 
 /** Tooltip on a credential control disabled while locked. */
 export const LOCKED_CREDENTIAL_TITLE = 'Unlock env values to change this'

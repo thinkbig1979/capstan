@@ -22,6 +22,8 @@ vi.mock('@/lib/api', () => ({
   },
   authApi: {
     verifyPassword: vi.fn(),
+    // The Lock button revokes the token on the server first (agent-os-qxio).
+    lockEnv: vi.fn().mockResolvedValue(undefined),
   },
   apiClient: {
     get: vi.fn(),
@@ -125,6 +127,8 @@ describe('EnvEditor unlock/relock transition', () => {
     const lockButton = screen.getByRole('button', { name: 'Lock environment variables now' })
     fireEvent.click(lockButton)
 
+    // The relock lands once the server's revoke call settles.
+    await waitFor(() => expect(useEnvUnlockStore.getState().unlockedUntil).toBeNull())
     getSensitiveValueInputs().forEach((input) => {
       expect(input.type).toBe('password')
     })

@@ -240,6 +240,15 @@ export const authApi = {
     )
     return response.data
   },
+
+  /**
+   * Revokes every unlock token of this user on the server (the Lock button,
+   * agent-os-qxio). Clearing the browser's copy alone left the server
+   * honouring it until its TTL.
+   */
+  lockEnv: async () => {
+    await apiClient.post('/auth/lock')
+  },
 }
 
 /** Build identity of the running backend. Public endpoint — no session needed. */
@@ -329,6 +338,8 @@ export const settingsApi = {
       pageSize: number
       // Omitted when the server could not read them (agent-os-7y0t).
       availableActions?: string[]
+      // True while env values are locked: every entry's detail is emptied (agent-os-3ajm).
+      detailsHidden?: boolean
     }>('/settings/audit-log', { params })
     return response.data
   },

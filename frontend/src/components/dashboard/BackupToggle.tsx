@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { HelpHint } from '@/components/ui/help-hint'
 import { useToggleBackup, useBackupPolicies, useBackupStatus } from '@/hooks/useBackup'
+import { useEnvLockedNow } from '@/hooks/useEnvLockedNow'
 import { presentError } from '@/lib/error-handler'
 import type { BackupPolicy, BackupRun } from '@/types'
 import { RUN_KIND_LABEL } from './backup-run-kind'
@@ -66,6 +67,10 @@ export function BackupToggle({ stackId, showLastRunStatus = true }: BackupToggle
     refetch: refetchPolicies,
   } = useBackupPolicies()
   const toggleMutation = useToggleBackup()
+  // The server refuses a policy write while env values are locked
+  // (agent-os-tp3g); the current policy stays visible, read-only.
+  const locked = useEnvLockedNow()
+  const writeDisabled = toggleMutation.isPending || locked
 
   const policy: BackupPolicy | undefined = policiesData?.policies?.find(
     (p) => p.targetId === stackId,
@@ -209,16 +214,33 @@ export function BackupToggle({ stackId, showLastRunStatus = true }: BackupToggle
       <Switch
         checked={optimisticEnabled}
         onCheckedChange={handleToggle}
-        disabled={toggleMutation.isPending}
+        disabled={writeDisabled}
         aria-label={`Backup stack ${stackId}`}
         data-testid={`backup-switch-${stackId}`}
       />
+
+      {locked && (
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Lock
+                className="h-3 w-3 cursor-help text-muted-foreground"
+                aria-label="Unlock env values to change backup policies"
+                data-testid={`backup-toggle-locked-${stackId}`}
+              />
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>Unlock env values to change backup policies.</p>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      )}
 
       {optimisticEnabled && (
         <Select
           value={optimisticStopPolicy}
           onValueChange={(v) => handleStopPolicyChange(v as 'stop' | 'hot')}
-          disabled={toggleMutation.isPending}
+          disabled={writeDisabled}
         >
           <TooltipProvider>
             <Tooltip>

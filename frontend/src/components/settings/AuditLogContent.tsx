@@ -14,6 +14,7 @@ import { ChevronLeft, ChevronRight, ChevronDown, ScrollText, X } from 'lucide-re
 import { queryKeys } from '@/lib/query-keys'
 import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 import { HistoryRetentionSection } from './HistoryRetentionSection'
+import { useEnvLockedNow } from '@/hooks/useEnvLockedNow'
 
 const ALL_ACTIONS = '__all__'
 
@@ -89,6 +90,10 @@ function AuditLogTable() {
   const [action, setAction] = useState('')
   const [searchInput, setSearchInput] = useState('')
   const [search, setSearch] = useState('')
+  // Locked, the server hides the entries' details and refuses a search,
+  // which reads them (agent-os-3ajm).
+  const locked = useEnvLockedNow()
+  const sentSearch = locked ? '' : search
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
 
@@ -127,8 +132,8 @@ function AuditLogTable() {
   }
 
   const { data, isPending, error, refetch } = useQuery({
-    queryKey: queryKeys.auditLog({ page, pageSize, action, search, dateFrom, dateTo }),
-    queryFn: () => settingsApi.getAuditLog(page, pageSize, { action, search, dateFrom, dateTo }),
+    queryKey: queryKeys.auditLog({ page, pageSize, action, search: sentSearch, dateFrom, dateTo }),
+    queryFn: () => settingsApi.getAuditLog(page, pageSize, { action, search: sentSearch, dateFrom, dateTo }),
     placeholderData: keepPreviousData,
   })
 
@@ -192,13 +197,17 @@ function AuditLogTable() {
       <div className="flex flex-wrap items-end gap-3">
         <div className="flex-1 min-w-[180px] space-y-1">
           <label htmlFor="audit-search" className="text-xs text-muted-foreground">Search</label>
-          <TableSearch
-            id="audit-search"
-            value={searchInput}
-            onChange={setSearchInput}
-            placeholder="Search detail or action"
-            className="h-9"
-          />
+          {locked ? (
+            <p id="audit-search" className="text-sm text-muted-foreground">Unlock env values to search details</p>
+          ) : (
+            <TableSearch
+              id="audit-search"
+              value={searchInput}
+              onChange={setSearchInput}
+              placeholder="Search detail or action"
+              className="h-9"
+            />
+          )}
         </div>
         <div className="space-y-1">
           <label htmlFor="audit-action" className="text-xs text-muted-foreground">Action</label>
@@ -265,7 +274,9 @@ function AuditLogTable() {
           </TableHeader>
           <TableBody>
             {data.entries.map((entry) => {
-              const { summary, raw } = humanizeDetail(entry.detail)
+              const { summary, raw } = data.detailsHidden
+                ? { summary: 'Unlock to see details', raw: null }
+                : humanizeDetail(entry.detail)
               const isExpanded = expanded.has(entry.id)
               return (
                 <Fragment key={entry.id}>

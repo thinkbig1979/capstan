@@ -1279,11 +1279,15 @@ func (h *SettingsHandler) UpdateGitSettings(c *gin.Context) {
 		return
 	}
 
-	// A credential field present needs an unlock, even with the stored value,
-	// so the answer says nothing about what is stored (agent-os-mu4z). Before
-	// the validation, which would otherwise answer about a locked caller's
-	// input. The author fields stay allowed.
-	if setsFieldOutside(&req, gitFieldsAllowedLocked...) && refuseLocked(c, "change the git credentials", lockedGitCredentialReason) {
+	// Any field set needs an unlock, even with the stored value, so the
+	// answer says nothing about what is stored (agent-os-mu4z). Before the
+	// validation, which would otherwise answer about a locked caller's input.
+	// The author too since agent-os-xmbg: a locked log masks it.
+	action, reason := "change the git credentials", lockedGitCredentialReason
+	if !setsFieldOutside(&req, gitAuthorFields...) {
+		action, reason = "change the commit author", lockedGitAuthorReason
+	}
+	if setsFieldOutside(&req) && refuseLocked(c, action, reason) {
 		return
 	}
 
@@ -1543,6 +1547,12 @@ func (h *SettingsHandler) GetAuditLog(c *gin.Context) {
 		}
 	}
 
+	// A search matches the entries' details, which a locked session does not
+	// see (below): hit or miss would tell it what a detail holds.
+	if filter.Search != "" && refuseLocked(c, "search the audit log", lockedAuditSearchReason) {
+		return
+	}
+
 	actions, total, err := h.db.ListActionLogsFiltered(pageSize, offset, filter)
 	if err != nil {
 		handleError(c, models.NewAppErrorWithCause(
@@ -1575,6 +1585,15 @@ func (h *SettingsHandler) GetAuditLog(c *gin.Context) {
 		"total":    total,
 		"page":     page,
 		"pageSize": pageSize,
+	}
+	// A detail is free text (a commit's file names, an operation's output)
+	// that can hold a secret, so a locked session gets the rows without it
+	// (agent-os-3ajm).
+	if !envUnlocked(c) {
+		for i := range actions {
+			actions[i].Detail = ""
+		}
+		response["detailsHidden"] = true
 	}
 
 	// agent-os-7y0t. OMITTED on a fault, never []: an empty list here renders
