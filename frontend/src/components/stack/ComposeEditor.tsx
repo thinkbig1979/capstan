@@ -15,9 +15,9 @@ import { CommitPushDialog } from '@/components/git/CommitPushDialog'
 import { FileChangedNotice } from '@/components/FileChangedNotice'
 import { useExternalFileChange } from '@/hooks/useExternalFileChange'
 import { EnvUnlockDialog } from '@/components/EnvUnlockDialog'
-import { Button } from '@/components/ui/button'
-import { Lock } from 'lucide-react'
+import { EnvLockedNotice } from '@/components/EnvLockedNotice'
 import { useEnvLockedNow } from '@/hooks/useEnvLockedNow'
+import { LOCKED_COMPOSE_NOTICE } from '@/lib/locked-copy'
 
 /**
  * One load of the compose file. `masked` is true when the server masked
@@ -90,6 +90,11 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
   // stay editable: they hold no "***", and the server refuses their save
   // until unlock.
   const readOnly = (masked && loaded.masked) || hideText
+  // Locked, the server refuses save and lint (agent-os-ly6i): their replies
+  // pass this text through the secret masking, so a starred guess would name
+  // a secret. Either signal locks: fail closed.
+  const envLocked = lockedNow || data?.locked === true
+  const saveBlocked = readOnly || envLocked
 
   // The stack row StackPage already fetched, read from the cache: `enabled:
   // false` means this observer never requests it. Decides whether the save
@@ -112,7 +117,7 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
     readOnly,
     // Ctrl+S is a no-op while read-only: the view holds masked text.
     onSave: () => {
-      if (!readOnly) handleSaveRef.current()
+      if (!saveBlocked) handleSaveRef.current()
       return true
     },
     onChange: setContent,
@@ -169,7 +174,7 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
     <div className="space-y-4">
       <ComposeToolbar
         onSave={() => {
-          if (!readOnly) handleSave()
+          if (!saveBlocked) handleSave()
         }}
         onLint={handleLint}
         onExtract={handleExtractToEnv}
@@ -182,25 +187,15 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
         errorCount={errorCount}
         masked={masked}
         readOnly={readOnly}
+        locked={envLocked}
       />
 
-      {masked && (
-        <div
-          role="status"
-          className="flex flex-wrap items-center justify-between gap-3 rounded-md border bg-muted/50 px-3 py-2 text-sm"
-        >
-          <div className="flex items-center gap-2">
-            <Lock className="h-4 w-4 shrink-0" aria-hidden="true" />
-            <span>
-              {hasUnsavedChanges
-                ? 'Values locked again; unlock to save your edits.'
-                : 'Secrets in this file are hidden, so it is read-only. Unlock to view and edit it.'}
-            </span>
-          </div>
-          <Button type="button" size="sm" variant="outline" onClick={() => setUnlockOpen(true)}>
-            Unlock to edit
-          </Button>
-        </div>
+      {(masked || envLocked) && (
+        <EnvLockedNotice onUnlock={() => setUnlockOpen(true)} unlockLabel="Unlock to edit">
+          {hasUnsavedChanges
+            ? 'Values locked again; unlock to save your edits.'
+            : LOCKED_COMPOSE_NOTICE}
+        </EnvLockedNotice>
       )}
       <EnvUnlockDialog open={unlockOpen} onOpenChange={setUnlockOpen} />
 

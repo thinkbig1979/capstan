@@ -128,6 +128,17 @@ func (e *gitWriteEnv) do(t *testing.T, method, path, body string) *httptest.Resp
 	return w
 }
 
+// doUnlocked is do from a session that has unlocked env values: a locked
+// compose save is refused before it runs (agent-os-ly6i).
+func (e *gitWriteEnv) doUnlocked(t *testing.T, method, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	unlockedRouterW6wx(t, e).ServeHTTP(w, req)
+	return w
+}
+
 func (e *gitWriteEnv) commit(t *testing.T, body string) *httptest.ResponseRecorder {
 	return e.do(t, http.MethodPost, "/api/git/commit", body)
 }
@@ -185,7 +196,7 @@ func TestComposeSaveNoGit(t *testing.T) {
 	e := newGitWriteEnv(t, false)
 	head, remote := e.head(t), e.remoteMain(t)
 
-	w := e.do(t, http.MethodPut, "/api/stacks/"+e.stackID+"/compose", `{"content":"services:\n  web:\n    image: nginx\n"}`)
+	w := e.doUnlocked(t, http.MethodPut, "/api/stacks/"+e.stackID+"/compose", `{"content":"services:\n  web:\n    image: nginx\n"}`)
 
 	require.Equal(t, http.StatusOK, w.Code, "body %s", w.Body.String())
 	got, err := os.ReadFile(filepath.Join(e.dir, "compose.yaml"))
@@ -304,7 +315,7 @@ func TestGitCommitLock(t *testing.T) {
 	// A compose save during a commit waits its turn too: one lock.
 	commitToken, err = e.lock.Acquire(e.stackID, services.OpKindGitCommit)
 	require.NoError(t, err)
-	w := e.do(t, http.MethodPut, "/api/stacks/"+e.stackID+"/compose", `{"content":"services: {}\n"}`)
+	w := e.doUnlocked(t, http.MethodPut, "/api/stacks/"+e.stackID+"/compose", `{"content":"services: {}\n"}`)
 	requireGitCode(t, w, http.StatusConflict, models.ErrOperationInProgress)
 	e.lock.Release(e.stackID, commitToken)
 

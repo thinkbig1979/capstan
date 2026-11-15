@@ -67,6 +67,8 @@ func (l *LinterService) LintCompose(content, workingDir string, env LintEnv, unl
 	switch {
 	case sameVars(placeholder.Vars, env.Vars):
 	case !unlocked:
+		// Defence in depth: every lint route refuses a locked session first
+		// (handlers.refuseLocked, agent-os-ly6i), so no route reaches this arm.
 		lockedNote = hasErrorResult(results)
 	default:
 		real, err := l.lintCompose(content, workingDir, env)

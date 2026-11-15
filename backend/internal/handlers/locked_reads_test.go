@@ -172,7 +172,9 @@ func TestLockedReads_ComposePutRefusedWhenFileHasMaskedValues(t *testing.T) {
 
 	code, body := lockedPutW6wx(t, e.router, "/api/stacks/s-app/compose", map[string]string{"content": "services: [::"})
 	require.Equal(t, http.StatusForbidden, code, body)
-	assert.Contains(t, body, "Re-enter your password")
+	// Since agent-os-ly6i every locked save is refused before the disk is
+	// read, so the refusal no longer names the secrets on disk.
+	assert.Contains(t, body, `"code":"ENV_LOCKED"`)
 	got, err := os.ReadFile( //nolint:gosec // G304: the test reads back the fixture file it wrote
 		composePath)
 	require.NoError(t, err)
@@ -186,16 +188,27 @@ func TestLockedReads_ComposePutRefusedWhenFileHasMaskedValues(t *testing.T) {
 	require.Equal(t, http.StatusOK, code, body)
 }
 
-func TestLockedReads_ComposePutAllowedWithoutSecrets(t *testing.T) {
+// A file with no secret on disk was saved locked before agent-os-ly6i: the
+// saved text then came back through the locked GET's masking, a guess
+// oracle. It is refused now, and the file stays as it was.
+func TestLockedReads_ComposePutRefusedWithoutSecrets(t *testing.T) {
 	e := newGitWriteEnv(t, false)
-	k81pWrite(t, filepath.Join(e.top, "compose.yaml"), "services:\n  db:\n    image: postgres:16\n    environment:\n      POSTGRES_PASSWORD: ${DB_PASSWORD}\n")
+	const onDisk = "services:\n  db:\n    image: postgres:16\n    environment:\n      POSTGRES_PASSWORD: ${DB_PASSWORD}\n"
+	composePath := filepath.Join(e.top, "compose.yaml")
+	k81pWrite(t, composePath, onDisk)
 
 	code, body := lockedPutW6wx(t, e.router, "/api/stacks/s-app/compose", map[string]string{"content": "services: {}\n"})
-	require.Equal(t, http.StatusOK, code, body)
+	require.Equal(t, http.StatusForbidden, code, body)
+	assert.Contains(t, body, `"code":"ENV_LOCKED"`)
+	got, err := os.ReadFile( //nolint:gosec // G304: the test reads back the fixture file it wrote
+		composePath)
+	require.NoError(t, err)
+	assert.Equal(t, onDisk, string(got), "file unchanged")
 }
 
 // 4hxa interaction (ruling 4): a link the write would refuse answers that
-// refusal, checked first.
+// refusal. Since agent-os-ly6i a locked save is refused before the disk is
+// read, link or not, so the link refusal is the unlocked answer.
 func TestLockedReads_ComposePutDanglingLinkIs409_W6wx(t *testing.T) {
 	e := newGitWriteEnv(t, false)
 	composePath := filepath.Join(e.top, "compose.yaml")
@@ -203,6 +216,10 @@ func TestLockedReads_ComposePutDanglingLinkIs409_W6wx(t *testing.T) {
 	require.NoError(t, os.Symlink("missing.yaml", composePath))
 
 	code, body := lockedPutW6wx(t, e.router, "/api/stacks/s-app/compose", map[string]string{"content": "services: {}\n"})
+	require.Equal(t, http.StatusForbidden, code, body)
+	assert.Contains(t, body, `"code":"ENV_LOCKED"`)
+
+	code, body = lockedPutW6wx(t, unlockedRouterW6wx(t, e), "/api/stacks/s-app/compose", map[string]string{"content": "services: {}\n"})
 	require.Equal(t, http.StatusConflict, code, body)
 	assert.Contains(t, body, "fix or remove the link")
 }

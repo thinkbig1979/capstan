@@ -155,6 +155,13 @@ const (
 	// ErrGitObjectMissing: a read in a partial clone needs an object that was
 	// never downloaded, and reads do not fetch it (agent-os-taa7). 409.
 	ErrGitObjectMissing = "GIT_OBJECT_MISSING"
+	// ErrEnvLocked refuses a request whose reply would pass the caller's own
+	// text through the secret masking, for a session that has not unlocked
+	// env values: lint, compose saves and stack create (agent-os-ly6i). The
+	// masking stars any text equal to a secret, so where a "***" lands in a
+	// list of guesses would show which guess is the secret. 403, refused
+	// before the request text or the disk is read; unlocking lifts it.
+	ErrEnvLocked = "ENV_LOCKED"
 )
 
 type AppError struct {

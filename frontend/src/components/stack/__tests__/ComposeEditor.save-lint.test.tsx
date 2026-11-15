@@ -114,6 +114,41 @@ describe('ComposeEditor — save/lint decision logic', () => {
     mockGetCompose.mockResolvedValue('services:\n  web:\n    image: nginx\n')
   })
 
+  // Review F6 (agent-os-ly6i): the client thinks it is unlocked, the server
+  // has locked meanwhile and answers 403 ENV_LOCKED. The refused lint stops
+  // the save (it would be refused too), and the server's message is shown.
+  const ENV_LOCKED = {
+    status: 403,
+    code: 'ENV_LOCKED',
+    message: 'Unlock env values to lint the compose file: while locked, the reply could show which text matches a secret',
+  }
+
+  it('a lint refused with ENV_LOCKED sends no save and shows the server message', async () => {
+    mockLintCompose.mockRejectedValue(ENV_LOCKED)
+    mockUpdateCompose.mockResolvedValue({ lintResults: [] })
+
+    renderWithProviders(<ComposeEditor stackId="test-stack" />)
+    await waitFor(() => expect(capturedOnSave).toBeDefined())
+    await triggerCtrlSSave()
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled())
+    expect(JSON.stringify(vi.mocked(toast.error).mock.calls)).toContain('Unlock env values to lint the compose file')
+    expect(mockUpdateCompose).not.toHaveBeenCalled()
+  })
+
+  it('a save refused with ENV_LOCKED shows the server message', async () => {
+    mockLintCompose.mockResolvedValue({ lintResults: [] })
+    mockUpdateCompose.mockRejectedValue({ ...ENV_LOCKED, message: 'Unlock env values to save the compose file: while locked, the reply could show which text matches a secret' })
+
+    renderWithProviders(<ComposeEditor stackId="test-stack" />)
+    await waitFor(() => expect(capturedOnSave).toBeDefined())
+    await triggerCtrlSSave()
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled())
+    expect(JSON.stringify(vi.mocked(toast.error).mock.calls)).toContain('Unlock env values to save the compose file')
+    expect(toast.success).not.toHaveBeenCalled()
+  })
+
   it('lints before saving and saves directly when no errors are found', async () => {
     mockLintCompose.mockResolvedValue({ lintResults: [] })
     mockUpdateCompose.mockResolvedValue({ lintResults: [] })

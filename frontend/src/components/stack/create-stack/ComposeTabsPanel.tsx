@@ -10,6 +10,8 @@ interface ComposeTabsPanelProps {
   composeTab: 'editor' | 'docker-run'
   onComposeTabChange: (tab: 'editor' | 'docker-run') => void
   onLint: () => void
+  /** Env values are locked: the server refuses a lint (agent-os-ly6i). */
+  lintDisabled?: boolean
   editorRef: RefObject<HTMLDivElement | null>
   hasLintErrors: boolean
   lintResults: LintResult[]
@@ -24,6 +26,7 @@ export function ComposeTabsPanel({
   composeTab,
   onComposeTabChange,
   onLint,
+  lintDisabled = false,
   editorRef,
   hasLintErrors,
   lintResults,
@@ -36,7 +39,13 @@ export function ComposeTabsPanel({
     <div className="space-y-2" ref={composeRef}>
       <div className="flex items-center justify-between">
         <Label>Docker Compose</Label>
-        <Button variant="outline" size="sm" onClick={onLint}>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onLint}
+          disabled={lintDisabled}
+          title={lintDisabled ? 'Unlock env values to lint' : undefined}
+        >
           <FileCheck className="mr-2 h-4 w-4" />
           Lint
         </Button>

@@ -16,6 +16,10 @@ import { ComposeTabsPanel } from './create-stack/ComposeTabsPanel'
 import { EnvFileSection } from './create-stack/EnvFileSection'
 import { CreateStackFooter } from './create-stack/CreateStackFooter'
 import { queryKeys } from '@/lib/query-keys'
+import { useEnvLockedNow } from '@/hooks/useEnvLockedNow'
+import { EnvUnlockDialog } from '@/components/EnvUnlockDialog'
+import { EnvLockedNotice } from '@/components/EnvLockedNotice'
+import { LOCKED_NEW_STACK_NOTICE } from '@/lib/locked-copy'
 
 interface CreateStackDialogProps {
   open: boolean
@@ -48,6 +52,9 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
   const [editorEpoch, setEditorEpoch] = useState(0)
   const nameInputRef = useRef<HTMLInputElement>(null)
   const composeRef = useRef<HTMLDivElement>(null)
+  // Locked, the server refuses lint and create (agent-os-ly6i).
+  const envLocked = useEnvLockedNow()
+  const [unlockOpen, setUnlockOpen] = useState(false)
 
   const { handleLint, hasLintErrors } = useComposeLint({ composeContent, lintResults, setLintResults })
 
@@ -130,6 +137,7 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
             composeTab={composeTab}
             onComposeTabChange={setComposeTab}
             onLint={handleLint}
+            lintDisabled={envLocked}
             editorRef={editorRef}
             hasLintErrors={hasLintErrors}
             lintResults={lintResults}
@@ -165,13 +173,21 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
           </div>
         </div>
 
+        {envLocked && (
+          <EnvLockedNotice className="mt-6" onUnlock={() => setUnlockOpen(true)}>
+            {LOCKED_NEW_STACK_NOTICE}
+          </EnvLockedNotice>
+        )}
+        <EnvUnlockDialog open={unlockOpen} onOpenChange={setUnlockOpen} />
+
         <CreateStackFooter
           onCancel={() => {
             resetForm()
             onOpenChange(false)
           }}
           onCreate={handleCreate}
-          isCreateDisabled={isCreateDisabled}
+          isCreateDisabled={isCreateDisabled || envLocked}
+          locked={envLocked}
           isPending={isPending}
           validationErrors={validationErrors}
         />

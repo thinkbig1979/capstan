@@ -50,7 +50,7 @@ func newDeleteSiblingFixture(t *testing.T) *deleteSiblingFixture {
 		services.NewActionLogger(db), services.NewOperationLock())
 
 	router := gin.New()
-	router.POST("/stacks", authContextMiddleware("test-user-id"), handler.Create)
+	router.POST("/stacks", authContextMiddleware("test-user-id"), envUnlockedMiddleware(), handler.Create) // unlocked: a locked create is refused (agent-os-ly6i)
 	router.DELETE("/stacks/:id", authContextMiddleware("test-user-id"), handler.Delete)
 
 	return &deleteSiblingFixture{tempDir: tempDir, cfg: cfg, db: db, scanner: scanner, router: router}

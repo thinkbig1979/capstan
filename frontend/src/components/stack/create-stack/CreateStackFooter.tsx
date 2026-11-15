@@ -14,6 +14,8 @@ interface CreateStackFooterProps {
   isCreateDisabled: boolean
   isPending: boolean
   validationErrors: { field: string; message: string }[]
+  /** Env values are locked: the server refuses a create (agent-os-ly6i). */
+  locked?: boolean
 }
 
 export function CreateStackFooter({
@@ -22,6 +24,7 @@ export function CreateStackFooter({
   isCreateDisabled,
   isPending,
   validationErrors,
+  locked = false,
 }: CreateStackFooterProps) {
   return (
     <DialogFooter className="mt-6 flex-col items-stretch gap-2">
@@ -38,7 +41,7 @@ export function CreateStackFooter({
             </TooltipTrigger>
             {isCreateDisabled && !isPending && (
               <TooltipContent>
-                <p>Fix validation errors to create stack</p>
+                <p>{locked ? 'Unlock env values to create a stack' : 'Fix validation errors to create stack'}</p>
               </TooltipContent>
             )}
           </Tooltip>

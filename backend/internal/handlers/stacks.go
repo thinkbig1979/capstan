@@ -125,6 +125,10 @@ func (h *StacksHandler) Lint(c *gin.Context) {
 		return
 	}
 
+	if refuseLocked(c, "lint the compose file", lockedEchoReason) {
+		return
+	}
+
 	// No stack yet (the create dialog): global.env alone, no folder.
 	lintResults, err := h.linter.LintCompose(req.Compose, "", services.NewLintEnv(globalEnvPath(h.config), ""), envUnlocked(c))
 	if err != nil {

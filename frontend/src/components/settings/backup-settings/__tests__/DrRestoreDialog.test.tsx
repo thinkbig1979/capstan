@@ -97,7 +97,8 @@ async function openDialog() {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  useAuthStore.setState({ authDisabled: false })
+  // Auth off, so env values count as unlocked: a locked session cannot restore (agent-os-h71i).
+  useAuthStore.setState({ authDisabled: true })
   mockGetSettings.mockResolvedValue(settings('myremote'))
   mockGetStatus.mockResolvedValue(status(null))
   mockDrRestore.mockResolvedValue({ runId: 'run-1', wsUrl: '/ws/backups/dr-restore/run-1' })

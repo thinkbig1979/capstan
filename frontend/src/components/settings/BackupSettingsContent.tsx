@@ -3,6 +3,9 @@ import { LoadingSpinner } from '@/components/LoadingSkeleton'
 import { BackupStatusCard } from '@/components/dashboard/BackupStatusCard'
 import { EnvUnlockDialog } from '@/components/EnvUnlockDialog'
 import { EnvUnlockStatus } from '@/components/EnvUnlockStatus'
+import { EnvLockedNotice } from '@/components/EnvLockedNotice'
+import { useEnvLockedNow } from '@/hooks/useEnvLockedNow'
+import { LOCKED_BACKUP_NOTICE } from '@/lib/locked-copy'
 import { useEnvUnlockStore } from '@/stores/envUnlockStore'
 import { useAuth } from '@/hooks/useAuth'
 import { useBackupSettings, useBackupStatus } from '@/hooks/useBackup'
@@ -25,6 +28,9 @@ export function BackupSettingsContent() {
   const { authDisabled } = useAuth()
   const isUnlocked = useEnvUnlockStore((s) => s.isUnlocked)
   const unlockedUntil = useEnvUnlockStore((s) => s.unlockedUntil)
+  // Locked, the server refuses repository, password, cloud remote and
+  // retention changes, repository init and restores (agent-os-h71i).
+  const locked = useEnvLockedNow()
 
   const {
     draft,
@@ -42,6 +48,7 @@ export function BackupSettingsContent() {
   const {
     showPassword,
     unlockDialogOpen,
+    openUnlockDialog,
     handleTogglePasswordReveal,
     handleUnlocked,
     handleDialogOpenChange,
@@ -110,6 +117,8 @@ export function BackupSettingsContent() {
         <EnvUnlockStatus />
       </div>
 
+      {locked && <EnvLockedNotice onUnlock={openUnlockDialog}>{LOCKED_BACKUP_NOTICE}</EnvLockedNotice>}
+
       {/* EnvUnlock dialog (rendered once, shown on demand) */}
       <EnvUnlockDialog
         open={unlockDialogOpen}
@@ -132,9 +141,10 @@ export function BackupSettingsContent() {
         isSaving={isSaving}
         onInitRepo={handleInitRepo}
         isInitializing={isInitializing}
+        locked={locked}
       />
 
-      <RetentionSection draft={draft} onChange={set} />
+      <RetentionSection draft={draft} onChange={set} locked={locked} />
 
       <ScheduleSection draft={draft} onChange={set} />
 
@@ -154,6 +164,7 @@ export function BackupSettingsContent() {
         isRestoring={isRestoring}
         backupRunning={backupStatus?.lastRun?.status === 'running'}
         repository={settings.repository}
+        locked={locked}
       />
 
       {/* Directly above the save control, not a transient toast: the operator is

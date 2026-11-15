@@ -251,14 +251,14 @@ func TestEnvUnlock_NilStore_FailsClosed(t *testing.T) {
 	assert.JSONEq(t, `{"unlocked":false}`, w.Body.String())
 }
 
-// TestComposeAndEnv_WithoutUnlockToken_ForbiddenOnlyWhenWritingEnv covers the
-// second door onto the same .env file. PUT /:id/compose-env writes env content
-// too, so gating EnvHandler.Put alone would have left an open bypass: a locked
-// caller could push blanked values through this endpoint instead.
+// TestComposeAndEnv_WithoutUnlockToken_Forbidden covers the second door onto
+// the same .env file. PUT /:id/compose-env writes env content too, so gating
+// EnvHandler.Put alone would have left an open bypass: a locked caller could
+// push blanked values through this endpoint instead.
 //
-// A compose-only save stays ungated — no secret is involved, so demanding a
-// password there would be friction for nothing.
-func TestComposeAndEnv_WithoutUnlockToken_ForbiddenOnlyWhenWritingEnv(t *testing.T) {
+// A compose-only save was ungated until agent-os-ly6i: its reply passes the
+// caller's text through the secret masking, so it is refused locked too.
+func TestComposeAndEnv_WithoutUnlockToken_Forbidden(t *testing.T) {
 	tempDir := t.TempDir()
 	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
@@ -302,14 +302,16 @@ func TestComposeAndEnv_WithoutUnlockToken_ForbiddenOnlyWhenWritingEnv(t *testing
 	require.NoError(t, readErr)
 	assert.Equal(t, "DB_PASSWORD=hunter2\n", string(onDisk))
 
-	// A compose-only save is unaffected.
+	// A compose-only save is refused too since agent-os-ly6i: its lint
+	// reply, and a later locked GET of the saved file, pass the caller's
+	// text through the secret masking.
 	req = httptest.NewRequest(http.MethodPut, "/"+stackID+"/compose-env",
 		strings.NewReader(`{"composeContent":"services:\n  web:\n    image: nginx:alpine\n"}`))
 	req.Header.Set("Content-Type", "application/json")
 	w = httptest.NewRecorder()
 	router.ServeHTTP(w, req)
-	assert.NotEqual(t, http.StatusForbidden, w.Code,
-		"a compose-only save touches no secret and must not require an unlock token")
+	assert.Equal(t, http.StatusForbidden, w.Code, "a locked compose-only save is refused")
+	assert.Contains(t, w.Body.String(), `"code":"ENV_LOCKED"`)
 }
 
 // TestVerifyPassword_MintsUsableUnlockToken is the end-to-end proof that the two

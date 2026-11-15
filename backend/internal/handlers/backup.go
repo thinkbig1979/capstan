@@ -373,6 +373,14 @@ type backupSettingsRequest struct {
 	Hostname                *string `json:"hostname"`
 }
 
+// changesDestinationOrRetention reports whether the request sets a field
+// that moves backups to a new place or credential, or changes how long
+// they are kept: the fields a locked session may not change (agent-os-h71i).
+func (r *backupSettingsRequest) changesDestinationOrRetention() bool {
+	return r.Repository != nil || r.Password != nil || r.RcloneRemote != nil || r.RclonePath != nil ||
+		r.KeepDaily != nil || r.KeepWeekly != nil || r.KeepMonthly != nil || r.KeepYearly != nil || r.AutoPrune != nil
+}
+
 // validateScheduleFields validates the three schedule fields that are present
 // in the request and returns the weekday list in its stored comma-separated
 // form. Absent (nil) fields are not validated: nil means "leave unchanged".
@@ -421,6 +429,15 @@ func (h *BackupHandler) updateSettings(c *gin.Context) {
 			models.ErrValidation,
 			"Invalid request body",
 		))
+		return
+	}
+
+	// Where and with what credential backups go, and how long they are kept,
+	// need the password (agent-os-h71i): a locked session that could point
+	// the repository at a place it controls reads every stack's .env from
+	// the next snapshot, and keep=1 with autoPrune would let the next run
+	// destroy the backups. A schedule or hostname edit stays allowed.
+	if req.changesDestinationOrRetention() && refuseLocked(c, "change where backups go, their credentials or their retention", lockedBackupReason) {
 		return
 	}
 
@@ -1278,6 +1295,12 @@ func (h *BackupHandler) runRestore(c *gin.Context) {
 		return
 	}
 
+	// A restore writes a snapshot's files into the stack folder: refused
+	// while env values are locked (agent-os-h71i).
+	if refuseLocked(c, "restore a backup", lockedBackupReason) {
+		return
+	}
+
 	if req.StackID == "" || req.SnapshotID == "" {
 		c.JSON(http.StatusBadRequest, models.NewAppError(
 			http.StatusBadRequest,
@@ -1370,6 +1393,12 @@ func (h *BackupHandler) runDRRestore(c *gin.Context) {
 		return
 	}
 
+	// A DR restore pulls the repository and restores every stack: refused
+	// while env values are locked (agent-os-h71i).
+	if refuseLocked(c, "run a disaster-recovery restore", lockedBackupReason) {
+		return
+	}
+
 	if !req.Confirm {
 		c.JSON(http.StatusBadRequest, models.NewAppError(
 			http.StatusBadRequest,
@@ -1426,6 +1455,12 @@ func (h *BackupHandler) runPrune(c *gin.Context) {
 			models.ErrValidation,
 			"Invalid request body",
 		))
+		return
+	}
+
+	// A prune deletes snapshots: it needs the password, as a retention
+	// change does (agent-os-h71i, orch-dm-61 ruling).
+	if refuseLocked(c, "prune backups", lockedBackupReason) {
 		return
 	}
 
@@ -1516,6 +1551,11 @@ func (h *BackupHandler) runVerify(c *gin.Context) {
 // ───────────────────────────────────────────
 
 func (h *BackupHandler) repoInit(c *gin.Context) {
+	// Initialising a repository needs the password (agent-os-h71i).
+	if refuseLocked(c, "initialise a backup repository", lockedBackupReason) {
+		return
+	}
+
 	av := h.svc.Available()
 	if !av.ResticPresent {
 		c.JSON(http.StatusConflict, engineUnavailable(av))

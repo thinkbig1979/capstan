@@ -29,11 +29,10 @@ var oracleGuessesSiou = []int{1, 1000, 4000, 5000, 9000, 32768, 65535}
 func TestComposeLint_LockedVerdictDoesNotDependOnSecret_siou(t *testing.T) {
 	lintFor := func(pin string) func(string) (int, string) {
 		h, id, _ := composeStackSiou(t, "services:\n  web:\n    image: nginx:1.27\n", "PIN_TOKEN="+pin+"\n")
-		router := gin.New()
-		router.POST("/stacks/:id/compose/lint", h.Lint) // no unlock: locked
+		// The route refuses a locked session (agent-os-ly6i); the linter's
+		// locked arm, kept as defence in depth, is driven directly.
 		return func(compose string) (int, string) {
-			w := doJSONSiou(t, router, http.MethodPost, "/stacks/"+id+"/compose/lint", map[string]string{"content": compose})
-			return w.Code, w.Body.String()
+			return http.StatusOK, lockedLintBodySiou(t, h, id, compose)
 		}
 	}
 	lintA, lintB := lintFor("4821"), lintFor("9999")
@@ -79,13 +78,10 @@ func TestComposePut_LockedVerdictDoesNotDependOnSecret_siou(t *testing.T) {
 func TestComposePut_LockedPlaceholderFailureSaysUnlock_siou(t *testing.T) {
 	const keyPath = "/etc/ssl/private/site.key"
 	h, id, _ := composeStackSiou(t, "services:\n  web:\n    image: nginx:1.27\n", "TLS_KEY_FILE="+keyPath+"\n")
-	router := gin.New()
-	router.PUT("/stacks/:id/compose", h.Put) // no unlock: locked
-	w := doJSONSiou(t, router, http.MethodPut, "/stacks/"+id+"/compose", map[string]string{
-		"content": "services:\n  web:\n    image: nginx:1.27\n    restart: always\n    volumes:\n      - ${TLS_KEY_FILE}:/certs/key.pem:ro\n",
-	})
-	require.Equal(t, http.StatusUnprocessableEntity, w.Code, w.Body.String())
-	body := w.Body.String()
+	// The save route refuses a locked session (agent-os-ly6i); the
+	// linter's locked arm is driven directly.
+	body := lockedLintBodySiou(t, h, id, "services:\n  web:\n    image: nginx:1.27\n    restart: always\n    volumes:\n      - ${TLS_KEY_FILE}:/certs/key.pem:ro\n")
+	assert.Contains(t, body, `"valid":false`, body)
 	assert.Contains(t, body, lockedPlaceholderNoteSiou, body)
 	assert.NotContains(t, body, keyPath, body)
 	assert.NotContains(t, body, "site.key", body)

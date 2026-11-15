@@ -163,6 +163,9 @@ func linkedComposeStack(t *testing.T, root, linkTarget string) (*gin.Engine, str
 	h := NewComposeHandler(services.NewLinterService(), db, &config.Config{StacksDir: root})
 	h.SetOperationLock(services.NewOperationLock())
 	router := gin.New()
+	// Unlocked: a locked save is refused before the write (agent-os-ly6i),
+	// and these tests are about the write.
+	router.Use(envUnlockedMiddleware())
 	h.RegisterRoutes(router.Group("/api"))
 	return router, link
 }

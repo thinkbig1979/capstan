@@ -156,6 +156,8 @@ func (h *ComposeHandler) refuseMaskedSave(c *gin.Context, stack *models.Stack, c
 		return true
 	}
 	masked, n := services.MaskSecrets(string(disk), stack.ComposeFile, h.stackSecrets(*stack))
+	// Defence in depth: refuseLocked turns every locked save away first
+	// (agent-os-ly6i), so no route reaches this arm today.
 	if !unlocked {
 		if n > 0 {
 			c.JSON(http.StatusForbidden, models.NewAppError(
@@ -224,6 +226,10 @@ func (h *ComposeHandler) Put(c *gin.Context) {
 			models.ErrValidation,
 			"Invalid request body",
 		))
+		return
+	}
+
+	if refuseLocked(c, "save the compose file", lockedEchoReason) {
 		return
 	}
 
@@ -309,6 +315,10 @@ func (h *ComposeHandler) Lint(c *gin.Context) {
 			models.ErrValidation,
 			"Invalid request body",
 		))
+		return
+	}
+
+	if refuseLocked(c, "lint the compose file", lockedEchoReason) {
 		return
 	}
 
@@ -423,6 +433,10 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 			models.ErrValidation,
 			"Invalid request body",
 		))
+		return
+	}
+
+	if refuseLocked(c, "save the compose file", lockedEchoReason) {
 		return
 	}
 

@@ -38,6 +38,10 @@ import type { BackupSnapshot, BackupRun } from '@/types'
 import { useTextFilter } from '@/hooks/useTextFilter'
 import { isFirstLoad } from '@/lib/query-state'
 import { TableSearch } from '@/components/ui/table-search'
+import { EnvLockedNotice } from '@/components/EnvLockedNotice'
+import { EnvUnlockDialog } from '@/components/EnvUnlockDialog'
+import { useEnvLockedNow } from '@/hooks/useEnvLockedNow'
+import { LOCKED_BACKUP_TITLE, LOCKED_RESTORE_NOTICE } from '@/lib/locked-copy'
 
 // tags and paths are `string[] | null` on the wire, not `string[]`: restic
 // omits the key for a snapshot that has none and ListSnapshots copies the field
@@ -284,10 +288,13 @@ function SnapshotRow({
   snapshot,
   onRestore,
   isRestoring,
+  locked,
 }: {
   snapshot: BackupSnapshot
   onRestore: (snapshot: BackupSnapshot) => void
   isRestoring: boolean
+  /** Env values are locked: the server refuses a restore (agent-os-h71i). */
+  locked: boolean
 }) {
   const [previewOpen, setPreviewOpen] = useState(false)
 
@@ -334,7 +341,8 @@ function SnapshotRow({
               variant="outline"
               size="sm"
               onClick={() => onRestore(snapshot)}
-              disabled={isRestoring}
+              disabled={isRestoring || locked}
+              title={locked ? LOCKED_BACKUP_TITLE : undefined}
               className="h-7 px-2 text-xs"
               aria-label={`Restore snapshot ${snapshot.shortId}`}
             >
@@ -400,6 +408,9 @@ export function BackupsTab({ stackId }: BackupsTabProps) {
 
   // Restore mutation
   const restoreMutation = useRestore()
+  // Locked, the server refuses a restore (agent-os-h71i).
+  const locked = useEnvLockedNow()
+  const [unlockOpen, setUnlockOpen] = useState(false)
 
   // Streaming output for restore progress
   const stream = useBackupStreaming()
@@ -565,6 +576,12 @@ export function BackupsTab({ stackId }: BackupsTabProps) {
 
         {snapshots && snapshots.length > 0 && (
           <>
+            {locked && (
+              <EnvLockedNotice className="mb-3" onUnlock={() => setUnlockOpen(true)}>
+                {LOCKED_RESTORE_NOTICE}
+              </EnvLockedNotice>
+            )}
+            <EnvUnlockDialog open={unlockOpen} onOpenChange={setUnlockOpen} />
             <div className="mb-3 flex items-center gap-3">
               <TableSearch
                 value={snapshotQuery}
@@ -597,6 +614,7 @@ export function BackupsTab({ stackId }: BackupsTabProps) {
                       snapshot={snapshot}
                       onRestore={handleRestoreRequest}
                       isRestoring={isRestoring}
+                      locked={locked}
                     />
                   ))}
                 </tbody>

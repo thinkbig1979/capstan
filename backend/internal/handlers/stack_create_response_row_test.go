@@ -75,7 +75,8 @@ func hgtbFixture(t *testing.T, docker stackDocker, stackName string) (*database.
 		services.NewLinterService(), db, cfg, services.NewActionLogger(db), services.NewOperationLock())
 
 	router := gin.New()
-	router.POST("/stacks", authContextMiddleware("test-user-id"), handler.Create)
+	// Unlocked: a locked create is refused (agent-os-ly6i).
+	router.POST("/stacks", authContextMiddleware("test-user-id"), envUnlockedMiddleware(), handler.Create)
 
 	require.NoError(t, db.CreateUser(models.User{
 		ID: "test-user-id", Username: "testuser", CreatedAt: testTime, UpdatedAt: testTime,

@@ -79,7 +79,7 @@ func TestStacksHandler_Delete_SoleStackRace_SiblingRegisteredDuringComposeDown(t
 		services.NewActionLogger(db), services.NewOperationLock())
 
 	router := gin.New()
-	router.POST("/stacks", authContextMiddleware("test-user-id"), handler.Create)
+	router.POST("/stacks", authContextMiddleware("test-user-id"), envUnlockedMiddleware(), handler.Create) // unlocked: a locked create is refused (agent-os-ly6i)
 	router.DELETE("/stacks/:id", authContextMiddleware("test-user-id"), handler.Delete)
 
 	body, err := json.Marshal(map[string]any{

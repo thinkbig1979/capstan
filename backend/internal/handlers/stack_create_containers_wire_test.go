@@ -49,7 +49,7 @@ func TestStacksHandler_Create_RereadFailureSendsEmptyContainers(t *testing.T) {
 	handler := NewStacksHandler(&recordingStackDocker{}, services.NewScannerService(cfg, db),
 		services.NewLinterService(), db, cfg, services.NewActionLogger(db), services.NewOperationLock())
 	router := gin.New()
-	router.POST("/stacks", authContextMiddleware("test-user-id"), handler.Create)
+	router.POST("/stacks", authContextMiddleware("test-user-id"), envUnlockedMiddleware(), handler.Create) // unlocked: a locked create is refused (agent-os-ly6i)
 	require.NoError(t, db.CreateUser(models.User{
 		ID: "test-user-id", Username: "testuser", CreatedAt: testTime, UpdatedAt: testTime,
 	}))

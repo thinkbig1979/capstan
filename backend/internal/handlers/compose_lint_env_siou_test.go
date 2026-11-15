@@ -173,16 +173,15 @@ func TestComposePut_RequiredVarUnsetSavesWithWarning_siou(t *testing.T) {
 func TestComposeLint_LockedSessionNeverSeesEnvValue_siou(t *testing.T) {
 	const secret = "hunter2SECRETsiou"
 	h, id, _ := composeStackSiou(t, "services:\n  db:\n    image: postgres:16\n", "DB_PASSWORD="+secret+"\nPLAIN=visibleXYZ\n")
-	router := gin.New()
-	router.POST("/stacks/:id/compose/lint", h.Lint) // no unlock: locked
 
+	// The route refuses a locked session (agent-os-ly6i): the linter's
+	// locked arm is driven directly.
 	lint := func(compose string) (LintResponse, string) {
-		w := doJSONSiou(t, router, http.MethodPost, "/stacks/"+id+"/compose/lint", map[string]string{"content": compose})
-		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+		body := lockedLintBodySiou(t, h, id, compose)
 		var resp LintResponse
-		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-		assert.False(t, strings.Contains(w.Body.String(), secret), "body leaks the env value: %s", w.Body.String())
-		return resp, w.Body.String()
+		require.NoError(t, json.Unmarshal([]byte(body), &resp))
+		assert.False(t, strings.Contains(body, secret), "body leaks the env value: %s", body)
+		return resp, body
 	}
 
 	// The real value does not decode as cpus, but a locked verdict comes from
@@ -216,4 +215,22 @@ func TestComposePut_LintsWithStackEnv_siou(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	assert.NotContains(t, w.Body.String(), "required-variable", "REGION is set in the stack's .env: %s", w.Body.String())
+}
+
+// lockedLintBodySiou is the body the stack's lint route would answer a locked
+// session with, from the linter's locked arm called directly. The route
+// itself refuses a locked session (agent-os-ly6i); the linter keeps its locked
+// arm as defence in depth, and these tests keep that arm from leaking.
+func lockedLintBodySiou(t *testing.T, h *ComposeHandler, id, compose string) string {
+	t.Helper()
+	stack, err := h.db.GetStack(id)
+	require.NoError(t, err)
+	return lockedLintEnvBodySiou(t, compose, stack.Directory, services.StackLintEnv(*stack, globalEnvPath(h.config)))
+}
+
+func lockedLintEnvBodySiou(t *testing.T, compose, dir string, env services.LintEnv) string {
+	t.Helper()
+	results, err := services.NewLinterService().LintCompose(compose, dir, env, false)
+	require.NoError(t, err)
+	return string(mustMarshal(t, LintResponse{Valid: !lintHasErrors(results), LintResults: results}))
 }

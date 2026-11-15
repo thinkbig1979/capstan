@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import type { RefObject } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { stacksApi } from '@/lib/api'
-import { classifyError, presentError, toastInvalid } from '@/lib/error-handler'
+import { classifyError, isEnvLockedRefusal, presentError, toastInvalid } from '@/lib/error-handler'
 import { toast } from 'sonner'
 import type { ExternalToast } from 'sonner'
 import type { LintResult } from '@/types'
@@ -99,7 +99,14 @@ export function useComposeSaveAndLint({
         } else {
           saveMutation.mutate(currentContent)
         }
-      } catch {
+      } catch (err) {
+        // A lint refused because env values locked meanwhile (agent-os-ly6i
+        // review F6): the save would be refused the same way, so it is not
+        // sent. The server's message says to unlock.
+        if (isEnvLockedRefusal(err)) {
+          presentError(err, { fallback: 'Failed to save compose file' })
+          return
+        }
         saveMutation.mutate(currentContent)
       } finally {
         setIsLintingBeforeSave(false)

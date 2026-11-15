@@ -6,6 +6,7 @@ import { HelpHint } from '@/components/ui/help-hint'
 import { AlertTriangle, CheckCircle2, Eye, EyeOff, KeyRound, Lock, XCircle } from 'lucide-react'
 import type { BackupSettings } from '@/types'
 import { SourceBadge } from './SourceBadge'
+import { LOCKED_BACKUP_TITLE } from '@/lib/locked-copy'
 
 /**
  * agent-os-ssqt. This used to be a boolean fed by a field that measured
@@ -77,6 +78,8 @@ interface RepositorySectionProps {
   isSaving: boolean
   onInitRepo: () => void
   isInitializing: boolean
+  /** Env values are locked: the server refuses repository, password and init (agent-os-h71i). */
+  locked: boolean
 }
 
 export function RepositorySection({
@@ -91,7 +94,9 @@ export function RepositorySection({
   isSaving,
   onInitRepo,
   isInitializing,
+  locked,
 }: RepositorySectionProps) {
+  const lockedTitle = locked ? LOCKED_BACKUP_TITLE : undefined
   // The flag describes settings.repository — the value the SERVER sent. The
   // input renders `repository`, the draft. Once the operator types a
   // replacement the two diverge, and a hint gated on the flag alone would keep
@@ -203,6 +208,8 @@ export function RepositorySection({
           value={repository}
           onChange={(e) => onRepositoryChange(e.target.value)}
           className="max-w-md"
+          disabled={locked}
+          title={lockedTitle}
           aria-describedby={
             showCredentialHint
               ? 'backup-repository-credential-hint backup-repository-hint'
@@ -264,6 +271,8 @@ export function RepositorySection({
             value={password}
             onChange={(e) => onPasswordChange(e.target.value)}
             className="flex-1"
+            disabled={locked}
+            title={lockedTitle}
             aria-describedby="backup-password-hint"
           />
           <Button
@@ -296,7 +305,8 @@ export function RepositorySection({
             size="sm"
             className="text-destructive hover:text-destructive px-0 h-auto"
             onClick={onClearPassword}
-            disabled={isSaving}
+            disabled={isSaving || locked}
+            title={lockedTitle}
           >
             Clear saved password
           </Button>
@@ -310,8 +320,8 @@ export function RepositorySection({
           variant="outline"
           size="sm"
           onClick={onInitRepo}
-          disabled={isInitializing || !canInitialize}
-          title={initRefusal}
+          disabled={isInitializing || !canInitialize || locked}
+          title={locked ? LOCKED_BACKUP_TITLE : initRefusal}
         >
           {isInitializing ? (
             <>

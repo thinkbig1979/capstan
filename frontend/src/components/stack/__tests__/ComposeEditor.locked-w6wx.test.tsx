@@ -22,11 +22,21 @@ const mockDispatch = vi.fn((tr: { changes: { from: number; to: number; insert: s
 })
 let capturedOnChange: ((content: string) => void) | undefined
 let capturedOnSave: (() => boolean) | undefined
+let capturedOnSelect: ((text: string) => void) | undefined
 let lastReadOnly: boolean | undefined
 
 vi.mock('@/hooks/useCodeMirrorEditor', () => ({
   useCodeMirrorEditor: vi.fn(
-    (_ref: unknown, opts: { doc: string; readOnly?: boolean; onChange?: (c: string) => void; onSave?: () => boolean }) => {
+    (
+      _ref: unknown,
+      opts: {
+        doc: string
+        readOnly?: boolean
+        onChange?: (c: string) => void
+        onSave?: () => boolean
+        onSelect?: (text: string) => void
+      },
+    ) => {
       const viewRef = useRef<unknown>(null)
       viewRef.current = {
         state: { doc: { toString: () => view.text }, selection: { main: { from: 0, to: 0 } } },
@@ -35,6 +45,7 @@ vi.mock('@/hooks/useCodeMirrorEditor', () => ({
       }
       capturedOnChange = opts.onChange
       capturedOnSave = opts.onSave
+      capturedOnSelect = opts.onSelect
       lastReadOnly = opts.readOnly
       useEffect(() => {
         if (opts.doc !== view.text) view.text = opts.doc
@@ -70,6 +81,7 @@ const toastMocks = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), warning
 vi.mock('sonner', () => ({ toast: toastMocks }))
 
 import { ComposeEditor } from '../ComposeEditor'
+import { LOCKED_COMPOSE_NOTICE } from '@/lib/locked-copy'
 
 // The server answers locked exactly when the session holds no unlock token, so
 // the unlock store moves with every payload the mock serves, before it lands
@@ -112,6 +124,7 @@ beforeEach(() => {
   view.text = ''
   capturedOnChange = undefined
   capturedOnSave = undefined
+  capturedOnSelect = undefined
   lastReadOnly = undefined
   mockGetCompose.mockImplementation(() => Promise.resolve(storeFollows({ ...disk, locked: disk.maskedValues > 0 })))
   mockLintCompose.mockResolvedValue({ valid: true, lintResults: [] })
@@ -124,10 +137,29 @@ describe('ComposeEditor with masked secrets (agent-os-w6wx)', () => {
 
     await waitFor(() => expect(view.text).toBe(MASKED))
     const banner = await screen.findByRole('status')
-    expect(banner).toHaveTextContent('Secrets in this file are hidden, so it is read-only')
+    // What a locked session can and cannot do (agent-os-ly6i).
+    expect(banner).toHaveTextContent(LOCKED_COMPOSE_NOTICE)
     expect(screen.getByRole('button', { name: 'Unlock to edit' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Lint/ })).toBeDisabled()
     expect(lastReadOnly).toBe(true)
     expect(screen.getByRole('button', { name: /Extract to \.env/ })).toBeDisabled()
+  })
+
+  // Review F4 (agent-os-ly6i): locked, a file with nothing masked still
+  // cannot extract to .env: the extract is a compose-env save, which the
+  // server refuses while locked.
+  it('locked with nothing masked: Extract to .env is disabled', async () => {
+    disk = { content: 'services:\n  web:\n    image: nginx\n', maskedValues: 0 }
+    mockGetCompose.mockImplementation(() => Promise.resolve(storeFollows({ ...disk, locked: true })))
+    renderEditor()
+
+    await waitFor(() => expect(view.text).toBe(disk.content))
+    act(() => {
+      capturedOnSelect?.('nginx')
+    })
+    const extract = screen.getByRole('button', { name: /Extract to \.env/ })
+    expect(extract).toBeDisabled()
+    expect(extract).toHaveAttribute('title', 'Unlock to extract values to .env')
   })
 
   it('a file with nothing masked is editable and shows no banner', async () => {
@@ -139,7 +171,7 @@ describe('ComposeEditor with masked secrets (agent-os-w6wx)', () => {
     expect(lastReadOnly).toBe(false)
   })
 
-  it('a re-lock keeps unsaved edits, raises no false notice, and the refused save says why', async () => {
+  it('a re-lock keeps unsaved edits, raises no false notice, and sends no save or lint', async () => {
     disk = { content: REAL, maskedValues: 0 }
     const queryClient = renderEditor()
     await waitFor(() => expect(view.text).toBe(REAL))
@@ -158,17 +190,15 @@ describe('ComposeEditor with masked secrets (agent-os-w6wx)', () => {
     expect(screen.queryByText(NOTICE)).not.toBeInTheDocument()
     expect(lastReadOnly).toBe(false)
 
-    mockUpdateCompose.mockRejectedValue({
-      status: 403,
-      code: 'FORBIDDEN',
-      message: 'Re-enter your password to edit a compose file that holds secrets',
-    })
+    // Locked, the server refuses save and lint (agent-os-ly6i): Ctrl+S and
+    // the buttons send nothing, and the edits stay.
     act(() => {
       capturedOnSave?.()
     })
-    await waitFor(() => expect(mockUpdateCompose).toHaveBeenCalledTimes(1))
-    await waitFor(() => expect(toastMocks.error).toHaveBeenCalled())
-    expect(JSON.stringify(toastMocks.error.mock.calls)).toContain('Re-enter your password')
+    expect(screen.getByRole('button', { name: /Save/ })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /Lint/ })).toBeDisabled()
+    expect(mockLintCompose).not.toHaveBeenCalled()
+    expect(mockUpdateCompose).not.toHaveBeenCalled()
     expect(view.text).toBe(EDITED)
   })
 })

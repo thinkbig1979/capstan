@@ -242,6 +242,9 @@ is held, leave it pending for the next pass, and report the skip in
   [Secret reveal](#secret-reveal)
 - `POST /api/v1/stacks/:id/env` — create a stack's `.env` file
 
+The lint, compose save and create routes need an unlock: see
+[Requests refused while locked](#requests-refused-while-locked).
+
 ## Secret reveal
 
 A valid session is not enough to read the contents of an env file. The endpoints
@@ -262,6 +265,44 @@ Without a live token:
   secret it was not allowed to see.
 
 With a live token, all four behave exactly as they did before.
+
+### Requests refused while locked
+
+The masking that hides secrets stars any text equal to a secret, including
+text the same request sent. A locked caller could send a list of guesses and
+read which one came back as `***`. So the requests whose reply passes the
+caller's own text through that masking are refused without a live token, with
+**403 `ENV_LOCKED`** and a message that says to unlock (agent-os-ly6i):
+
+- `POST /api/v1/stacks/:id/compose/lint` and `POST /api/v1/compose/lint`
+- `PUT /api/v1/stacks/:id/compose` and `PUT /api/v1/stacks/:id/compose-env`,
+  also a compose-only save: a locked `GET` of the saved file would mask it
+- `POST /api/v1/stacks` (create)
+- `POST /api/v1/stacks/:id/env` when the body carries content; an empty create
+  carries no text and is still allowed
+
+The refusal comes before the lint, the operation lock and any read of the
+disk, so its body is the same whatever the request held. A locked caller can
+still read compose files with the secrets masked, and start, stop, restart and
+pull stacks.
+
+The same **403 `ENV_LOCKED`** refuses the backup requests that would let a
+locked caller reach secrets or the backups themselves (agent-os-h71i). Pointing
+the repository at a place the caller controls, then running a backup, would
+put every stack's `.env` in the caller's hands:
+
+- `PUT /api/v1/settings/backup` when the body sets `repository`, `password`,
+  `rcloneRemote`, `rclonePath`, any `keep*` field or `autoPrune`. A body that
+  only edits the schedule, sync and verify switches, `rcloneTransfers` or
+  `hostname` is still saved.
+- `POST /api/v1/backups/repo/init`, `POST /api/v1/backups/restore`,
+  `POST /api/v1/backups/dr-restore` and `POST /api/v1/backups/prune`
+
+A locked caller can still read the backup settings (the password is never
+sent; the repository and rclone remote come back with their credentials
+removed), list snapshots and their file names, read status and history, edit
+stack backup policies, and run a backup, sync or verify against the repository
+that is already configured.
 
 ## Git
 

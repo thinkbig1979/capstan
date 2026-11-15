@@ -54,6 +54,7 @@ function renderSection(settings: BackupSettings, repository: string) {
       isSaving={false}
       onInitRepo={vi.fn()}
       isInitializing={false}
+      locked={false}
     />,
   )
 }
@@ -444,6 +445,7 @@ describe('RepositorySection password edge-space warning', () => {
         isSaving={false}
         onInitRepo={vi.fn()}
         isInitializing={false}
+        locked={false}
       />,
     )
   }

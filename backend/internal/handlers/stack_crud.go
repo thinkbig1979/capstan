@@ -44,6 +44,10 @@ func (h *StacksHandler) Create(c *gin.Context) {
 		return
 	}
 
+	if refuseLocked(c, "create a stack", lockedEchoReason) {
+		return
+	}
+
 	if len(req.Name) < 1 || len(req.Name) > 50 {
 		c.JSON(http.StatusBadRequest, models.NewAppError(
 			http.StatusBadRequest,
