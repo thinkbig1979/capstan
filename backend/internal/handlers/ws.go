@@ -24,6 +24,11 @@ import (
 const (
 	CloseCodeAuthFailure = 4401
 	CloseCodeRateLimit   = 4429
+	// CloseCodeUnlockRequired closes a connection whose env unlock has ended:
+	// re-entering the password is the only thing that changes the outcome,
+	// so the frontend does not redial it (agent-os-rbmi). Mirrors
+	// WS_CLOSE_UNLOCK_REQUIRED in frontend/src/lib/ws.ts.
+	CloseCodeUnlockRequired = 4403
 )
 
 const (
@@ -721,7 +726,15 @@ func wsAuthCloseFor(err error) (int, string) {
 }
 
 func upgradeConnection(c *gin.Context, db *database.DB, jwtSecret string, authDisabled bool, readLimit int64) (*Connection, error) {
-	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+	// The server selects only "capstan" from what the client offered. A
+	// client that sends its unlock token as a subprotocol (middleware.
+	// EnvUnlockSubprotocolPrefix) offers "capstan" beside it, so the token is
+	// never the selected protocol and never echoed back (agent-os-rbmi). Set
+	// on a copy so every caller gets it, including tests that never call
+	// InitUpgrader.
+	u := upgrader
+	u.Subprotocols = []string{middleware.WSSubprotocol}
+	conn, err := u.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		return nil, err
 	}

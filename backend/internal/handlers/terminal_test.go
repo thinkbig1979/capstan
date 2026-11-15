@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/middleware"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
@@ -23,6 +24,10 @@ func newTestTerminalHandler(t *testing.T) *TerminalHandler {
 
 func setupTerminalRouter(handler *TerminalHandler) *gin.Engine {
 	router := gin.New()
+	// The terminal refuses a session that has not unlocked env values
+	// (agent-os-rbmi); these tests are about something else, so the unlock
+	// gate is open, as middleware.EnvUnlock leaves it under AUTH_DISABLED.
+	router.Use(middleware.EnvUnlock(nil, true))
 	group := router.Group("/api")
 	handler.RegisterRoutes(group, "test-secret-key-32-chars-long!!!", false)
 	return router
@@ -47,6 +52,10 @@ func TestTerminalHandler_WS_MissingParams(t *testing.T) {
 	handler := newTestTerminalHandler(t)
 
 	router := gin.New()
+	// The terminal refuses a session that has not unlocked env values
+	// (agent-os-rbmi); these tests are about something else, so the unlock
+	// gate is open, as middleware.EnvUnlock leaves it under AUTH_DISABLED.
+	router.Use(middleware.EnvUnlock(nil, true))
 	group := router.Group("/api")
 	handler.RegisterRoutes(group, "secret", false)
 
@@ -61,6 +70,10 @@ func TestTerminalHandler_RoutesRegistered(t *testing.T) {
 	handler := newTestTerminalHandler(t)
 
 	router := gin.New()
+	// The terminal refuses a session that has not unlocked env values
+	// (agent-os-rbmi); these tests are about something else, so the unlock
+	// gate is open, as middleware.EnvUnlock leaves it under AUTH_DISABLED.
+	router.Use(middleware.EnvUnlock(nil, true))
 	group := router.Group("/api")
 	handler.RegisterRoutes(group, "secret", false)
 
@@ -94,6 +107,10 @@ func TestTerminalHandler_WS_RejectsNonWS(t *testing.T) {
 	handler := NewTerminalHandler(nil, nil, db, NewConnectionManager(5), nil)
 
 	router := gin.New()
+	// The terminal refuses a session that has not unlocked env values
+	// (agent-os-rbmi); these tests are about something else, so the unlock
+	// gate is open, as middleware.EnvUnlock leaves it under AUTH_DISABLED.
+	router.Use(middleware.EnvUnlock(nil, true))
 	group := router.Group("/api")
 	handler.RegisterRoutes(group, "test-secret-key-32-chars-long!!!", false)
 

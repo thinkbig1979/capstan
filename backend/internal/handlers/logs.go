@@ -97,6 +97,20 @@ func (h *LogsHandler) GetLogs(c *gin.Context) {
 
 	lines := parseLogLines(output, containerFilter)
 
+	// A container prints what it likes, its env values included: a session
+	// that has not unlocked them reads the lines masked, as the compose view
+	// shows them (agent-os-rbmi).
+	if !envUnlocked(c) {
+		secrets, err := h.docker.ComposeSecretValues(*stack)
+		if err != nil {
+			respondDockerErr(c, err, http.StatusInternalServerError, "LOGS_ERROR", "Failed to retrieve logs")
+			return
+		}
+		for i := range lines {
+			maskLogLine(&lines[i], secrets)
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"lines": lines,
 	})
@@ -134,6 +148,16 @@ func (h *LogsHandler) StreamLogs(c *gin.Context) {
 			return
 		}
 		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load stack", err))
+		return
+	}
+
+	// The lock is re-read for every line, so an unlock that ends mid-stream
+	// masks from the next line on; the secret list is re-read on a timer, so
+	// a value saved mid-stream is masked too (agent-os-rbmi).
+	watch := newUnlockWatch(c)
+	secrets, err := h.docker.ComposeSecretValues(*stack)
+	if err != nil {
+		respondDockerErr(c, err, http.StatusServiceUnavailable, "DOCKER_UNAVAILABLE", DockerUnavailableMessage)
 		return
 	}
 
@@ -225,10 +249,22 @@ func (h *LogsHandler) StreamLogs(c *gin.Context) {
 		}
 	}()
 
+	secretsTicker := time.NewTicker(unlockRecheckInterval)
+	defer secretsTicker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			goto cleanup
+		case <-secretsTicker.C:
+			// On a failure the last list stays in use: lines are still
+			// masked with every value known so far, never sent raw.
+			fresh, err := h.docker.ComposeSecretValues(*stack)
+			if err != nil {
+				slog.Warn("Log stream: could not re-read the stack's secret values; masking with the last list", "stackID", id, "error", err)
+				continue
+			}
+			secrets = fresh
 		case line, ok := <-logChan:
 			if !ok {
 				if scanErr != nil {
@@ -252,6 +288,9 @@ func (h *LogsHandler) StreamLogs(c *gin.Context) {
 			filterMutex.Unlock()
 
 			if shouldSend {
+				if !watch.unlocked() {
+					maskLogLine(logLine, secrets)
+				}
 				if err := safeWriteJSON(wsConn, logLine); err != nil {
 					slog.Debug("Failed to send log line", "error", err)
 					goto cleanup
@@ -415,6 +454,13 @@ func parseLogLine(line string) *LogLine {
 		Timestamp: timestamp,
 		Message:   message,
 	}
+}
+
+// maskLogLine masks l's message for a session that has not unlocked env
+// values: values named by a sensitive key or flag, URL credentials, and any of
+// the stack's secret values found verbatim (services.MaskSecrets).
+func maskLogLine(l *LogLine, secrets []string) {
+	l.Message, _ = services.MaskSecrets(l.Message, "", secrets)
 }
 
 func writeJSONError(c *gin.Context, status int, code, message string) {

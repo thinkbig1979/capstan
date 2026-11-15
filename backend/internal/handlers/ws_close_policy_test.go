@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
+	"github.com/thinkbig1979/capstan/backend/internal/middleware"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
 )
 
@@ -95,6 +96,10 @@ func newTerminalFaultyDBFixture(t *testing.T, cm *ConnectionManager) *terminalFi
 	handler := NewTerminalHandler(terminal, lister, db, cm, nil)
 
 	router := gin.New()
+	// The terminal refuses a session that has not unlocked env values
+	// (agent-os-rbmi); these tests are about something else, so the unlock
+	// gate is open, as middleware.EnvUnlock leaves it under AUTH_DISABLED.
+	router.Use(middleware.EnvUnlock(nil, true))
 	handler.RegisterRoutes(router.Group("/api"), "test-secret-key-32-chars-long!!!", true)
 
 	srv := httptest.NewServer(router)

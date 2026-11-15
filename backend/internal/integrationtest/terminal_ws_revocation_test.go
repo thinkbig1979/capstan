@@ -249,6 +249,10 @@ func newTerminalWSFixture(t *testing.T, cm *handlers.ConnectionManager, dir, pro
 	router := gin.New()
 	group := router.Group("/api")
 	group.Use(middleware.AuthMiddleware(db, terminalWSJWTSecret, false, ""))
+	// The terminal refuses a session that has not unlocked env values
+	// (agent-os-rbmi). This test is about session revocation, so the unlock
+	// gate is open, as middleware.EnvUnlock leaves it under AUTH_DISABLED.
+	group.Use(middleware.EnvUnlock(nil, true))
 	handlers.NewTerminalHandler(
 		svc,
 		&terminalWSLister{project: project, container: container},

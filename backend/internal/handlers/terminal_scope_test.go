@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/middleware"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
 )
@@ -93,6 +94,10 @@ func newTerminalFixture(t *testing.T, cm *ConnectionManager, docker ContainerLis
 	handler := NewTerminalHandler(terminal, docker, db, cm, services.NewActionLogger(db))
 
 	router := gin.New()
+	// The terminal refuses a session that has not unlocked env values
+	// (agent-os-rbmi); these tests are about something else, so the unlock
+	// gate is open, as middleware.EnvUnlock leaves it under AUTH_DISABLED.
+	router.Use(middleware.EnvUnlock(nil, true))
 	handler.RegisterRoutes(router.Group("/api"), "test-secret-key-32-chars-long!!!", true)
 
 	srv := httptest.NewServer(router)
