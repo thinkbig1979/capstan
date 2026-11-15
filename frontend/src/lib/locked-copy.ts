@@ -34,6 +34,14 @@ export const LOCKED_GIT_CREDENTIALS_NOTICE =
 export const LOCKED_FOLDER_CREDENTIALS_NOTICE =
   'Env values are locked. Changing this folder\'s git credentials needs an unlock, because pushes and pulls use them.'
 
+/**
+ * Why Pull is off while locked (agent-os-hblm): the server refuses a pull,
+ * because it lands the remote's text in the stack folder, where a locked view
+ * masks it, and a redeploy runs it.
+ */
+export const LOCKED_PULL_NOTICE =
+  "Env values are locked. Pulling needs an unlock, because a pull writes the remote's files into your stacks and a redeploy runs them."
+
 /** Tooltip on a credential control disabled while locked. */
 export const LOCKED_CREDENTIAL_TITLE = 'Unlock env values to change this'
 

@@ -308,7 +308,7 @@ func TestGitCommitLock(t *testing.T) {
 
 	commitToken, err := e.lock.Acquire(e.stackID, services.OpKindGitCommit)
 	require.NoError(t, err)
-	b = requireGitCode(t, e.do(t, http.MethodPost, "/api/git/pull?stackId=s-app", ""), http.StatusConflict, models.ErrOperationInProgress)
+	b = requireGitCode(t, e.doUnlocked(t, http.MethodPost, "/api/git/pull?stackId=s-app", ""), http.StatusConflict, models.ErrOperationInProgress)
 	assert.Contains(t, b.Reason, "git commit in progress since")
 	e.lock.Release(e.stackID, commitToken)
 

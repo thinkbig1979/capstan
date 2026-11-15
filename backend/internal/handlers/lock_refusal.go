@@ -26,7 +26,9 @@ import (
 // repository, use it too (agent-os-h71i): a locked session that could point
 // the repository at a place it controls would read every stack's .env.
 //
-// The git credential writes use it too (agent-os-mu4z): the global SSH key,
+// A git pull uses it too (agent-os-hblm): it lands the remote's text in a
+// stack folder, which a locked view then masks. The git credential writes use
+// it too (agent-os-mu4z): the global SSH key,
 // HTTPS user and token, and a folder's own credentials.
 //
 // A handler whose request may not need the refusal (an empty env create, a
@@ -51,6 +53,9 @@ const (
 	// lockedEchoReason: the reply passes the caller's own text through the
 	// secret masking (agent-os-ly6i).
 	lockedEchoReason = "while locked, the reply could show which text matches a secret"
+	// lockedPullReason: a pull writes the remote's text into the stack folder,
+	// where a locked view masks it, and a redeploy runs it (agent-os-hblm).
+	lockedPullReason = "a pull writes the remote's files into your stacks, and a redeploy runs them"
 	// The backup refusals (agent-os-h71i), one reason per action (zp59).
 	lockedBackupSettingsReason = "backups hold every stack's .env, so whoever picks the repository can read them"
 	lockedRestoreReason        = "a restore writes backed-up files, secrets included, into your stacks"

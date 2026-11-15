@@ -31,6 +31,15 @@ var lockedRefusalSinks = map[string]bool{
 	"UpdateDirectoryCredentials": true,
 }
 
+// lockedRefusalFieldSinks are sinks named with the handler field they are
+// called on, where the method name alone is shared by something else:
+// h.git.PullVerified is a git pull (agent-os-hblm), while
+// h.dockerSvc().PullVerified pulls images and lands no text. A git service
+// reached through a field not named git is not seen.
+var lockedRefusalFieldSinks = map[string]bool{
+	"git.PullVerified": true,
+}
+
 // lockedSettingKeys are the settings a locked session must not write
 // (agent-os-h71i, 97pn): where backups go, with what credential, and how
 // long they are kept. A database.SettingValue literal or a SetSetting call
@@ -133,7 +142,7 @@ func TestLockedRefusalGuard_ly6i(t *testing.T) {
 		"backup.go:runRestore", "backup.go:runDRRestore", "backup.go:runPrune",
 		"backup.go:repoInit", "backup.go:updateSettings",
 		"settings.go:UpdateGitSettings", "directories.go:UpdateCredentials",
-		"env.go:Put", "settings.go:UpdateGlobalEnv",
+		"env.go:Put", "settings.go:UpdateGlobalEnv", "git.go:Pull",
 	} {
 		assert.Contains(t, inScope, want)
 	}
@@ -148,15 +157,18 @@ func firstLockedRefusalSink(body *ast.BlockStmt) token.Pos {
 		if !ok {
 			return true
 		}
-		var name string
+		var name, field string
 		switch f := call.Fun.(type) {
 		case *ast.Ident:
 			name = f.Name
 		case *ast.SelectorExpr:
 			name = f.Sel.Name
+			if x, ok := f.X.(*ast.SelectorExpr); ok {
+				field = x.Sel.Name + "." + name
+			}
 		}
 		lockedKey := name == "SetSetting" && len(call.Args) > 0 && isLockedSettingKey(call.Args[0])
-		if (lockedRefusalSinks[name] || lockedKey) && (first == token.NoPos || call.Pos() < first) {
+		if (lockedRefusalSinks[name] || lockedRefusalFieldSinks[field] || lockedKey) && (first == token.NoPos || call.Pos() < first) {
 			first = call.Pos()
 		}
 		return true
