@@ -61,7 +61,7 @@ func TestClassifyStart_EveryContainerExitedZero_F1(t *testing.T) {
 func TestPollUntilSettled_DwellStillCatchesCrashBesideInit_F1(t *testing.T) {
 	initDone := models.Container{Name: "init", State: "exited", ExitCode: f1Exit(0)}
 	svc := &DockerService{statusFn: scriptedStatus([]statusSnap{
-		{"partial", []models.Container{initDone, {Name: "web", State: "running"}}},                       // poll 1
+		{"partial", []models.Container{initDone, {Name: "web", State: "running"}}},                     // poll 1
 		{"stopped", []models.Container{initDone, {Name: "web", State: "exited", ExitCode: f1Exit(1)}}}, // poll 2: crashed
 	})}
 	p := settleParams{pollInterval: 20 * time.Millisecond, dwellTarget: 5 * time.Second, maxWait: 10 * time.Second}
