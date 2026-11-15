@@ -135,13 +135,14 @@ export function blindEditedRowIds<T extends Identified & Shown>(
  * `informed` holds, per blind row, what the user typed into it last while its
  * value was in view (agent-os-ocnh): that content was chosen, not blind, so the
  * row is safe while it holds exactly that. An Undo back to the blind edit is
- * refused again.
+ * refused again. Required (agent-os-tthh): a caller that left it out kept a
+ * refusal sticky after an informed edit, and nothing listed it.
  */
 export function holdsBlindEdit<T extends Identified & Shown>(
   rows: T[],
   blindIds: ReadonlySet<number>,
   aligned: ReadonlyMap<number, Shown>,
-  informed: ReadonlyMap<number, Shown> = new Map(),
+  informed: ReadonlyMap<number, Shown>,
 ): boolean {
   if (blindIds.size === 0) return false
   const rowsById = new Map(rows.map((row) => [row._rowId, row]))

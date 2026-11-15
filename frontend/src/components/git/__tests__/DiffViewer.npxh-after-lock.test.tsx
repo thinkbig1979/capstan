@@ -101,6 +101,15 @@ describe('DiffViewer after a lock (agent-os-npxh)', () => {
     expect(screen.getByText('Failed to load diff')).toBeInTheDocument()
   })
 
+  it('a diff that failed to load while locked, never served unlocked, offers no Retry (agent-os-uttl item 8)', async () => {
+    mockDiff.mockImplementation(() => Promise.reject(new Error('offline')))
+    renderWithProviders(<DiffViewer stackId="s1" commitHash="abc1234" />)
+    await waitFor(() => expect(screen.getByText('Failed to load diff')).toBeInTheDocument())
+
+    // Retry is for a diff hidden at a lock (npxh review F7), not for every failed load.
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument()
+  })
+
   it('control: a diff fetched while locked stays on screen after the lock refetch fails', async () => {
     mockDiff.mockResolvedValueOnce(result(diffOf('***')))
     const { queryClient } = renderWithProviders(<DiffViewer stackId="s1" commitHash="abc1234" />)

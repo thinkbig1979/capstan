@@ -158,9 +158,15 @@ describe('rows hidden while locked (agent-os-yt2f review S1, S2)', () => {
     const ids = new Set([2])
     const real = refillRedactedRows(baseline, baseline, aligned, FIELDS)
 
-    expect(holdsBlindEdit(real, ids, aligned)).toBe(false)
-    expect(holdsBlindEdit([real[0], real[2]], ids, aligned)).toBe(true)
-    expect(holdsBlindEdit([real[0], row(2, 'AAA', '', { line: 2 }), real[2]], ids, aligned)).toBe(true)
-    expect(holdsBlindEdit([real[0], row(2, 'FOO', '', { line: 2 })], new Set(), aligned)).toBe(false)
+    const none = new Map()
+    expect(holdsBlindEdit(real, ids, aligned, none)).toBe(false)
+    expect(holdsBlindEdit([real[0], real[2]], ids, aligned, none)).toBe(true)
+    expect(holdsBlindEdit([real[0], row(2, 'AAA', '', { line: 2 }), real[2]], ids, aligned, none)).toBe(true)
+    expect(holdsBlindEdit([real[0], row(2, 'FOO', '', { line: 2 })], new Set(), aligned, none)).toBe(false)
+  })
+
+  it('tthh: informed is required, so every caller says what was typed with the value in view', () => {
+    // @ts-expect-error informed is required: a caller without it kept a refusal sticky (agent-os-tthh)
+    expect(holdsBlindEdit([], new Set(), aligned)).toBe(false)
   })
 })
