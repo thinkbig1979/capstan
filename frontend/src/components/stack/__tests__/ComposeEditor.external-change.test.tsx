@@ -269,7 +269,7 @@ describe('ComposeEditor after a git pull (agent-os-umig)', () => {
     // reached the editor (observed: green at base). Wait for it to land.
     const key = ['stack', 's1', 'compose']
     await waitFor(() => expect(queryClient.getQueryState(key)?.fetchStatus).toBe('idle'))
-    expect(queryClient.getQueryData(key)).toEqual({ text: EDITED, masked: false, locked: false })
+    expect(queryClient.getQueryData(key)).toEqual({ text: EDITED, masked: false, present: true, locked: false })
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 20))
     })
@@ -302,7 +302,7 @@ describe('ComposeEditor after a git pull (agent-os-umig)', () => {
     await act(async () => release())
     const key = ['stack', 's1', 'compose']
     await waitFor(() => expect(queryClient.getQueryState(key)?.fetchStatus).toBe('idle'))
-    expect(queryClient.getQueryData(key)).toEqual({ text: EDITED, masked: false, locked: false })
+    expect(queryClient.getQueryData(key)).toEqual({ text: EDITED, masked: false, present: true, locked: false })
 
     // Back to the saved text: clean again, view shows EDITED.
     type(EDITED)
@@ -310,7 +310,7 @@ describe('ComposeEditor after a git pull (agent-os-umig)', () => {
 
     await pullTo(ORIGINAL)
 
-    await waitFor(() => expect(queryClient.getQueryData(key)).toEqual({ text: ORIGINAL, masked: false, locked: false }))
+    await waitFor(() => expect(queryClient.getQueryData(key)).toEqual({ text: ORIGINAL, masked: false, present: true, locked: false }))
     await waitFor(() => expect(view.text).toBe(ORIGINAL))
     expect(screen.queryByText(NOTICE)).not.toBeInTheDocument()
   })

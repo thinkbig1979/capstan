@@ -39,6 +39,8 @@ const SAVE_REFUSED_COPY = {
     "The unlocked file does not line up with the rows you edited while locked, so they can't be saved safely. Reload to load the file; your edits will be lost.",
   blind:
     "You changed or deleted rows that were hidden while locked, so they can't be saved safely. Undo those changes, or Reload to load the file; your edits will be lost.",
+  removed:
+    "The env file was removed on disk, so your edits can't be saved. Copy them before you Reload; Reload closes the editor.",
 }
 
 /** Where a row sits in the file: what a reveal follows across a refetch (agent-os-0b4m). */
@@ -306,6 +308,9 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
       clearSent()
     },
     canHydrateWhileDirty: (next, prev) => {
+      // The file went away under unsaved edits (agent-os-wn5h): hydrating would
+      // hide them behind the no-file state. Hold it; Save is refused below.
+      if (!next.hasEnvFile && prev?.hasEnvFile) return false
       if (!next.hasEnvFile || !prev?.hasEnvFile) return true
       // Every representation the user edited must already equal the new
       // file. Matching only one of them hydrates over edits in the other.
@@ -328,7 +333,12 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   const rawHidden = locked || lockedNow
   const activeView = rawHidden ? 'table' : view
 
-  const refusal = saveRefused
+  // The payload says the file is gone while the editor still holds edits to it:
+  // the backend has no file to write them to (agent-os-wn5h).
+  const fileRemoved = showEnvSection && hasUnsavedChanges && envData?.hasEnvFile === false
+  const refusal = fileRemoved
+    ? 'removed'
+    : saveRefused
     ? 'unaligned'
     : blindGuard && holdsBlindEdit(entries, blindGuard.ids, blindGuard.aligned, blindGuard.informed)
       ? 'blind'
@@ -336,8 +346,8 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   // A raw save never reads the table rows, so a blind table edit cannot reach
   // it (agent-os-2vyw). An unlock that could not be lined up refilled nothing,
   // the raw text included (it is still the locked view's empty one), so that
-  // refusal holds for both.
-  const rawRefusal = refusal === 'unaligned' ? refusal : null
+  // refusal holds for both, as does a file removed on disk.
+  const rawRefusal = refusal === 'unaligned' || refusal === 'removed' ? refusal : null
   // Refused in the handlers too, not only by the disabled buttons.
   const saveTable = () => {
     if (!refusal) handleSaveTable()

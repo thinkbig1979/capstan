@@ -27,6 +27,11 @@ import { useEnvLockedNow } from '@/hooks/useEnvLockedNow'
 interface ComposeLoad {
   text: string
   masked: boolean
+  /**
+   * The response carried a body. An empty file is a file to load
+   * (agent-os-wn5h); only a body that never arrived is skipped.
+   */
+  present: boolean
   /** The server answered without an unlock token in play. */
   locked: boolean
 }
@@ -60,11 +65,12 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
       const compose = await stacksApi.getCompose(stackId)
       // agent-os-06c1: narrowed, not asserted. This value becomes a
       // string-typed React state and the editor's initial document.
-      // '' rather than undefined: the hydrate below skips an empty body,
-      // as it always has for an absent one.
+      // '' rather than undefined, with `present` telling an absent body
+      // (skipped by the hydrate below) from an empty file.
       const body = compose as { content?: unknown; maskedValues?: unknown; locked?: unknown } | undefined
       const load: ComposeLoad = {
         text: stringOr(body?.content, ''),
+        present: typeof body?.content === 'string',
         masked: typeof body?.maskedValues === 'number' && body.maskedValues > 0,
         locked: body?.locked === true,
       }
@@ -124,8 +130,8 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
     // the env editors do (agent-os-9wp3).
     lockedNow,
     hydrate: (next) => {
-      // '' is an absent body (see the queryFn), not a file to load.
-      if (!next.text) return
+      // An absent body (see the queryFn) is not a file to load.
+      if (!next.present) return
       setContent(next.text)
       setLastSaved(next.text)
       setLoaded({ text: next.text, masked: next.masked })
