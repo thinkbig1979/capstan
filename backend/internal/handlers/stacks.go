@@ -184,6 +184,7 @@ func applyLiveStatus(stack *models.Stack, statuses map[string]services.LiveStatu
 	if ls, ok := statuses[stack.ProjectName]; ok && stack.ProjectName != "" {
 		stack.Status = ls.Status
 		stack.Containers = ls.Containers
+		stack.OneOffContainers = ls.OneOffs
 		return
 	}
 	stack.Containers = []models.Container{}

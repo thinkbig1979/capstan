@@ -6,7 +6,10 @@ import (
 	"testing"
 
 	"github.com/docker/docker/api/types/container"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
 
@@ -95,4 +98,44 @@ func TestUpdateContainer_RefusesOneOff_Dn1z(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Part 3: one-offs are shown separately under their stack and do not count
+// toward its status.
+func TestBuildStackStatuses_OneOffsSeparate_Dn1z(t *testing.T) {
+	snapshot := []models.DashboardContainerInfo{
+		{ProjectName: "web", ID: "w1", Name: "web-app-1", State: "running"},
+		{ProjectName: "web", ID: "w2", Name: "web-app-run-1", State: "exited", OneOff: true},
+		{ProjectName: "jobs", ID: "j1", Name: "jobs-task-run-1", State: "running", OneOff: true},
+	}
+	got := BuildStackStatuses(snapshot)
+
+	require.Contains(t, got, "web")
+	assert.Equal(t, "running", got["web"].Status, "an exited one-off must not make a running stack partial")
+	assert.Equal(t, []string{"web-app-1"}, containerNames(got["web"].Containers))
+	assert.Equal(t, []string{"web-app-run-1"}, containerNames(got["web"].OneOffs))
+
+	require.Contains(t, got, "jobs")
+	assert.Equal(t, "stopped", got["jobs"].Status, "a project with only one-offs has no service container running")
+	assert.NotNil(t, got["jobs"].Containers)
+	assert.Empty(t, got["jobs"].Containers)
+	assert.Equal(t, []string{"jobs-task-run-1"}, containerNames(got["jobs"].OneOffs))
+}
+
+func TestGetAllContainersWithDetails_MarksOneOff_Dn1z(t *testing.T) {
+	fake := &dn1zListFake{
+		bx43FakeDocker: &bx43FakeDocker{},
+		list: []container.Summary{
+			{ID: "svc", Names: []string{"/proj-web-1"}, State: "exited", Labels: dn1zLabels("False")},
+			{ID: "oneoff", Names: []string{"/proj-web-run-abc"}, State: "exited", Labels: dn1zLabels("True")},
+		},
+	}
+	svc := &DockerService{updateClient: fake}
+	rows, err := svc.GetAllContainersWithDetails(context.Background(), nil)
+	require.NoError(t, err)
+	oneOff := map[string]bool{}
+	for _, r := range rows {
+		oneOff[r.ID] = r.OneOff
+	}
+	assert.Equal(t, map[string]bool{"svc": false, "oneoff": true}, oneOff)
 }

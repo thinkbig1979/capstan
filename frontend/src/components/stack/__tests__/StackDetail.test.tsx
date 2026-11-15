@@ -447,3 +447,27 @@ describe('StackDetail — container policies are matched by name (agent-os-ygyv)
   })
 })
 
+
+// agent-os-dn1z part 3 (Edwin, 2026-11-15): one-off containers from
+// `docker compose run` get their own card under Services, only when there are
+// any, and the server already keeps them out of `containers` and the status.
+describe('StackDetail — one-off containers', () => {
+  const oneOff = {
+    health: '', id: 'r1', name: 'my-stack-web-run-1a2b', image: 'nginx:1', state: 'exited', status: 'Exited (0)', ports: [],
+  }
+
+  it('shows a One-off containers card when the stack has one-offs', async () => {
+    renderDetail({ stack: stack({ oneOffContainers: [oneOff] as Stack['containers'] }) })
+
+    expect(await screen.findByText('One-off containers')).toBeInTheDocument()
+    expect(screen.getByText('Started with docker compose run. Not counted in the stack status.')).toBeInTheDocument()
+    expect(screen.getAllByTestId('container-list')).toHaveLength(2)
+  })
+
+  it('shows no One-off card when there are none', async () => {
+    renderDetail({ stack: stack({ oneOffContainers: [] }) })
+
+    expect(await screen.findAllByTestId('container-list')).toHaveLength(1)
+    expect(screen.queryByText('One-off containers')).not.toBeInTheDocument()
+  })
+})

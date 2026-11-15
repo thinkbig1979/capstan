@@ -83,6 +83,30 @@ function OverviewTabContent({
           onShowLogs={(name) => onTabChange(`logs?container=${encodeURIComponent(name)}`)}
           onOpenShell={(containerId) => onTabChange(`terminal?container=${encodeURIComponent(containerId)}`)}
         />
+        {/* agent-os-dn1z: `docker compose run` containers, listed apart and not
+            counted in the stack status (the server keeps them out of
+            stack.containers). */}
+        {!!stack.oneOffContainers?.length && (
+          <>
+            <div className="border-y px-4 py-2.5">
+              <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">
+                One-off containers
+              </div>
+              <div className="mt-0.5 text-xs text-muted-foreground">
+                Started with docker compose run. Not counted in the stack status.
+              </div>
+            </div>
+            <ContainerList
+              containers={stack.oneOffContainers}
+              stackId={stack.id}
+              statusStale={stack.statusStale === true}
+              latestMetrics={latestMetrics}
+              metricNames={metricContainers}
+              onShowLogs={(name) => onTabChange(`logs?container=${encodeURIComponent(name)}`)}
+              onOpenShell={(containerId) => onTabChange(`terminal?container=${encodeURIComponent(containerId)}`)}
+            />
+          </>
+        )}
       </div>
 
       <div className="flex flex-col gap-4">

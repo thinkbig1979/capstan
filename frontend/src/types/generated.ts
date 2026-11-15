@@ -625,6 +625,11 @@ export interface Stack {
    */
   statusStale?: boolean;
   containers: Container[];
+  /**
+   * OneOffContainers are the stack's `docker compose run` containers, shown
+   * apart from Containers and not counted in Status (agent-os-dn1z).
+   */
+  oneOffContainers?: Container[];
   isGitRepo: boolean;
   gitBranch: string;
   gitCommit: string;
@@ -861,6 +866,13 @@ export interface DashboardContainerInfo {
    */
   composeWorkingDir?: string;
   composeConfigFiles?: string;
+  /**
+   * OneOff marks a container made by `docker compose run`
+   * (com.docker.compose.oneoff=True). It is listed under its stack apart from
+   * the service containers and does not count toward the stack's status
+   * (agent-os-dn1z).
+   */
+  oneOff?: boolean;
   restartCount: number /* int */;
   created: string;
   startedAt: string;

@@ -50,12 +50,15 @@ type Stack struct {
 	// send an explicit false, which would claim a liveness nobody checked.
 	StatusStale bool        `json:"statusStale,omitempty"`
 	Containers  []Container `json:"containers"`
-	IsGitRepo   bool        `json:"isGitRepo"`
-	GitBranch   string      `json:"gitBranch"`
-	GitCommit   string      `json:"gitCommit"`
-	GitDirty    bool        `json:"gitDirty"`
-	GitAhead    int         `json:"gitAhead"`
-	GitBehind   int         `json:"gitBehind"`
+	// OneOffContainers are the stack's `docker compose run` containers, shown
+	// apart from Containers and not counted in Status (agent-os-dn1z).
+	OneOffContainers []Container `json:"oneOffContainers,omitempty"`
+	IsGitRepo        bool        `json:"isGitRepo"`
+	GitBranch        string      `json:"gitBranch"`
+	GitCommit        string      `json:"gitCommit"`
+	GitDirty         bool        `json:"gitDirty"`
+	GitAhead         int         `json:"gitAhead"`
+	GitBehind        int         `json:"gitBehind"`
 	// ProjectNameSharedWith lists the OTHER stacks that carry this stack's
 	// compose project name. Non-empty means container actions and updates on
 	// that project are refused, because a container's project label cannot say
@@ -264,13 +267,18 @@ type DashboardContainerInfo struct {
 	// per poll so the UI can say where an unmanaged project lives
 	// (agent-os-fnch). ConfigFiles is shown verbatim: comma-separated when the
 	// project was started with several -f files, and never parsed.
-	ComposeWorkingDir  string    `json:"composeWorkingDir,omitempty"`
-	ComposeConfigFiles string    `json:"composeConfigFiles,omitempty"`
-	RestartCount       int       `json:"restartCount"`
-	Created            time.Time `json:"created"`
-	StartedAt          time.Time `json:"startedAt"`
-	DiskSize           int64     `json:"diskSize"`
-	ImageSize          int64     `json:"imageSize"`
+	ComposeWorkingDir  string `json:"composeWorkingDir,omitempty"`
+	ComposeConfigFiles string `json:"composeConfigFiles,omitempty"`
+	// OneOff marks a container made by `docker compose run`
+	// (com.docker.compose.oneoff=True). It is listed under its stack apart from
+	// the service containers and does not count toward the stack's status
+	// (agent-os-dn1z).
+	OneOff       bool      `json:"oneOff,omitempty"`
+	RestartCount int       `json:"restartCount"`
+	Created      time.Time `json:"created"`
+	StartedAt    time.Time `json:"startedAt"`
+	DiskSize     int64     `json:"diskSize"`
+	ImageSize    int64     `json:"imageSize"`
 }
 
 type DockerImage struct {
