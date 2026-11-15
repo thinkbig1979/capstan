@@ -784,11 +784,35 @@ func validateEnvEntries(entries []EnvEntry) error {
 		if strings.ContainsAny(e.Value, "\r\n") {
 			return fmt.Errorf("entry at index %d (key %q) has a value containing a newline; this would corrupt the env file", i, e.Key)
 		}
+		if err := validateEnvKey(e); err != nil {
+			return fmt.Errorf("entry at index %d (key %q) %w", i, e.Key, err)
+		}
 		if err := validateEnvQuoting(e); err != nil {
 			return fmt.Errorf("entry at index %d (key %q) %w", i, e.Key, err)
 		}
 	}
 	return nil
+}
+
+// validateEnvKey refuses a key compose would read as another key or none
+// (agent-os-8btk): written as [export ]KEY=x, the line must be exactly the one
+// variable KEY to compose-go's dotenv parser, and the same row to
+// parseEnvFile. "A=B" and "A:B" are A to compose, "#A" is a comment, "A B" is
+// a file compose rejects, and a key typed as "export FOO" is FOO. Every row is
+// checked, edited or not: a file holding such a key is one compose already
+// reads differently, and is saved from its raw text.
+func validateEnvKey(e EnvEntry) error {
+	probe := EnvEntry{Key: e.Key, Value: "x", Export: e.Export}
+	line := serializeEnvFile([]EnvEntry{probe})
+	rows := (&EnvHandler{}).parseEnvFile(line)
+	if composeReadsValue(probe) && len(rows) == 1 && !rows[0].Comment &&
+		rows[0].Key == e.Key && rows[0].Export == e.Export {
+		return nil
+	}
+	if strings.ContainsRune(e.Key, ' ') {
+		return errors.New("has a space in its key; a key is one word, so rename it, or write the line in the Raw view (global env: in global.env)")
+	}
+	return errors.New("has a key compose reads as a different key or none (a key cannot hold =, :, # or an export prefix); rename it, or write the line in the Raw view (global env: in global.env)")
 }
 
 // validateEnvCommentRow accepts exactly the comment rows parseEnvFile produces
