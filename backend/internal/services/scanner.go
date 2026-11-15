@@ -1632,6 +1632,11 @@ func (s *ScannerService) scanDirectoryWithRoot(path string, rootDir string) erro
 	// claimed it — so a later file mapping to the same name can be skipped
 	// with a warning that names both files (see the guard below).
 	seenNames := make(map[string]string)
+	// upserted counts the stacks this pass actually registered from path.
+	// seenNames is not that count: a name is claimed before the empty-project
+	// skip below, so a folder whose only file is skipped would still read as
+	// registered (agent-os-gcww).
+	upserted := 0
 
 	for _, pattern := range composeFilePatterns {
 		matches, err := filepath.Glob(filepath.Join(path, pattern))
@@ -1719,12 +1724,13 @@ func (s *ScannerService) scanDirectoryWithRoot(path string, rootDir string) erro
 			if err := s.db.UpsertStack(stack); err != nil {
 				return err
 			}
+			upserted++
 
 			slog.Info("Discovered stack", "id", stackID, "project", projectName, "projectSource", projectNameSource, "root", effectiveRoot)
 		}
 	}
 
-	if len(seenNames) > 0 {
+	if upserted > 0 {
 		s.deleteRowsForRemovedComposeFiles(path)
 	}
 
@@ -1741,7 +1747,10 @@ func (s *ScannerService) scanDirectoryWithRoot(path string, rootDir string) erro
 // Only a definite absence deletes: an Lstat that fails for any other reason,
 // and a dangling symlink (Lstat finds the link), keep the row. A file missing
 // only for a moment mid-pull loses its row until the next rescan, which
-// re-creates it under the same ID. Runs under mu, as both callers hold it.
+// re-creates it under the same ID with status unknown: the stored status is
+// lost across the gap. That happens only when containersKeepRow let the row
+// go: the project had no containers, or another stack showed them. Runs under mu,
+// as both callers hold it.
 func (s *ScannerService) deleteRowsForRemovedComposeFiles(path string) {
 	rows, err := s.db.ListStacksByDirectory(path)
 	if err != nil {
