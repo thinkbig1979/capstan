@@ -114,20 +114,26 @@ func HasURLUserinfo(s string) bool {
 	if t := strings.TrimSpace(s); RedactURLUserinfo(t) != t {
 		return true
 	}
-	for _, tok := range urlTokenRe.FindAllString(s, -1) {
-		if redactURLToken(tok) != tok {
-			return true
-		}
-	}
-	return false
+	return RedactURLUserinfoInText(s) != s
 }
 
 // RedactURLUserinfoInText stars the userinfo of every scheme://... token in
-// free text, and of every URL nested in one (redactURLToken), leaving the
+// free text, and of every URL nested in one (redactURLToken), and the inline
+// credential of every sftp: or s3: opaque token (agent-os-vq3i), leaving the
 // rest byte-for-byte.
 func RedactURLUserinfoInText(s string) string {
-	return urlTokenRe.ReplaceAllStringFunc(s, redactURLToken)
+	s = urlTokenRe.ReplaceAllStringFunc(s, redactURLToken)
+	return opaqueTokenRe.ReplaceAllStringFunc(s, func(tok string) string {
+		redacted, _ := redactOpaqueCredential(tok)
+		return redacted
+	})
 }
+
+// opaqueTokenRe finds the sftp: and s3: opaque repository forms in free text,
+// the two whose grammar redactOpaqueCredential reads a credential from
+// ("sftp:user:pw@host:/path"). A word boundary keeps "xsftp:" out; a
+// "sftp://" token is urlTokenRe's, and splitOpaque leaves it alone.
+var opaqueTokenRe = regexp.MustCompile(`(?i)\b(?:sftp|s3):[^\s"'<>]+`)
 
 // nestedSchemeRe finds each "scheme://" in a URL token, where a nested URL
 // starts.
@@ -499,7 +505,7 @@ func StackSecretValues(stack models.Stack, globalPath string) []string {
 				"stack", stack.ProjectName)
 		}
 		for k, v := range env {
-			if IsSensitiveEnvKey(k) {
+			if IsSensitiveEnvVar(k, v) {
 				add(v)
 			}
 		}
@@ -515,7 +521,7 @@ func StackSecretValues(stack models.Stack, globalPath string) []string {
 	}
 	for _, env := range envs {
 		for k, v := range env {
-			if IsSensitiveEnvKey(k) {
+			if IsSensitiveEnvVar(k, v) {
 				add(v)
 			}
 		}
@@ -560,17 +566,23 @@ func sensitiveEnvValues(content string) []string {
 			seps = append(seps, sep)
 		}
 		for _, sep := range seps {
-			if sep < 0 || !IsSensitiveEnvKey(strings.TrimSpace(line[:sep])) {
+			if sep < 0 {
 				continue
 			}
+			key := strings.TrimSpace(line[:sep])
 			raw := strings.TrimSpace(line[sep+1:])
-			add(raw)
 			clean := raw
 			if len(clean) >= 2 && (clean[0] == '"' || clean[0] == '\'') && clean[len(clean)-1] == clean[0] {
 				clean = clean[1 : len(clean)-1]
 			} else if c := strings.Index(clean, " #"); c != -1 {
 				clean = strings.TrimSpace(clean[:c])
 			}
+			// The value counts too (agent-os-vq3i): a URL credential is a
+			// secret under any key, as IsSensitiveEnvVar has it.
+			if !IsSensitiveEnvVar(key, raw) && !IsSensitiveEnvVar(key, clean) {
+				continue
+			}
+			add(raw)
 			if clean != raw {
 				add(clean)
 			}
