@@ -152,12 +152,13 @@ func TestEnvEmptyKeyError_OmitsTheValue(t *testing.T) {
 
 		w := putEntries(t, router, stackID, token, []map[string]any{{"key": "", "value": secret}})
 
-		require.NotEqual(t, http.StatusOK, w.Code, w.Body.String())
+		require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
 		assert.Equal(t, commentRowContent, readEnvQuoteFile(t, envPath))
 		assert.Contains(t, w.Body.String(), "index 0", "the error still names the row")
 		assert.NotContains(t, w.Body.String(), secretCore)
-		// Positive side on the same buffer: this request's failure was logged.
-		require.Contains(t, logs.String(), "env validation failed")
+		// A refusal is a client error (agent-os-uxfl): a 400 that is not
+		// logged as a server fault, so the message reaches no ERROR log.
+		assert.NotContains(t, logs.String(), "env validation failed")
 		assert.NotContains(t, logs.String(), secretCore)
 	})
 

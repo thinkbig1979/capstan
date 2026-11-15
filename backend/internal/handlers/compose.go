@@ -449,7 +449,7 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 		hasEnvUpdate = true
 	} else if len(req.EnvEntries) > 0 {
 		if err := validateEnvEntries(req.EnvEntries); err != nil {
-			renderResult(c, truth.Failed("env validation failed: "+err.Error(), err))
+			renderEnvValidationFailure(c, err)
 			return
 		}
 		envContent = serializeEnvFile(req.EnvEntries)

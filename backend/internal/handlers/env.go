@@ -12,6 +12,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/compose-spec/compose-go/v2/dotenv"
 	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
@@ -550,7 +551,7 @@ func (h *EnvHandler) Put(c *gin.Context) {
 		// Validate before serialising: reject entries with a non-comment, non-blank
 		// key that is empty — they would produce a corrupt "=value" line (#15).
 		if err := validateEnvEntries(req.Entries); err != nil {
-			renderResult(c, truth.Failed("env validation failed: "+err.Error(), err))
+			renderEnvValidationFailure(c, err)
 			return
 		}
 		// Read under the lock, so the rows kept verbatim are the file's
@@ -561,7 +562,11 @@ func (h *EnvHandler) Put(c *gin.Context) {
 			handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "READ_ERROR", "Failed to read env file", err))
 			return
 		}
-		content = serializeEnvFileOver(string(current), req.Entries)
+		content, err = serializeEnvFileOver(string(current), req.Entries)
+		if err != nil {
+			renderEnvValidationFailure(c, err)
+			return
+		}
 	} else {
 		c.JSON(http.StatusBadRequest, models.NewAppError(
 			http.StatusBadRequest,
@@ -736,12 +741,23 @@ func (h *EnvHandler) Create(c *gin.Context) {
 	))
 }
 
+// renderEnvValidationFailure answers a refused env save (validateEnvEntries,
+// serializeEnvFileOver) as the client error it is: 400 VALIDATION_ERROR, not a
+// 500 logged as a server fault (agent-os-uxfl).
+func renderEnvValidationFailure(c *gin.Context, err error) {
+	c.JSON(http.StatusBadRequest, models.NewAppError(
+		http.StatusBadRequest,
+		models.ErrValidation,
+		"env validation failed: "+err.Error(),
+	))
+}
+
 // validateEnvEntries returns an error when an entry would not serialise back
 // as the one line it stands for: a non-blank entry with an empty key would
 // produce a corrupt "=value" line (finding #15), and a comment row must be one
 // parseEnvFile itself would produce (validateEnvCommentRow). Errors name the
-// index or key, never a value, which
-// may be a secret: a failure here is a logged 500 on the stack env routes.
+// index or key, never a value, which may be a secret: the message is the
+// response body (renderEnvValidationFailure).
 func validateEnvEntries(entries []EnvEntry) error {
 	for i, e := range entries {
 		if e.Comment {
@@ -1200,8 +1216,10 @@ func closingQuote(s string, q byte) (idx int, trailingEscape bool) {
 // original text, byte for byte, and any other row as serializeEnvFile writes
 // it, with the file's line ending. The output keeps the file's final-newline
 // state. A row only matches when it is the same row, so a file changed since
-// the client read it falls back to the request's rows.
-func serializeEnvFileOver(current string, entries []EnvEntry) string {
+// the client read it falls back to the request's rows. A row written fresh
+// is first made one compose reads back as typed (composeSafeRow); one that
+// cannot be is an error naming its index and key, and nothing is written.
+func serializeEnvFileOver(current string, entries []EnvEntry) (string, error) {
 	eol := fileEOL(current)
 
 	// Each file row's original text: its line, or for a value spanning
@@ -1215,7 +1233,7 @@ func serializeEnvFileOver(current string, entries []EnvEntry) string {
 	}
 
 	var b strings.Builder
-	for _, e := range entries {
+	for i, e := range entries {
 		if k, ok := original[e.Line]; ok && e.Line > 0 && sameEnvRow(e, fileRows[k]) {
 			end := lineCount
 			if k+1 < len(fileRows) {
@@ -1233,7 +1251,11 @@ func serializeEnvFileOver(current string, entries []EnvEntry) string {
 			}
 			continue
 		}
-		b.WriteString(strings.ReplaceAll(serializeEnvFile([]EnvEntry{e}), "\n", eol))
+		safe, ok := composeSafeRow(e)
+		if !ok {
+			return "", fmt.Errorf("entry at index %d (key %q) has a value compose would read differently, and no quoting keeps it as typed; edit it in the Raw view", i, e.Key)
+		}
+		b.WriteString(strings.ReplaceAll(serializeEnvFile([]EnvEntry{safe}), "\n", eol))
 	}
 
 	out := b.String()
@@ -1244,7 +1266,41 @@ func serializeEnvFileOver(current string, entries []EnvEntry) string {
 	if current != "" && !strings.HasSuffix(current, "\n") && !lastBlank {
 		out = strings.TrimSuffix(out, eol)
 	}
-	return out
+	return out, nil
+}
+
+// composeSafeRow returns a row to write fresh whose line compose reads back
+// as its value (agent-os-uxfl). An unquoted value compose would read
+// differently ("a # b" as a, 'abc as a broken file, ab$cd interpolated) is
+// single-quoted, or double-quoted when it holds a "'", whichever compose-go
+// reads back exactly; ok is false when neither does. A typed value is
+// therefore literal: a ${VAR} reference is written in the Raw view. Quoted,
+// comment and blank rows are returned as they are: validateEnvQuoting checked
+// the quoted ones, whose value is the text between the quotes.
+func composeSafeRow(e EnvEntry) (EnvEntry, bool) {
+	if e.Comment || e.Quote != "" || (e.Key == "" && e.Value == "") || composeReadsValue(e) {
+		return e, true
+	}
+	for _, q := range []string{"'", `"`} {
+		quoted := e
+		quoted.Quote = q
+		if validateEnvQuoting(quoted) == nil && composeReadsValue(quoted) {
+			return quoted, true
+		}
+	}
+	return e, false
+}
+
+// composeReadsValue reports whether compose-go's dotenv parser reads the line
+// serializeEnvFile writes for e as exactly the one variable e.Key with value
+// e.Value. Nothing is defined for it, so an interpolated value differs.
+func composeReadsValue(e EnvEntry) bool {
+	vars, err := dotenv.UnmarshalWithLookup(serializeEnvFile([]EnvEntry{e}), func(string) (string, bool) { return "", false })
+	if err != nil {
+		return false // compose cannot read the line: it does not read back
+	}
+	v, ok := vars[e.Key]
+	return len(vars) == 1 && ok && v == e.Value
 }
 
 // sameEnvRow reports whether two rows write the same text: every field
