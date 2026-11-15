@@ -294,11 +294,79 @@ func hideMultilineBodies(entries []EnvEntry, raw string) {
 			entries[i].Sensitive = true
 		}
 	}
+	// A span that is secret only as compose reads it whole, such as a URL
+	// credential split across its lines (review R2-1): its first row is marked
+	// sensitive, so the masking applies, and the rest of its rows are hidden.
+	if raw != "" {
+		rowOf := make([]int, len(lines))
+		for r, e := range entries {
+			next := len(lines)
+			if r+1 < len(entries) {
+				next = min(entries[r+1].Line-1, len(lines))
+			}
+			for l := max(e.Line-1, 0); l < next; l++ {
+				rowOf[l] = r
+			}
+		}
+		for _, sp := range sensitiveSpans(lines) {
+			first, last := rowOf[sp[0]], rowOf[sp[1]]
+			entries[first].Sensitive = true
+			if last > first {
+				hide[first+1]++
+				hide[last+1]--
+			}
+		}
+	}
 	for k, n := 0, 0; k < len(entries); k++ {
 		if n += hide[k]; n > 0 {
 			blank(k, k)
 		}
 	}
+}
+
+// sensitiveSpans returns the first and last line of every quoted value
+// compose reads across lines whose text holds a sensitive variable
+// (agent-os-1nqr round 3, review R2-1): judged line by line, a URL credential
+// split across a span's lines (TZ="postgres://u:<NL>pw@db/app" X=1) looked
+// like nothing on each line. Lines are walked as compose reads them: a span
+// runs from where its statement starts to the first line holding its closing
+// quote, the lines between are its body and start no statement, and the text
+// after the close is read on (it can open the next span). Each span is parsed
+// once with compose-go, so this is linear in the file. A span compose cannot
+// parse counts as sensitive (fail closed); a quote that never closes is a file
+// compose rejects, so no value is read from it.
+func sensitiveSpans(lines []string) [][2]int {
+	var spans [][2]int
+	for k := 0; k < len(lines); k++ {
+		cur := lines[k]
+		for {
+			q, open := opensMultilineTail(cur)
+			if !open {
+				break
+			}
+			end, at := -1, -1
+			for j := k + 1; j < len(lines); j++ {
+				if c, _ := closingQuote(lines[j], q); c != -1 {
+					end, at = j, c
+					break
+				}
+			}
+			if end == -1 {
+				return spans
+			}
+			parts := append(append([]string{cur}, lines[k+1:end]...), lines[end][:at+1])
+			vars, err := dotenv.UnmarshalWithLookup(strings.Join(parts, "\n")+"\n", func(string) (string, bool) { return "", false })
+			sensitive := err != nil
+			for key, v := range vars {
+				sensitive = sensitive || services.IsSensitiveEnvVar(key, v)
+			}
+			if sensitive {
+				spans = append(spans, [2]int{k, end})
+			}
+			cur, k = lines[end][at+1:], end
+		}
+	}
+	return spans
 }
 
 // bodyWalks holds, for every row and each quote kind, where a quoted value

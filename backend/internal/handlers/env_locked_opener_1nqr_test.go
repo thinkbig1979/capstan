@@ -47,3 +47,27 @@ func TestEnvLocked_1nqr_OpenerUnlockedUnchanged(t *testing.T) {
 	assert.Equal(t, `"firstlinezq`, e["value"])
 	assert.Equal(t, false, e["sensitive"])
 }
+
+// Round 3 (review R2-1, already on base): the body was judged line by line,
+// so a URL credential split across the lines of an unfolded span looked like
+// nothing on each line and was shown, its second half even as a row key.
+// The span is now also judged as compose reads it.
+func TestEnvLocked_1nqr_CredentialSplitAcrossLinesIsHidden(t *testing.T) {
+	const content = "TZ=\"postgres://u:\npw77zq@db/app\" X=1\n"
+	router, stackID, token, _ := envQuoteFixture(t, content)
+	require.Contains(t, getEnvBody(t, router, stackID, token), "pw77zq")
+	assertBodyOmits(t, getEnvBody(t, router, stackID, ""), "pw77zq")
+	assertBodyOmits(t, getEnvBody(t, router, stackID, ""), "postgres://u:")
+
+	dataDir, grouter := globalEnvTestRouter(t)
+	writeGlobalEnvFile(t, dataDir, content)
+	_, unlocked := getGlobalVars(t, grouter, "/unlocked")
+	require.Contains(t, unlocked, "pw77zq")
+	_, locked := getGlobalVars(t, grouter, "/locked")
+	assertBodyOmits(t, locked, "pw77zq")
+	assertBodyOmits(t, locked, "postgres://u:")
+
+	// Unlocked rows are as before.
+	rows := getEntriesAsJSON(t, router, stackID, token)
+	assert.Equal(t, `"postgres://u:`, entryByKey(t, rows, "TZ")["value"])
+}

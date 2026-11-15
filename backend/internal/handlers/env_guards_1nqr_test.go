@@ -79,7 +79,8 @@ func TestEnvGuards_1nqr_SerializeEnvFileOnlyFromSafeEntryPoints(t *testing.T) {
 // genEnvCorpus is a seeded corpus of .env files over the line shapes the
 // parser handles: KEY=v, quoted both ways, export, KEY: v, an inline comment,
 // indentation, a second statement after a closing quote, a quoted value
-// across two lines (also with a statement after its close, review F3), a
+// across two lines (also with a statement after its close, review F3, and a
+// URL credential split across those lines, review R2-1), a
 // commented-out assignment and a bare KEY; LF or CRLF, and a third of the
 // files with no final line end (the qdnb shape, review F3). Values are
 // unique, so a value found in a body is that variable's.
@@ -101,7 +102,7 @@ func genEnvCorpus(n int, seed int64) []string {
 	key := func() string { return keys[rng.Intn(len(keys))] }
 	line := func() string {
 		k, v := key(), value()
-		switch rng.Intn(13) {
+		switch rng.Intn(14) {
 		case 0:
 			return k + "=" + v
 		case 1:
@@ -126,6 +127,10 @@ func genEnvCorpus(n int, seed int64) []string {
 			return "#" + k + "=" + v
 		case 11:
 			return k + `="` + v + "\n" + value() + `" ` + key() + "=" + value()
+		case 12:
+			// A URL credential split across an unfolded span (review R2-1).
+			seq++
+			return k + fmt.Sprintf(`="postgres://u:`+"\n"+`pw%dzq@db/app" `, seq) + key() + "=" + value()
 		default:
 			return k
 		}
