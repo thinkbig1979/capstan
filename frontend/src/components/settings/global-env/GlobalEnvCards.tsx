@@ -66,6 +66,7 @@ export function GlobalEnvCards({
                     value={entry.value}
                     onChange={(e) => onChange(index, 'value', e.target.value)}
                     placeholder={valuePlaceholder(locked, sensitive && !reveal, entry.value)}
+                    disabled={entry.keyHidden}
                     className="flex-1"
                     aria-label={`Global env value ${index + 1}`}
                   />

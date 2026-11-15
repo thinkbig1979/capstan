@@ -56,6 +56,13 @@ import (
 // name compose reads, without the prefix, and serializeEnvFile writes the
 // prefix back, so a renamed or edited row keeps it. omitempty, and optional
 // in TypeScript, like Comment.
+//
+// BodyLine marks a row that is a line of a multi-line secret's body: the line
+// parser reads each of those as a row of its own, and a base64 line ending in
+// "==" as KEY=value. Such a row is always Sensitive, in the unlocked payload
+// too, so a client that keeps its rows across a lock hides its key and value
+// from the start (agent-os-9fsu). A locked payload blanks the row. It is not
+// written to the file (sameEnvRow). omitempty, and optional in TypeScript.
 type EnvEntry struct {
 	Key           string `json:"key"`
 	Value         string `json:"value"`
@@ -65,6 +72,7 @@ type EnvEntry struct {
 	Quote         string `json:"quote,omitempty"`
 	InlineComment string `json:"inlineComment,omitempty"`
 	Export        bool   `json:"export,omitempty"`
+	BodyLine      bool   `json:"bodyLine,omitempty"`
 }
 
 // EnvResponse is the wire shape of GET /:id/env when the stack HAS an env file.

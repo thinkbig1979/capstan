@@ -15,11 +15,13 @@ const NO_HIDDEN_KEYS: ReadonlySet<number> = new Set()
 /**
  * A bare line read without "=" (a multi-line secret's body line) is a comment
  * row whose key is its own text, so a masked one hides its key as well as its
- * value; so does a row a dirty lock found to be such a line parsed as KEY=
- * (agent-os-y6e8). A multi-line row keeps its key: that is the name.
+ * value. So does a body line the server marks `bodyLine`, one that parsed as
+ * KEY= (base64 padding) included, in every payload (agent-os-9fsu), and a row a
+ * dirty lock found to be such a line (agent-os-y6e8). A multi-line row keeps its
+ * key: that is the name.
  */
 const keyHidden = (e: EnvEntryRow, hiddenKeyIds: ReadonlySet<number>) =>
-  e.sensitive && ((e.comment === true && e.key === e.value) || hiddenKeyIds.has(e._rowId))
+  e.sensitive && ((e.comment === true && e.key === e.value) || e.bodyLine === true || hiddenKeyIds.has(e._rowId))
 
 /**
  * A row the table shows but does not edit: a comment, a line compose reads
@@ -130,6 +132,12 @@ export function EnvTableView({
     filtered: filteredIndexed,
   } = useTextFilter(indexedEntries, searchFields)
 
+  // Text typed into a row whose key is hidden would replace a value the user
+  // never saw at the next save, so its value is frozen until the row is revealed
+  // (agent-os-9fsu F10). Whenever the key is hidden, not only while locked: a
+  // masked row stays hidden after an unlock too.
+  const valueFrozen = (e: EnvEntryRow) => keyHidden(e, hiddenKeyIds)
+
   if (!visible) return null
 
   return (
@@ -185,6 +193,7 @@ export function EnvTableView({
                         value={entry.value}
                         onChange={(e) => onEntryChange(i, 'value', e.target.value)}
                         placeholder={valuePlaceholder(locked, entry.sensitive, entry.value)}
+                        disabled={valueFrozen(entry)}
                         aria-label={`Environment variable value ${i + 1}`}
                       />
                       <Button
@@ -266,6 +275,7 @@ export function EnvTableView({
                     value={entry.value}
                     onChange={(e) => onEntryChange(i, 'value', e.target.value)}
                     placeholder={valuePlaceholder(locked, entry.sensitive, entry.value)}
+                    disabled={valueFrozen(entry)}
                     className="flex-1"
                     aria-label={`Environment variable value ${i + 1}`}
                   />
