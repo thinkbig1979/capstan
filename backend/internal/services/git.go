@@ -527,33 +527,64 @@ func (s *GitService) gitCommandUnredacted(dirPath string, cred gitCreds, args ..
 //
 // An *models.AppError is copied with its message and a string Details masked:
 // a handler renders those fields, not Error(), so wrapping it would leave the
-// token in the response.
+// token in the response. An AppError wrapped further down the chain is masked
+// the same way and handed to errors.As by redactedError.As (agent-os-1vla).
 func redactErr(err error, token string) error {
 	if err == nil || token == "" {
 		return err
 	}
-	if ae, ok := err.(*models.AppError); ok { //nolint:errorlint // only the AppError itself is rendered; a wrapped one is masked through Error() below
-		cp := *ae
-		cp.Message = redactToken(ae.Message, token)
-		if d, ok := ae.Details.(string); ok {
-			cp.Details = redactToken(d, token)
-		}
-		cp.Cause = redactErr(ae.Cause, token)
-		return &cp
+	if ae, ok := err.(*models.AppError); ok { //nolint:errorlint // the AppError itself is copied; a wrapped one is reached through As below
+		return redactAppError(ae, token)
 	}
-	if !strings.Contains(err.Error(), token) {
+	// A wrapped AppError is what a handler's errors.As finds, and it renders
+	// that AppError's fields (agent-os-1vla): As hands back a masked copy.
+	var app *models.AppError
+	if errors.As(err, &app) {
+		app = redactAppError(app, token)
+	} else if !strings.Contains(err.Error(), token) {
 		return err
 	}
-	return &redactedError{msg: redactToken(err.Error(), token), err: err}
+	return &redactedError{msg: redactToken(err.Error(), token), err: err, app: app}
+}
+
+// redactAppError is a copy of ae with token masked in the fields a handler
+// renders, Message and a string Details, and in its Cause.
+func redactAppError(ae *models.AppError, token string) *models.AppError {
+	cp := *ae
+	cp.Message = redactToken(ae.Message, token)
+	if d, ok := ae.Details.(string); ok {
+		cp.Details = redactToken(d, token)
+	}
+	cp.Cause = redactErr(ae.Cause, token)
+	return &cp
 }
 
 type redactedError struct {
 	msg string
 	err error
+	// app is the chain's first AppError with token masked, nil when the
+	// chain holds none.
+	app *models.AppError
 }
 
 func (e *redactedError) Error() string { return e.msg }
+
+// Unwrap hands back the UNMASKED chain, so errors.Is and gitExitCode keep
+// working. errors.As for any type other than *models.AppError reaches the
+// original through it: no renderer may read a field of such a type off a
+// redactErr result, or the token in it is shown (review rv-dm-gitpull F4).
 func (e *redactedError) Unwrap() error { return e.err }
+
+// As answers errors.As for an AppError with the masked copy. errors.As asks
+// this error before it unwraps, so the unmasked original is never reached.
+func (e *redactedError) As(target any) bool {
+	t, ok := target.(**models.AppError)
+	if !ok || e.app == nil {
+		return false
+	}
+	*t = e.app
+	return true
+}
 
 // gitDiagnostic reassembles both halves of a failed git child for an error
 // message.
@@ -1315,6 +1346,9 @@ type placedSibling struct {
 	err error
 	// links is what the stack read through before the pull (stackLinkDeps).
 	links linkSnapshot
+	// outside is a folder whose link lies inside the repository but resolves
+	// outside it when placed: it has no rel, only links (agent-os-vysd).
+	outside bool
 }
 
 // placeSiblings places stacks against top. It runs before the pull when it
@@ -1326,12 +1360,24 @@ func placeSiblings(top, dirPath string, stacks []models.Stack, token string) *si
 		if st.Directory == dirPath {
 			continue
 		}
-		in, err := pathutil.IsContained(top, st.Directory)
-		switch {
-		case err != nil:
+		unsure := func(err error) {
 			p.stacks = append(p.stacks, placedSibling{Stack: st, err: fmt.Errorf("could not tell whether %s is inside the repository: %w", boundedPath(redactToken(st.Directory, token)), err)})
+		}
+		in, err := pathutil.IsContained(top, st.Directory)
+		if err != nil {
+			unsure(err)
 			continue
-		case !in:
+		}
+		if !in {
+			// Not resolving inside, yet its link may be (agent-os-7xpm):
+			// placed by its links alone, so retargeting the link is seen.
+			linkIn, linkErr := stackInRepo(top, st.Directory)
+			switch {
+			case linkErr != nil:
+				unsure(linkErr)
+			case linkIn:
+				p.stacks = append(p.stacks, placedSibling{Stack: st, outside: true, links: snapshotLinks(top, st, token)})
+			}
 			continue
 		}
 		rel, ok, err := repoRel(top, st.Directory, token)
@@ -1359,7 +1405,7 @@ func (p *siblingPlacement) changed(top string, changedFiles []string, token stri
 	var failures []RedeployFailure
 	for _, st := range p.stacks {
 		var rels []string
-		if st.err == nil {
+		if st.err == nil && !st.outside {
 			rels = append(rels, st.rel)
 		}
 		after, ok, afterErr := repoRel(top, st.Directory, token)
@@ -1394,29 +1440,27 @@ func (p *siblingPlacement) changed(top string, changedFiles []string, token stri
 				reason = fmt.Sprintf("%v; %s", st.err, reason)
 			}
 			failures = append(failures, RedeployFailure{StackID: st.ID, Reason: reason})
-		case len(rels) == 0:
+		case len(rels) == 0 && st.err != nil:
+			// An outside folder with no hit is unchanged: a pull cannot
+			// change a file outside the repository, and its link is matched
+			// above.
 			failures = append(failures, RedeployFailure{StackID: st.ID, Reason: st.err.Error()})
 		}
 	}
 	return out, failures
 }
 
-// stackFilesChanged reports whether any changed file matches the stack's
+// stackFilesChangedSince reports whether any changed file matches the stack's
 // compose or env file. changedFiles are repository-top-relative (git's own
 // frame); the stack's files are named relative to its folder, so they are
 // placed under the folder's repository-relative path first (agent-os-4d60).
 // The folder is resolved, not the files: a file deleted by the pull has
 // nothing to resolve. A stack that reads its files through a symlink also
 // matches the link and its target (stackLinkDeps), since git names one or the
-// other, not the stack's own file name (agent-os-juq9, agent-os-9ut3).
-func stackFilesChanged(top string, stack models.Stack, changedFiles []string) (bool, error) {
-	return stackFilesChangedSince(top, stack, changedFiles, linkSnapshot{}, "")
-}
-
-// stackFilesChangedSince is stackFilesChanged that also matches the links the
-// stack read through before the pull (pre): a pull that deletes or replaces a
-// folder link on the way to the compose file leaves nothing to walk to
-// afterwards (agent-os-juq9 review S1).
+// other, not the stack's own file name (agent-os-juq9, agent-os-9ut3), and the
+// links it read through before the pull (pre): a pull that deletes or
+// replaces a folder link on the way to the compose file leaves nothing to
+// walk to afterwards (agent-os-juq9 review S1).
 func stackFilesChangedSince(top string, stack models.Stack, changedFiles []string, pre linkSnapshot, token string) (bool, error) {
 	rel, ok, err := repoRel(top, stack.Directory, token)
 	if err != nil {

@@ -602,7 +602,9 @@ func sinkArgs9wwa(t *testing.T) map[string]bool {
 	}
 	fset := token.NewFileSet()
 	got := map[string]bool{}
-	for _, name := range []string{"git.go", "git_commit.go", "git_history_diff.go"} {
+	// git_pull_linkdeps.go: link targets come from the pulled tree
+	// (agent-os-zcf9 follow-up d, review rv-dm-gitpull F3).
+	for _, name := range []string{"git.go", "git_commit.go", "git_history_diff.go", "git_pull_linkdeps.go"} {
 		src, err := packageSources.ReadFile(name)
 		require.NoError(t, err)
 		file, err := parser.ParseFile(fset, name, src, 0)
@@ -664,8 +666,10 @@ func safeArg9wwa(a ast.Expr, safeCalls map[string]bool) bool {
 		if safeCalls[name] {
 			// redactToken(x, "") masks nothing: the second argument must be
 			// the credential's token.
+			// Nor does a mask applied after quoting: %q and boundedPath
+			// escape or cut the token first (agent-os-zcf9).
 			if name == "redactToken" || name == "redactErr" || name == "redactAll" {
-				return len(a.Args) == 2 && isToken9wwa(a.Args[1])
+				return len(a.Args) == 2 && isToken9wwa(a.Args[1]) && !quotesUnmasked9wwa(a.Args[0], safeCalls)
 			}
 			return true
 		}
@@ -677,6 +681,141 @@ func safeArg9wwa(a ast.Expr, safeCalls map[string]bool) bool {
 		}
 	}
 	return false
+}
+
+// quoteCalls9wwa quote or cut their operand. fmt.Sprintf/Errorf with %q is a
+// sink of its own, so its operands are checked where it is called.
+var quoteCalls9wwa = map[string]bool{
+	"boundedPath": true, "strconv.Quote": true, "strconv.QuoteToASCII": true,
+	"strconv.QuoteToGraphic": true, "strconv.AppendQuote": true,
+}
+
+// quotesUnmasked9wwa reports whether e holds a quoting call whose operand is
+// not itself safe: redactToken(boundedPath(x), token) masks after the quote.
+func quotesUnmasked9wwa(e ast.Expr, safeCalls map[string]bool) bool {
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || found {
+			return !found
+		}
+		name := ""
+		switch f := call.Fun.(type) {
+		case *ast.Ident:
+			name = f.Name
+		case *ast.SelectorExpr:
+			if x, ok := f.X.(*ast.Ident); ok {
+				name = x.Name + "." + f.Sel.Name
+			}
+		}
+		if quoteCalls9wwa[name] {
+			for _, a := range call.Args {
+				if !safeArg9wwa(a, safeCalls) {
+					found = true
+				}
+			}
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// The census tells a mask applied before quoting from one applied after
+// (agent-os-zcf9; m1 is the placeSiblings shape the PR #737 review planted).
+func TestSafeArgMaskAfterQuote_zcf9(t *testing.T) {
+	safeCalls := map[string]bool{"redactToken": true, "redactErr": true, "redactAll": true, "boundedPathErrShown": true, "len": true}
+	cases := map[string]bool{
+		`boundedPath(redactToken(st.Directory, token))`:                                       true,
+		`redactErr(fmt.Errorf("x %s: %w", boundedPath(redactToken(abs, token)), err), token)`: true,
+		`redactToken(st.Directory, token)`:                                                    true,
+		`redactToken(boundedPath(st.Directory), token)`:                                       false, // m1
+		`redactToken(strconv.Quote(name), cred.token)`:                                        false,
+		`redactErr(fmt.Errorf("x %s: %w", boundedPath(abs), err), token)`:                     false,
+		`redactToken("a " + boundedPath(st.Directory), token)`:                                false,
+		`redactToken(strconv.QuoteToASCII(redactToken(name, token)), token)`:                  true,
+		`redactToken(st.Directory, "")`:                                                       false,
+	}
+	for src, want := range cases {
+		e, err := parser.ParseExpr(src)
+		require.NoError(t, err)
+		assert.Equal(t, want, safeArg9wwa(e, safeCalls), src)
+	}
+}
+
+// TestNoEmptyTokenArg_zcf9: no call in the pull's production files passes a
+// literal "" for a parameter named token. "" masks nothing, and the census
+// accepts any parameter named token, so it cannot see what a caller passed
+// (agent-os-zcf9). Read through go:embed, so an -overlay mutant is seen.
+func TestNoEmptyTokenArg_zcf9(t *testing.T) {
+	scanned := map[string]bool{"git.go": true, "git_commit.go": true, "git_history_diff.go": true, "git_pull_linkdeps.go": true}
+	fset := token.NewFileSet()
+	var parsed []*ast.File
+	// function name -> index of its token parameter, over every non-test
+	// file of the package: redactToken itself is declared outside scanned.
+	tokenAt := map[string]int{}
+	entries, err := packageSources.ReadDir(".")
+	require.NoError(t, err)
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		src, err := packageSources.ReadFile(name)
+		require.NoError(t, err)
+		f, err := parser.ParseFile(fset, name, src, 0)
+		require.NoError(t, err)
+		if scanned[name] {
+			parsed = append(parsed, f)
+		}
+		for _, d := range f.Decls {
+			fn, ok := d.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			i := 0
+			for _, field := range fn.Type.Params.List {
+				names := field.Names
+				if len(names) == 0 {
+					i++
+					continue
+				}
+				for _, n := range names {
+					if n.Name == "token" {
+						tokenAt[fn.Name.Name] = i
+					}
+					i++
+				}
+			}
+		}
+	}
+	require.Contains(t, tokenAt, "redactToken", "positive control: the token-parameter index found no redactToken")
+	require.Len(t, parsed, len(scanned), "every scanned file was read")
+	var bad []string
+	for _, f := range parsed {
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			name := ""
+			switch fn := call.Fun.(type) {
+			case *ast.Ident:
+				name = fn.Name
+			case *ast.SelectorExpr:
+				name = fn.Sel.Name
+			}
+			i, ok := tokenAt[name]
+			if !ok || i >= len(call.Args) {
+				return true
+			}
+			if lit, ok := call.Args[i].(*ast.BasicLit); ok && lit.Value == `""` {
+				bad = append(bad, fset.Position(call.Pos()).String()+" "+name)
+			}
+			return true
+		})
+	}
+	assert.Empty(t, bad, `a literal "" token masks nothing; pass the credential's token`)
 }
 
 // TestSinkArgsCensus9wwa is the consumer side of TestRawGitCallers9wwa:
@@ -767,7 +906,7 @@ func TestSinkArgsCensus9wwa(t *testing.T) {
 		"git_commit.go:selectCommitPaths:f":                            request,
 		"git.go:pullCLI:s.dirtyPullMessage(dirPath, cred)":             masked + ": dirtyPullMessage masks each path before quoting it",
 		"git.go:submoduleDriftMessage:p":                               masked + ": its one caller passes redactAll(paths)",
-		"git_history_diff.go:boundedPath:p[:maxErrPathBytes]":          masked + ": every caller in these three files passes a masked or non-repository path (git_pull_linkdeps.go does not; a follow-up)",
+		"git_history_diff.go:boundedPath:p[:maxErrPathBytes]":          masked + ": every caller in these four files passes a masked or non-repository path",
 		"git_history_diff.go:historyEnvRule:args":                      masked + ": unknown() masks each string and error in args first",
 		`git_history_diff.go:historyEnvRule:"Hiding every file but the compose files in the " + view + ": " + msg`: masked + ": view and msg are literals at every call",
 		"git_commit.go:gitRunUnredacted:gitDiagnostic(redactToken(stdout, cred.token), stderr)":                    masked + ": stderr is redacted on read",

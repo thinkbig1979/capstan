@@ -609,7 +609,145 @@ func pullLockPathProblems(t *testing.T, src string) []string {
 	if !sawLock {
 		problems = append(problems, "the locked path does not take the lock with lockRepoStacks")
 	}
+	return append(problems, pullDBReadProblems(pullBody(file), lockBlock)...)
+}
+
+func pullBody(file *ast.File) *ast.BlockStmt {
+	for _, decl := range file.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name.Name == "PullVerified" && fn.Recv != nil {
+			return fn.Body
+		}
+	}
+	return nil
+}
+
+// isDBCall is s.db.<method>(...).
+func isDBCall(n ast.Node) bool {
+	call, ok := n.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	db, ok := sel.X.(*ast.SelectorExpr)
+	if !ok || db.Sel.Name != "db" {
+		return false
+	}
+	recv, ok := db.X.(*ast.Ident)
+	return ok && recv.Name == "s"
+}
+
+func isIdent(e ast.Expr, name string) bool {
+	id, ok := e.(*ast.Ident)
+	return ok && id.Name == name
+}
+
+// pullDBReadProblems widens the guard to the other forms of a post-lock
+// read (agent-os-j3lp, mutants mC and mD of review r2-88xz): no s.db call
+// inside the lock block; every other s.db call sits in an `if !locked`
+// body (that exact condition) or in the default clause of the switch that
+// first asks `placement != nil` (the unlocked sibling read); and
+// lockedStacks is only ever appended to inside a range over the first
+// result of s.lockRepoStacks.
+func pullDBReadProblems(body, lockBlock *ast.BlockStmt) []string {
+	if body == nil {
+		return nil
+	}
+	lockedFrom := map[string]bool{}
+	ast.Inspect(body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || len(as.Rhs) != 1 || len(as.Lhs) == 0 {
+			return true
+		}
+		if call, ok := as.Rhs[0].(*ast.CallExpr); ok {
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "lockRepoStacks" {
+				if id, ok := as.Lhs[0].(*ast.Ident); ok {
+					lockedFrom[id.Name] = true
+				}
+			}
+		}
+		return true
+	})
+	var problems []string
+	var stack []ast.Node
+	ast.Inspect(body, func(n ast.Node) bool {
+		if n == nil {
+			stack = stack[:len(stack)-1]
+			return true
+		}
+		if isDBCall(n) && !dbReadAllowed(stack, lockBlock) {
+			problems = append(problems, "an s.db read on the locked path (only under `if !locked` or the unlocked sibling read)")
+		}
+		if as, ok := n.(*ast.AssignStmt); ok {
+			for _, l := range as.Lhs {
+				if isIdent(l, "lockedStacks") && !lockedAppendFromLock(as, stack, lockedFrom) {
+					problems = append(problems, "lockedStacks is assigned from something other than lockRepoStacks' result")
+				}
+			}
+		}
+		stack = append(stack, n)
+		return true
+	})
 	return problems
+}
+
+func dbReadAllowed(stack []ast.Node, lockBlock *ast.BlockStmt) bool {
+	for i := len(stack) - 1; i >= 0; i-- {
+		switch n := stack[i].(type) {
+		case *ast.BlockStmt:
+			if n == lockBlock {
+				return false
+			}
+			if i > 0 {
+				if ifs, ok := stack[i-1].(*ast.IfStmt); ok && ifs.Body == n {
+					if u, ok := ifs.Cond.(*ast.UnaryExpr); ok && u.Op == token.NOT && isIdent(u.X, "locked") {
+						return true
+					}
+				}
+			}
+		case *ast.CaseClause:
+			if n.List != nil || i < 2 {
+				continue
+			}
+			sw, ok := stack[i-2].(*ast.SwitchStmt)
+			if !ok || sw.Tag != nil || len(sw.Body.List) == 0 {
+				continue
+			}
+			first, ok := sw.Body.List[0].(*ast.CaseClause)
+			if !ok || len(first.List) != 1 {
+				continue
+			}
+			if b, ok := first.List[0].(*ast.BinaryExpr); ok && b.Op == token.NEQ && isIdent(b.X, "placement") && isIdent(b.Y, "nil") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// lockedAppendFromLock is `lockedStacks = append(lockedStacks, v)` inside a
+// range whose value is v, over a list lockRepoStacks returned.
+func lockedAppendFromLock(as *ast.AssignStmt, stack []ast.Node, lockedFrom map[string]bool) bool {
+	if len(as.Lhs) != 1 || len(as.Rhs) != 1 || as.Tok != token.ASSIGN {
+		return false
+	}
+	call, ok := as.Rhs[0].(*ast.CallExpr)
+	if !ok || !isIdent(call.Fun, "append") || len(call.Args) != 2 || !isIdent(call.Args[0], "lockedStacks") {
+		return false
+	}
+	v, ok := call.Args[1].(*ast.Ident)
+	if !ok {
+		return false
+	}
+	for i := len(stack) - 1; i >= 0; i-- {
+		if r, ok := stack[i].(*ast.RangeStmt); ok && isIdent(r.Value, v.Name) {
+			x, ok := r.X.(*ast.Ident)
+			return ok && lockedFrom[x.Name]
+		}
+	}
+	return false
 }
 
 // The redeploy set on the locked path comes from the list that was locked.
@@ -637,12 +775,61 @@ func TestPullVerified_SiblingsRedeploySetGuardSeesTheShapes(t *testing.T) {
 	}{
 		{"fixed", head + `func (s *GitService) PullVerified() {
 	if s.opLock != nil {
-		st, release, _ := s.lockRepoStacks("", "")
+		repoStacks, release, _ := s.lockRepoStacks("", "")
 		defer release()
-		_ = st
+		for _, st := range repoStacks {
+			lockedStacks = append(lockedStacks, st)
+		}
 	}
-	_, _ = s.db.ListStacksByDirectory("")
+	switch {
+	case placement != nil:
+	default:
+		all, _ := s.db.ListStacks()
+		_ = all
+	}
+	stacks := lockedStacks
+	if !locked {
+		stacks, _ = s.db.ListStacksByDirectory("")
+	}
+	StoreLifecycleStatus(s.db, "", nil)
 }`, 0},
+		// agent-os-j3lp mC: the redeploy-set read reached on the locked path.
+		{"mC: read also under the lock", head + `func (s *GitService) PullVerified() {
+	if s.opLock != nil {
+		_, release, _ := s.lockRepoStacks("", "")
+		defer release()
+	}
+	stacks := lockedStacks
+	if !locked || dirPath != "" {
+		stacks, _ = s.db.ListStacksByDirectory("")
+	}
+}`, 1},
+		// agent-os-j3lp mD: a fresh read inside the lock builds the set.
+		{"mD: fresh ListStacks under the lock", head + `func (s *GitService) PullVerified() {
+	if s.opLock != nil {
+		_, release, _ := s.lockRepoStacks("", "")
+		defer release()
+		all, _ := s.db.ListStacks()
+		for _, st := range all {
+			lockedStacks = append(lockedStacks, st)
+		}
+	}
+}`, 2},
+		{"lockedStacks assigned wholesale", head + `func (s *GitService) PullVerified() {
+	if s.opLock != nil {
+		repoStacks, release, _ := s.lockRepoStacks("", "")
+		defer release()
+		lockedStacks = other(repoStacks)
+	}
+}`, 1},
+		{"sibling read outside its switch", head + `func (s *GitService) PullVerified() {
+	if s.opLock != nil {
+		_, release, _ := s.lockRepoStacks("", "")
+		defer release()
+	}
+	all, _ := s.db.ListStacks()
+	_ = all
+}`, 1},
 		{"second read under the lock", head + `func (s *GitService) PullVerified() {
 	if s.opLock != nil {
 		_, release, _ := s.lockRepoStacks("", "")
@@ -650,7 +837,7 @@ func TestPullVerified_SiblingsRedeploySetGuardSeesTheShapes(t *testing.T) {
 		stacks, _ := s.db.ListStacksByDirectory("")
 		_ = stacks
 	}
-}`, 1},
+}`, 2}, // both the name rule and the s.db rule fire
 		{"lock taken some other way", head + `func (s *GitService) PullVerified() {
 	if s.opLock != nil {
 		release, _ := s.lockRepo("", "")
