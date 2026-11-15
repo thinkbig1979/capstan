@@ -18,6 +18,7 @@ BACKUP=sftp:user:SEKRIT3mjwC@host
 REMOTE=user:SEKRIT3mjwD@host
 QUOTED="ftp:bob:SEKRIT3mjwE@nas.local:/share"
 NOTES="a" MIRROR=user:SEKRIT3mjwF@host
+ESCAPED="{\"password\":\"SEKRIT3mjwG\"}"
 `
 
 func TestRedactEnvResponse_3mjw_JSONAndOpaqueCredentialsBlanked(t *testing.T) {
@@ -32,12 +33,12 @@ func TestRedactEnvResponse_3mjw_JSONAndOpaqueCredentialsBlanked(t *testing.T) {
 		assert.True(t, e.Sensitive, "row %q is flagged", e.Key)
 		assert.NotContains(t, e.Value+e.Quote+e.InlineComment, "SEKRIT", "row %q is blanked", e.Key)
 	}
-	require.Equal(t, 6, seen)
+	require.Equal(t, 7, seen)
 }
 
 func TestRedactGlobalEnvVars_3mjw_JSONAndOpaqueCredentialsBlanked(t *testing.T) {
 	vars, _ := globalEnvVars((&EnvHandler{}).parseEnvFile(envSecretShapes3mjw))
-	require.Len(t, vars, 6)
+	require.Len(t, vars, 7)
 	redactGlobalEnvVars(vars, envSecretShapes3mjw)
 	for _, v := range vars {
 		assert.NotEmpty(t, v["key"])

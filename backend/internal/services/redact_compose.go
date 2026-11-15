@@ -87,8 +87,10 @@ func hasOpaqueCredential(value string) bool {
 	return m != nil && !digestAlgorithmRe.MatchString(m[1])
 }
 
-// jsonFieldNameRe is a JSON object field name and its colon.
-var jsonFieldNameRe = regexp.MustCompile(`"([^"\\]{1,128})"\s*:`)
+// jsonFieldNameRe is a JSON object field name and its colon, its quotes
+// optionally backslash-escaped: JSON written inside a double-quoted .env
+// value reads {\"password\":\"x\"} (review of run/mask2, D1).
+var jsonFieldNameRe = regexp.MustCompile(`\\?"([^"\\]{1,128})\\?"\s*:`)
 
 // hasSensitiveJSONField reports whether value holds a JSON field whose name
 // IsSensitiveEnvKey matches: {"password":"x"}, a service account's

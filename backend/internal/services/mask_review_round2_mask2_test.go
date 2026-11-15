@@ -23,17 +23,24 @@ func TestHasURLUserinfo_mask2_EncodedMarkersStayLinear(t *testing.T) {
 }
 
 // Past maxEncodedNestedURLs markers a token is masked from there on: fail
-// closed, as the restic prefix walk does past its depth.
+// closed, as the restic prefix walk does past its depth. The nested URL past
+// the cap carries no credential, so only the cap can mask it.
 func TestRedactURLUserinfoInText_mask2_EncodedMarkersPastCapFailClosed(t *testing.T) {
-	in := "https://p/?u=" + strings.Repeat("x%3a%2f%2fhost%2f&", maxEncodedNestedURLs) + "y%3a%2f%2fuser%3aSEKRIT%40host"
-	got := RedactURLUserinfoInText(in)
-	assert.False(t, strings.Contains(got, "SEKRIT"), "the credential past the cap is shown")
-	assert.True(t, HasURLUserinfo(in))
+	head := "https://p/?u=" + strings.Repeat("x%3a%2f%2fhost%2f&", maxEncodedNestedURLs) + "y%3a%2f%2f"
+	assert.Equal(t, head+userinfoPlaceholder, RedactURLUserinfoInText(head+"plainhost%2fpath"))
+	assert.True(t, HasURLUserinfo(head+"plainhost"))
+	// One marker fewer is read in full and left as it is.
+	under := "https://p/?u=" + strings.Repeat("x%3a%2f%2fhost%2f&", maxEncodedNestedURLs-1) + "y%3a%2f%2fplainhost"
+	assert.Equal(t, under, RedactURLUserinfoInText(under))
 }
 
 // Review of run/mask2, F2: a quoted value left open was followed by joining
-// every later line, once per such value, so 4000 open tails allocated 411 MB.
-// Bounded by bytes allocated, not wall clock.
+// every later line, once per such value, so 4000 open tails allocated 431 MB.
+// Bounded by how the bytes allocated GROW, eight times the lines: about 8x
+// when linear, 64x when quadratic. Not an absolute bytes-per-input bound: under
+// -race sync.Pool drops what is put back, so every regexp match allocates a
+// fresh machine and the absolute figure says nothing (4223x the input under
+// -race on the fixed code, against 66x without).
 func TestStackSecretValues_mask2_OpenValuesAllocateLinearly(t *testing.T) {
 	for name, line := range map[string]string{
 		"open tail value":       "NOTES=\"a\" DB_PASSWORD='x",
@@ -41,14 +48,18 @@ func TestStackSecretValues_mask2_OpenValuesAllocateLinearly(t *testing.T) {
 		"open tail, other kind": "NOTES='a' DB_PASSWORD=\"x",
 	} {
 		t.Run(name, func(t *testing.T) {
-			env := strings.Repeat(line+"\n", 4000)
-			dir := t.TempDir()
-			require.NoError(t, os.WriteFile(filepath.Join(dir, ".env"), []byte(env), 0o600))
-			stack := models.Stack{Directory: dir, ProjectName: "p"}
-			allocated := allocatedBuwq(func() { StackSecretValues(stack, "") })
-			ratio := float64(allocated) / float64(len(env))
-			t.Logf("%d bytes of env, %d bytes allocated (%.1fx)", len(env), allocated, ratio)
-			assert.Less(t, ratio, 400.0, "allocated %d bytes for %d: not linear", allocated, len(env))
+			alloc := func(lines int) uint64 {
+				dir := t.TempDir()
+				require.NoError(t, os.WriteFile(filepath.Join(dir, ".env"), []byte(strings.Repeat(line+"\n", lines)), 0o600))
+				stack := models.Stack{Directory: dir, ProjectName: "p"}
+				return allocatedBuwq(func() { StackSecretValues(stack, "") })
+			}
+			small, large := alloc(1000), alloc(8000)
+			growth := float64(large) / float64(max(small, 1))
+			t.Logf("1000 lines: %d bytes allocated, 8000 lines: %d, growth %.1fx", small, large, growth)
+			// Measured: 8.1-9.0x plain and 2.9-6.9x under -race on the fix; the
+			// quadratic code was 59-60x plain and 16.1-30.4x under -race.
+			assert.Less(t, growth, 12.0, "8x the lines allocated %.1fx as much: not linear", growth)
 		})
 	}
 }
