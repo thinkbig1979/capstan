@@ -5,7 +5,7 @@
  * offers no search box; unlocked, both are as before.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { useAuthStore } from '@/stores/authStore'
@@ -51,6 +51,19 @@ describe('AuditLogContent while locked (agent-os-3ajm)', () => {
     for (const call of mockGetAuditLog.mock.calls) {
       expect(call[2]?.search ?? '').toBe('')
     }
+  })
+
+  it('a search typed unlocked is not sent once the session locks (review R2-2)', async () => {
+    useEnvUnlockStore.getState().unlock('tok')
+    mockGetAuditLog.mockResolvedValue({ entries: [{ ...row, detail: '' }], total: 1, page: 1, pageSize: 50 })
+    renderPanel()
+
+    fireEvent.change(await screen.findByPlaceholderText('Search detail or action'), { target: { value: 'guess' } })
+    await waitFor(() => expect(mockGetAuditLog.mock.calls.at(-1)?.[2]?.search).toBe('guess'))
+
+    act(() => useEnvUnlockStore.getState().lock())
+    // The latest request, the one the locked view reads, carries no search.
+    await waitFor(() => expect(mockGetAuditLog.mock.calls.at(-1)?.[2]?.search ?? '').toBe(''))
   })
 
   it('shows details and the search box once unlocked', async () => {
