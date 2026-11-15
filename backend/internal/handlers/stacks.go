@@ -172,11 +172,13 @@ func (h *StacksHandler) List(c *gin.Context) {
 	})
 }
 
-// composeUnreadable reports whether a stack's compose file can't be stat'd
-// (missing/unreadable dir or file) — the condition that made `docker compose ps`
-// return "unknown". Used to mark a container-less stack as "error" rather than
-// "stopped" so a broken stack surfaces instead of hiding among intentionally
-// stopped ones.
+// composeUnreadable reports whether a stack's compose file can't be stat'd: a
+// missing file or folder, or a symlink that dangles. It does not detect a file
+// that exists but cannot be read (permission denied): stat needs no read
+// permission on the file, and Capstan runs as root, which reads it anyway
+// (review F4). Used to mark a stack as "error" rather than its containers' or
+// "stopped" status, so a broken stack surfaces instead of hiding among
+// intentionally stopped or running ones (agent-os-n9kr).
 func composeUnreadable(s models.Stack) bool {
 	_, err := os.Stat(filepath.Join(s.Directory, s.ComposeFile))
 	return err != nil
@@ -187,9 +189,17 @@ func composeUnreadable(s models.Stack) bool {
 // reconstructed container list; a container-less project is "error" when its
 // compose file is unreadable (what `docker compose ps` surfaced as "unknown") or
 // "stopped" otherwise.
+//
+// A live project whose compose file is unreadable is "error" too, with its
+// containers still listed: the scanner keeps such a row while containers run
+// (agent-os-epc5), and its containers' own "running" would hide that Capstan
+// can no longer manage the stack (agent-os-n9kr, fail closed).
 func applyLiveStatus(stack *models.Stack, statuses map[string]services.LiveStatus) {
 	if ls, ok := statuses[stack.ProjectName]; ok && stack.ProjectName != "" {
 		stack.Status = ls.Status
+		if composeUnreadable(*stack) {
+			stack.Status = string(services.StackStatusError)
+		}
 		stack.Containers = ls.Containers
 		stack.OneOffContainers = ls.OneOffs
 		return

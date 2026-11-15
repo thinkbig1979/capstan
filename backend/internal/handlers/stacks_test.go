@@ -899,9 +899,14 @@ func TestStacksHandler_Get_ContainerlessStackEmitsEmptyArray(t *testing.T) {
 func TestStacksHandler_StatusStaleDisclosure(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
+	// A real compose file: a live project whose file is unreadable reads
+	// "error" (agent-os-n9kr), which is not what this test is about.
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "stack1"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "stack1", "compose.yaml"), []byte("services: {}\n"), 0o600))
 	stored := models.Stack{
 		ID:          "test~stack1:default",
-		Directory:   "/tmp/test/stack1",
+		Directory:   filepath.Join(root, "stack1"),
 		ComposeFile: "compose.yaml",
 		ProjectName: "stack1-default",
 		Status:      "running",
@@ -917,7 +922,7 @@ func TestStacksHandler_StatusStaleDisclosure(t *testing.T) {
 		createTestDirectory(t, db, stored.Directory)
 		require.NoError(t, db.UpsertStack(stored))
 
-		handler := NewStacksHandler(docker, nil, nil, db, &config.Config{StacksDir: "/tmp/test"}, nil, services.NewOperationLock())
+		handler := NewStacksHandler(docker, nil, nil, db, &config.Config{StacksDir: root}, nil, services.NewOperationLock())
 		router := gin.New()
 		router.GET("/stacks", handler.List)
 		router.GET("/stacks/:id", handler.Get)

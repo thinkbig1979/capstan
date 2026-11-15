@@ -16,7 +16,7 @@ import (
 // still counted them. Producer: Docker's events and container lists for a
 // compose project, which include oneoff=True containers. Consumers:
 // stackEventFor's stack_status emit (written into the stacks list by
-// useStackEvents) and GetContainersForStack (the stack metrics stream).
+// useStackEvents; since agent-os-4ato no event carries a status) and GetContainersForStack (the stack metrics stream).
 
 func projectEvent(id string, action events.Action, oneOff string) events.Message {
 	return events.Message{
@@ -55,9 +55,11 @@ func TestMonitorFebs_OneOffLifecycleEventDoesNotSetTheStackStatus(t *testing.T) 
 		"a one-off's die/start must reach the stack as a container_event (a list refetch), never as a stack_status")
 }
 
-func TestMonitorFebs_ServiceContainerEventStillSetsTheStackStatus(t *testing.T) {
+// A service container's die is a container_event too since agent-os-4ato: the
+// refetched list, not the event, carries the status (monitor_aggregate_4ato_test.go).
+func TestMonitorFebs_ServiceContainerEventIsAContainerEvent(t *testing.T) {
 	got := eventsFor(t, projectEvent("aaaaaaaaaaaa0003", events.ActionDie, "False"))
-	assert.Equal(t, []string{"stack_status|shop|stopped"}, got, "control: a service container's die still sets the status")
+	assert.Equal(t, []string{"container_event|shop|"}, got, "a service container's die reaches the stack as a refetch")
 }
 
 func TestMonitorFebs_GetContainersForStackLeavesOneOffsOut(t *testing.T) {

@@ -275,8 +275,13 @@ func ImageRepoDigests(t *testing.T, ref string) []string {
 	return digests
 }
 
-// containerState returns the State string from `docker compose ps --format json`
+// containerState returns the State string from `docker compose ps -a --format json`
 // for the named service, or an empty string if the service/project is not found.
+// -a lists exited containers too, so a failed wait names their real state
+// ("exited") rather than "" (agent-os-b6u8); "not running" reads the same either way.
+// -a also lists `compose run` one-offs of the service (plain ps does not), so a
+// row labelled com.docker.compose.oneoff=True is skipped: the state asked for is
+// the service container's, and a one-off left running must not read as it.
 func containerState(t *testing.T, dir, project, service string) string {
 	t.Helper()
 
@@ -285,7 +290,7 @@ func containerState(t *testing.T, dir, project, service string) string {
 		"docker", "compose",
 		"-p", project,
 		"-f", composePath,
-		"ps", "--format", "json",
+		"ps", "-a", "--format", "json",
 	)
 	cmd.Dir = dir
 
@@ -304,8 +309,12 @@ func containerState(t *testing.T, dir, project, service string) string {
 		var entry struct {
 			Service string `json:"Service"`
 			State   string `json:"State"`
+			Labels  string `json:"Labels"`
 		}
 		if jsonErr := json.Unmarshal([]byte(line), &entry); jsonErr != nil {
+			continue
+		}
+		if isOneOffPSRow(entry.Labels) {
 			continue
 		}
 		if strings.EqualFold(entry.Service, service) {
@@ -313,6 +322,17 @@ func containerState(t *testing.T, dir, project, service string) string {
 		}
 	}
 	return ""
+}
+
+// isOneOffPSRow reports whether a `compose ps --format json` row's Labels
+// (a comma-joined key=value list) mark a `compose run` one-off.
+func isOneOffPSRow(labels string) bool {
+	for _, kv := range strings.Split(labels, ",") {
+		if kv == "com.docker.compose.oneoff=True" {
+			return true
+		}
+	}
+	return false
 }
 
 // sanitizeChars lowercases name and replaces every character outside

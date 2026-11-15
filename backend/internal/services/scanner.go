@@ -20,7 +20,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/compose-spec/compose-go/v2/dotenv"
 	"github.com/compose-spec/compose-go/v2/loader"
 	"github.com/compose-spec/compose-go/v2/template"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
@@ -391,13 +390,15 @@ func stackDotEnv(dir string) map[string]string {
 		return map[string]string{}
 	}
 
-	environment, err := dotenv.GetEnvFromFile(map[string]string{}, []string{envPath})
+	envs, err := resolveComposeEnv(models.Stack{Directory: dir}, "", composeEnvScannedName)
 	if err != nil {
+		// err is not logged: compose-go quotes the offending line, which can
+		// be a secret (resolveComposeEnv's doc).
 		slog.Warn("Could not parse the stack's .env; compose project name resolved without it",
-			"file", envPath, "error", err)
+			"file", envPath)
 		return map[string]string{}
 	}
-	return environment
+	return envs[0]
 }
 
 // StackIDRootPrefix returns the root component of a stack ID.

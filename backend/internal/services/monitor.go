@@ -262,11 +262,11 @@ func unassociatedStackEvent(action, containerID string, ts time.Time) (models.St
 //     point — dropping telemetry because a container has no stack and dropping it
 //     because the database is broken must not look the same.
 //
-// A one-off container (`docker compose run`, oneOff) does not count toward the
-// stack's status (agent-os-dn1z), so its lifecycle actions stay a
-// container_event: the frontend refetches the stack list on one, and the
-// server's status leaves one-offs out (agent-os-febs).
-func (s *MonitorService) stackEventFor(action, containerID, projectName string, oneOff bool, ts time.Time) (models.StackEvent, bool) {
+// Every lifecycle action of a container in a known stack is a container_event:
+// one container's action is not the stack's status (agent-os-4ato). The
+// frontend refetches the stack list on one, and the server's status counts
+// every service container and leaves one-offs out (agent-os-dn1z, febs).
+func (s *MonitorService) stackEventFor(action, containerID, projectName string, ts time.Time) (models.StackEvent, bool) {
 	if projectName == "" {
 		return unassociatedStackEvent(action, containerID, ts)
 	}
@@ -297,30 +297,19 @@ func (s *MonitorService) stackEventFor(action, containerID, projectName string, 
 		}
 	}
 
-	stackEvent := models.StackEvent{
+	// Every action, one-off or not, is a container_event. One container's
+	// action does not say what the stack is: a die on one of three services
+	// leaves it partial, not stopped. The client refetches the stack list and
+	// the stack on a container_event, and the server derives the status from
+	// all of the project's containers, leaving one-offs out (agent-os-4ato,
+	// agent-os-febs).
+	return models.StackEvent{
 		Type:        "container_event",
 		StackID:     stackID,
 		ContainerID: containerID,
 		Event:       action,
 		Timestamp:   ts,
-	}
-	if oneOff {
-		return stackEvent, true
-	}
-
-	switch action {
-	case "start", "restart", "unpause":
-		stackEvent.Type = "stack_status"
-		stackEvent.Status = string(StackStatusRunning)
-	case "stop", "die", "kill":
-		stackEvent.Type = "stack_status"
-		stackEvent.Status = string(StackStatusStopped)
-	case "pause":
-		stackEvent.Type = "stack_status"
-		stackEvent.Status = string(StackStatusPaused)
-	}
-
-	return stackEvent, true
+	}, true
 }
 
 func (s *MonitorService) ListenEvents(ctx context.Context) (<-chan models.StackEvent, error) {
@@ -432,7 +421,7 @@ func (s *MonitorService) forwardEvents(ctx context.Context, src eventsSource, op
 			containerLabels := event.Actor.Attributes
 			projectName := containerLabels["com.docker.compose.project"]
 
-			stackEvent, ok := s.stackEventFor(action, containerID, projectName, isOneOffContainer(containerLabels), time.Unix(event.Time, 0))
+			stackEvent, ok := s.stackEventFor(action, containerID, projectName, time.Unix(event.Time, 0))
 			if !ok {
 				continue
 			}

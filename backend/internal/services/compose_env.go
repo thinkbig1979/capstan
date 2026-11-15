@@ -38,6 +38,12 @@ const (
 	// returns one map per file chain, {global.env, .env} and
 	// {global.env, EnvFile}, so a value set in both is learned from each.
 	composeEnvSuperset
+
+	// composeEnvScannedName is what the scanner interpolates a compose file's
+	// top-level `name:` with: the project directory's .env alone, with no
+	// process environment, so the scanned name is a pure function of what is
+	// on disk (scanner.go stackDotEnv). A file compose-go rejects fails here.
+	composeEnvScannedName
 )
 
 // composeEnvFileChains returns the env files resolveComposeEnv reads, as the
@@ -49,6 +55,9 @@ func composeEnvFileChains(st models.Stack, globalEnvPath string, mode composeEnv
 
 	if mode == composeEnvSuperset {
 		return supersetEnvFileChains(globalEnvPath, dotEnv, envFile), nil
+	}
+	if mode == composeEnvScannedName {
+		return [][]string{{dotEnv}}, nil
 	}
 
 	var files []string
@@ -107,9 +116,11 @@ func resolveComposeEnv(st models.Stack, globalEnvPath string, mode composeEnvMod
 	}
 
 	processEnv := map[string]string{}
-	for _, kv := range dockerEnv() {
-		if k, v, ok := strings.Cut(kv, "="); ok {
-			processEnv[k] = v
+	if mode != composeEnvScannedName {
+		for _, kv := range dockerEnv() {
+			if k, v, ok := strings.Cut(kv, "="); ok {
+				processEnv[k] = v
+			}
 		}
 	}
 
@@ -118,7 +129,7 @@ func resolveComposeEnv(st models.Stack, globalEnvPath string, mode composeEnvMod
 	for _, files := range chains {
 		env, err := dotenv.GetEnvFromFile(processEnv, files)
 		if err != nil {
-			if mode == composeEnvExact {
+			if mode != composeEnvSuperset {
 				return nil, err
 			}
 			faults = append(faults, err)

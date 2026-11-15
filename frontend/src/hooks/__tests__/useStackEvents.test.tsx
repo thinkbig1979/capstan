@@ -205,28 +205,78 @@ describe('useStackEvents update-completion invalidation', () => {
   })
 })
 
-// agent-os-xjzr: a stack served with statusStale (live read failed) whose status
-// a stack_status frame then overwrites with a value from Docker's event stream
-// must lose the flag, or the "may be out of date" note outlives its cause.
-// Two-sided: a stack the frame did not name keeps its flag.
-describe('useStackEvents stack_status clears statusStale', () => {
-  it('clears statusStale on the stack the frame names and only that one', () => {
+// agent-os-4ato: a stack_status frame named one container's action, and its
+// status was written into the stacks-list row, so one dead service of three read
+// "stopped" (truth: partial). The backend no longer sends one; a frame that
+// still arrives refetches the list instead, so the row only ever shows the
+// status the server derived from all the project's containers. That refetch is
+// also what clears statusStale (agent-os-xjzr): the list is re-read live.
+describe('useStackEvents stack_status refetches instead of writing the row', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('never writes the frame status into the list and refetches the list, the stack and the stats', () => {
     renderHook(() => useStackEvents())
 
-    capturedOnMessage!({ type: 'stack_status', stackId: 's1', status: 'running', timestamp: '' })
+    capturedOnMessage!({ type: 'stack_status', stackId: 's1', status: 'stopped', timestamp: '' })
 
-    const call = vi.mocked(queryClient.setQueryData).mock.calls.find(
-      ([key]) => JSON.stringify(key) === JSON.stringify(queryKeys.stacks()),
-    )
-    expect(call).toBeDefined()
-    const updater = call![1] as (old: unknown) => Array<{ id: string; status: string; statusStale?: boolean }>
-    const next = updater([
-      { id: 's1', status: 'stopped', statusStale: true },
-      { id: 's2', status: 'stopped', statusStale: true },
-    ])
-    expect(next[0]).toMatchObject({ id: 's1', status: 'running' })
-    expect(next[0].statusStale).not.toBe(true)
-    expect(next[1]).toMatchObject({ id: 's2', status: 'stopped', statusStale: true })
+    expect(vi.mocked(queryClient.setQueryData)).not.toHaveBeenCalled()
+    const keys = flushInvalidations().map((k) => JSON.stringify(k))
+    expect(keys).toEqual(expect.arrayContaining([
+      JSON.stringify(queryKeys.stacks()),
+      JSON.stringify(queryKeys.stack.detail('s1')),
+      JSON.stringify(queryKeys.dashboardStats()),
+    ]))
+  })
+})
+
+// agent-os-4ato round 2 (review F2): every container_event now carries stack
+// status convergence through scheduleInvalidations, which was trailing-only:
+// each event restarted one 750 ms timer, so a host emitting an event every
+// 500 ms never refetched. A max wait flushes at most 2 s after the first
+// pending key.
+describe('useStackEvents invalidation debounce has a max wait', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('still refetches the stack list at least every 2 s under a steady event stream', () => {
+    const start = Date.now()
+    const flushes: number[] = []
+    vi.mocked(queryClient.invalidateQueries).mockImplementation((arg) => {
+      if (JSON.stringify(arg?.queryKey) === JSON.stringify(queryKeys.stacks())) flushes.push(Date.now() - start)
+      return Promise.resolve()
+    })
+    renderHook(() => useStackEvents())
+
+    for (let t = 0; t < 30_000; t += 500) {
+      capturedOnMessage!({ type: 'container_event', stackId: 's1', containerId: 'c' + t, event: 'die', timestamp: '' })
+      vi.advanceTimersByTime(500)
+    }
+
+    expect(flushes.length).toBeGreaterThanOrEqual(14)
+    expect(flushes[0]).toBeLessThanOrEqual(2000)
+    for (let i = 1; i < flushes.length; i++) {
+      expect(flushes[i] - flushes[i - 1]).toBeLessThanOrEqual(2000)
+    }
+  })
+
+  it('still waits for a quiet gap when events are sparse', () => {
+    renderHook(() => useStackEvents())
+    capturedOnMessage!({ type: 'container_event', stackId: 's1', containerId: 'c1', event: 'die', timestamp: '' })
+    vi.advanceTimersByTime(749)
+    expect(vi.mocked(queryClient.invalidateQueries)).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(1)
+    expect(vi.mocked(queryClient.invalidateQueries)).toHaveBeenCalled()
   })
 })
 
