@@ -262,7 +262,7 @@ func (h *LogsHandler) StreamLogs(c *gin.Context) {
 		}
 	}()
 
-	secretsTicker := time.NewTicker(unlockRecheckInterval)
+	secretsTicker := time.NewTicker(unlockRecheckInterval())
 	defer secretsTicker.Stop()
 
 	for {

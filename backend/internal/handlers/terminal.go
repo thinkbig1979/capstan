@@ -379,7 +379,7 @@ func (h *TerminalHandler) waitForProcessExit(session *services.TerminalSession, 
 // through safeWriteCloseMessage (WriteControl), which is safe beside the
 // PTY writer; closing the socket then ends the read and write loops.
 func closeWhenLocked(ctx context.Context, conn *Connection, watch *unlockWatch) {
-	ticker := time.NewTicker(unlockRecheckInterval)
+	ticker := time.NewTicker(unlockRecheckInterval())
 	defer ticker.Stop()
 	for {
 		select {

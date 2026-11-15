@@ -75,10 +75,15 @@ type namedSecretFile struct {
 // and every compose file reached, still counts. Past maxComposeFiles the
 // walk stops with what it found.
 func composeSecretFilesEach(src composeSource, root string) (named []namedSecretFile, files []string, skipped []error) {
-	named, files, _ = walkComposeSecretFiles(src, root, func(err error) error {
+	named, files, err := walkComposeSecretFiles(src, root, func(err error) error {
 		skipped = append(skipped, err)
 		return nil
 	})
+	if err != nil {
+		// bad above never ends the walk; kept so a change to it can't drop
+		// an error unseen.
+		skipped = append(skipped, err)
+	}
 	return named, files, skipped
 }
 

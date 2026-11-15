@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/errdefs"
 
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
@@ -119,7 +119,7 @@ func (s *DockerService) RuntimeSecretValues(ctx context.Context, stack models.St
 			continue
 		}
 		inspect, err := api.ContainerInspect(ctx, c.ID)
-		if errdefs.IsNotFound(err) {
+		if cerrdefs.IsNotFound(err) {
 			// Removed since the list: it prints nothing more.
 			continue
 		}

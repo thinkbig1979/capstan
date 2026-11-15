@@ -2,15 +2,29 @@ package handlers
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/middleware"
 )
 
-// unlockRecheckInterval is how often a long-lived connection re-checks the
-// env unlock it was opened under. A var only so tests can shorten it.
-var unlockRecheckInterval = 5 * time.Second
+// defaultUnlockRecheckInterval is how often a long-lived connection
+// re-checks the env unlock it was opened under.
+const defaultUnlockRecheckInterval = 5 * time.Second
+
+// unlockRecheckOverride, when not zero, replaces the interval. Only tests set
+// it, and atomically: a connection goroutine of an earlier test can still be
+// reading it while the next test shortens it.
+var unlockRecheckOverride atomic.Int64
+
+// unlockRecheckInterval is the interval in use.
+func unlockRecheckInterval() time.Duration {
+	if d := unlockRecheckOverride.Load(); d != 0 {
+		return time.Duration(d)
+	}
+	return defaultUnlockRecheckInterval
+}
 
 // unlockWatch is envUnlocked for a connection that outlives its request
 // (safe-defaults rule 15): it keeps the token that unlocked the upgrade and

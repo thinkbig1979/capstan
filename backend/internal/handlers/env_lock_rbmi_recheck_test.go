@@ -83,9 +83,9 @@ func (s *stubUnlock) waitChecked(t *testing.T, token string, n int) {
 
 func shortRecheck(t *testing.T) {
 	t.Helper()
-	old := unlockRecheckInterval
-	unlockRecheckInterval = 20 * time.Millisecond
-	t.Cleanup(func() { unlockRecheckInterval = old })
+	old := unlockRecheckOverride.Load()
+	unlockRecheckOverride.Store(int64(20 * time.Millisecond))
+	t.Cleanup(func() { unlockRecheckOverride.Store(old) })
 }
 
 type liveTerminal struct {
