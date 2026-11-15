@@ -279,3 +279,5 @@ func TestStacksHandler_Create_RefusesANameThatNormalisesToNothing_EvenWithATopLe
 	require.NoError(t, err)
 	assert.Empty(t, stacks, "a refused create must not leave a row behind")
 }
+
+func (*recordingStackDocker) GetContainerList(string) ([]models.Container, error) { return nil, nil }

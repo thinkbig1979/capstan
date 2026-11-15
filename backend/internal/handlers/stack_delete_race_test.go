@@ -116,3 +116,5 @@ func TestStacksHandler_Delete_SoleStackRace_SiblingRegisteredDuringComposeDown(t
 	assert.FileExists(t, filepath.Join(stackDir, "compose.api.yaml"),
 		"a sibling registered while compose-down was running must not be destroyed by a stale sole-stack decision")
 }
+
+func (*raceDockerFake) GetContainerList(string) ([]models.Container, error) { return nil, nil }

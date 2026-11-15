@@ -30,6 +30,9 @@ type stackDocker interface {
 	RestartVerified(stack models.Stack) (truth.ActionResult, string)
 	PullVerified(stack models.Stack) (truth.ActionResult, string)
 	DeleteVerified(stack models.Stack) (truth.ActionResult, string)
+	// GetContainerList finds a project's containers by its compose label, with
+	// no compose file: Delete asks it when the stack's compose file is gone.
+	GetContainerList(projectName string) ([]models.Container, error)
 }
 
 // stackStore is the subset of *database.DB that StacksHandler needs for stack

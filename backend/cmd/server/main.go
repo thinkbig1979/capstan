@@ -420,6 +420,10 @@ func main() {
 	}
 
 	scannerService := services.NewScannerService(cfg, db)
+	// A rescan deletes a row whose compose file is gone only when its project
+	// has no containers; without the lister it keeps every such row
+	// (agent-os-epc5). scanner_containers_wiring_test.go checks this call.
+	scannerService.SetContainerLister(dockerService)
 
 	// One per-stack operation lock for every path that runs docker compose or
 	// writes stack files; each consumer below gets this same instance

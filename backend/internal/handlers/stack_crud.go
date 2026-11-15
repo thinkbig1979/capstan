@@ -3,6 +3,7 @@ package handlers
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -595,7 +596,13 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 	// actually gone before touching the filesystem or DB — a compose exit code
 	// of 0 does not guarantee the containers stopped (same reasoning as
 	// Start/Stop/Restart's verified lifecycle).
-	deleteAR, deleteOutput := h.dockerSvc().DeleteVerified(*stack)
+	deleteAR, deleteOutput, downSkipped, refused := h.deleteWithoutComposeFile(c, *stack)
+	if refused {
+		return
+	}
+	if !downSkipped {
+		deleteAR, deleteOutput = h.dockerSvc().DeleteVerified(*stack)
+	}
 
 	h.logAction(c, id, "delete", deleteOutput)
 
@@ -677,6 +684,54 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 		truth.KV("id", id),
 		truth.KV("output", deleteOutput),
 	))
+}
+
+// deleteWithoutComposeFile decides Delete's path when the stack's compose
+// file is gone (agent-os-epc5): `compose down -f <missing file>` fails, so a
+// row whose file was removed on the host or by a pull could never be deleted.
+// Then the project's containers are looked up by label instead. Any left are
+// refused with their names, since removing the row would hide them; none
+// skips compose down (downSkipped, with the result Delete stores). A lookup
+// that fails refuses too (fail closed). refused reports that a response was
+// written. Only a definite absence takes this path: with the file present, or
+// an Lstat that fails otherwise, both are false and Delete runs compose down
+// itself, so DeleteVerified and its StoreLifecycleStatus stay in one function
+// (the agent-os-vush guard).
+func (h *StacksHandler) deleteWithoutComposeFile(c *gin.Context, stack models.Stack) (ar truth.ActionResult, output string, downSkipped, refused bool) {
+	_, statErr := os.Lstat(filepath.Join(stack.Directory, stack.ComposeFile))
+	if !errors.Is(statErr, fs.ErrNotExist) {
+		return truth.ActionResult{}, "", false, false
+	}
+
+	containers, err := h.dockerSvc().GetContainerList(stack.ProjectName)
+	if err != nil {
+		renderResult(c, truth.Failed("the compose file is gone and the project's containers could not be listed, so the stack was kept", err,
+			truth.KV("id", stack.ID),
+			truth.KV("composeFile", stack.ComposeFile),
+		))
+		return truth.ActionResult{}, "", false, true
+	}
+	if len(containers) > 0 {
+		names := make([]string, 0, len(containers))
+		for _, ctr := range containers {
+			names = append(names, ctr.Name)
+		}
+		c.JSON(http.StatusConflict, models.NewAppErrorWithDetails(
+			http.StatusConflict,
+			models.ErrStackDeleteContainersRemain,
+			"The compose file "+stack.ComposeFile+" is gone but project "+stack.ProjectName+" still has containers ("+
+				strings.Join(names, ", ")+"). Run \"docker compose -p "+stack.ProjectName+" down\" on the host, then delete again.",
+			map[string]any{
+				"id":          stack.ID,
+				"projectName": stack.ProjectName,
+				"containers":  names,
+			},
+		))
+		return truth.ActionResult{}, "", false, true
+	}
+	return truth.Success("compose file is gone and the project has no containers; compose down skipped, so the project's networks and named volumes were left in place"),
+		"compose file " + stack.ComposeFile + " is gone; no containers for project " + stack.ProjectName +
+			"; compose down skipped, networks and named volumes left in place", true, false
 }
 
 // listSurvivors returns the other stacks registered in stack's folder

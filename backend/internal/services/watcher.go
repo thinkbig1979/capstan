@@ -2,9 +2,11 @@ package services
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -60,35 +62,71 @@ func (w *WatcherService) Start() error {
 
 func (w *WatcherService) addWatchPaths() error {
 	allDirs := w.config.GetAllStacksDirs()
+	maxDepth := w.watchDepth()
 
 	for _, stacksDir := range allDirs {
 		if err := w.watcher.Add(stacksDir); err != nil {
 			slog.Warn("Failed to watch stacks directory", "path", stacksDir, "error", err)
 		}
 
-		entries, err := os.ReadDir(stacksDir)
-		if err != nil {
+		if _, err := os.ReadDir(stacksDir); err != nil {
 			slog.Warn("Failed to read stacks directory", "path", stacksDir, "error", err)
 			continue
 		}
-
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				continue
-			}
-
-			if strings.HasPrefix(entry.Name(), ".") {
-				continue
-			}
-
-			dirPath := filepath.Join(stacksDir, entry.Name())
-			if err := w.watcher.Add(dirPath); err != nil {
-				slog.Warn("Failed to watch subdirectory", "path", dirPath, "error", err)
-			}
-		}
+		w.watchSubdirs(stacksDir, maxDepth, 1, false)
 	}
 
 	return nil
+}
+
+// watchDepth is how many levels below each stacks dir the watcher covers: the
+// scanner's own scan depth, so every folder the scanner can register a stack
+// from is watched (agent-os-t03q). The scanner refuses to scan when the
+// setting cannot be read; the watcher still starts, at the default depth.
+// It is read at boot and per runtime folder, so raising scan_depth covers
+// already existing deeper folders only after a restart.
+func (w *WatcherService) watchDepth() int {
+	depth, err := w.scanner.readScanDepth()
+	if err != nil {
+		slog.Warn("Watching at the default depth: the scan depth setting could not be read", "depth", defaultScanDepth, "error", err)
+		return defaultScanDepth
+	}
+	return depth
+}
+
+// watchSubdirs watches the folders below dir, which sits depth-1 levels below
+// a stacks dir, down to maxDepth, with the scanner's walk rules
+// (scanDirectoryRecursive): directories only (DirEntry.IsDir is false for a
+// symlink) and no dot names. With rescan set, each folder that already holds
+// a compose or env file is rescanned: it arrived with a folder created or
+// moved in at runtime, and its files fired no event this watcher could see.
+func (w *WatcherService) watchSubdirs(dir string, maxDepth, depth int, rescan bool) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		slog.Warn("Failed to read directory to watch", "path", dir, "error", err)
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		w.watchDir(filepath.Join(dir, entry.Name()), maxDepth, depth, rescan)
+	}
+}
+
+// watchDir watches path, depth levels below a stacks dir, and its subfolders
+// down to maxDepth.
+func (w *WatcherService) watchDir(path string, maxDepth, depth int, rescan bool) {
+	if err := w.watcher.Add(path); err != nil {
+		slog.Warn("Failed to watch subdirectory", "path", path, "error", err)
+		return
+	}
+	if rescan {
+		w.rescanIfItHoldsStackFiles(path)
+	}
+	if depth < maxDepth {
+		w.watchSubdirs(path, maxDepth, depth+1, rescan)
+	}
 }
 
 func (w *WatcherService) watchLoop() {
@@ -113,6 +151,10 @@ func (w *WatcherService) watchLoop() {
 }
 
 func (w *WatcherService) handleEvent(event fsnotify.Event) {
+	if event.Op&fsnotify.Rename == fsnotify.Rename {
+		w.unwatchTree(event.Name)
+	}
+
 	// A new directory is handled BEFORE the filename filter: the filter is for
 	// files, and a folder named `newstack` fails it, so it was never watched
 	// and edits inside it triggered no rescan (agent-os-3uu8).
@@ -126,6 +168,12 @@ func (w *WatcherService) handleEvent(event fsnotify.Event) {
 
 	if !w.shouldProcessEvent(event.Name) {
 		return
+	}
+
+	// A save through a stack's symlinked compose file lands in the link
+	// target's folder, so the stack itself fired no event (agent-os-rzpw).
+	for _, linking := range w.stacksLinkingTo(event.Name) {
+		w.scheduleRescan(linking)
 	}
 
 	dirPath := filepath.Dir(event.Name)
@@ -144,42 +192,58 @@ func (w *WatcherService) handleEvent(event fsnotify.Event) {
 }
 
 // watchNewDir adds a directory created at runtime under the same rule the boot
-// walk applies in addWatchPaths: a direct child of a configured stacks dir,
-// not starting with ".". Deeper and hidden folders were never watched at boot.
+// walk applies in addWatchPaths: 1 to scan-depth levels below a configured
+// stacks dir, with no dot folder on the way. Its subfolders, down to the same
+// depth, are watched with it (a mkdir -p or a mv in brings them along).
 // The configured stacks dirs are set at boot and a settings change to them is
 // applied at the next boot, never written into a running Config (safe-defaults
 // rule 14), so this membership check and addWatchPaths read the same list.
 func (w *WatcherService) watchNewDir(path string) {
-	if strings.HasPrefix(filepath.Base(path), ".") {
-		return
-	}
 	// A symlink to a directory is skipped, as the boot walk (DirEntry.IsDir is
 	// false for a symlink), the scanner and the prune walk all skip it; watched
 	// here it would register a stack the next full scan prunes.
 	if fi, err := os.Lstat(path); err != nil || fi.Mode()&os.ModeSymlink != 0 { //geterrors:ignore a path that vanished since the Create event is simply not a folder to watch
 		return
 	}
-	parent := filepath.Clean(filepath.Dir(path))
-	isStackFolder := false
-	for _, stacksDir := range w.config.GetAllStacksDirs() {
-		if filepath.Clean(stacksDir) == parent {
-			isStackFolder = true
-			break
-		}
-	}
-	if !isStackFolder {
+	maxDepth := w.watchDepth()
+	depth := w.depthBelowStacksDir(path, maxDepth)
+	if depth == 0 {
 		return
 	}
 
 	slog.Info("New subdirectory detected, adding to watcher", "path", path)
-	if err := w.watcher.Add(path); err != nil {
-		slog.Warn("Failed to watch new subdirectory", "path", path, "error", err)
-		return
-	}
+	w.watchDir(path, maxDepth, depth, true)
+}
 
-	// A file written between the mkdir and the Add above fired no event this
-	// watcher could see, so look once for what is already inside. An empty
-	// folder is left alone: a rescan would register a directory row for it.
+// depthBelowStacksDir returns how many levels path sits below the nearest
+// configured stacks dir, or 0 when no stacks dir is within maxDepth levels
+// above it or a folder on the way (path's own name included) starts with ".",
+// which the scanner never enters.
+func (w *WatcherService) depthBelowStacksDir(path string, maxDepth int) int {
+	p := filepath.Clean(path)
+	for depth := 1; depth <= maxDepth; depth++ {
+		if strings.HasPrefix(filepath.Base(p), ".") {
+			return 0
+		}
+		parent := filepath.Dir(p)
+		for _, stacksDir := range w.config.GetAllStacksDirs() {
+			if filepath.Clean(stacksDir) == parent {
+				return depth
+			}
+		}
+		if parent == p {
+			return 0
+		}
+		p = parent
+	}
+	return 0
+}
+
+// rescanIfItHoldsStackFiles schedules a rescan of a folder that was just
+// watched, when it already holds a compose or env file. A file written between
+// the mkdir and the Add fired no event this watcher could see. An empty folder
+// is left alone: a rescan would register a directory row for it.
+func (w *WatcherService) rescanIfItHoldsStackFiles(path string) {
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		slog.Warn("Failed to read new subdirectory", "path", path, "error", err)
@@ -189,6 +253,89 @@ func (w *WatcherService) watchNewDir(path string) {
 		if !entry.IsDir() && w.shouldProcessEvent(entry.Name()) {
 			w.scheduleRescan(path)
 			return
+		}
+	}
+}
+
+// unwatchTree drops the watch on a path that was renamed away, and on every
+// watched path below it, before the paired Create for the new name is handled
+// (agent-os-cglx). A moved folder keeps its inode, so inotify hands Add(new)
+// the old watch descriptor; fsnotify then reuses the old entry, and its own
+// IN_MOVE_SELF cleanup later removes that shared kernel watch, leaving the new
+// name unwatched. fsnotify delivers the Rename for the old name before it
+// reads the Create for the new one (the Events channel is unbuffered), so
+// removing here always runs first and the Add gets a fresh descriptor. A
+// renamed file, or a path fsnotify already dropped, is not watched: that
+// ErrNonExistentWatch is expected.
+func (w *WatcherService) unwatchTree(path string) {
+	path = filepath.Clean(path)
+	for _, watched := range w.watcher.WatchList() {
+		if !isSameOrBelow(watched, path) {
+			continue
+		}
+		if err := w.watcher.Remove(watched); err != nil && !errors.Is(err, fsnotify.ErrNonExistentWatch) {
+			slog.Warn("Failed to unwatch renamed directory", "path", watched, "error", err)
+		}
+	}
+}
+
+// stacksLinkingTo returns the folders of registered stacks whose compose file
+// is a symlink resolving to changed, other than changed's own folder, sorted
+// and without repeats. The editor writes through such a link to its target
+// (handlers' resolveWriteTarget), and a host edit of the target changes the
+// stack too, yet both fire events only in the target's folder. A stack whose
+// link cannot be resolved is skipped: it is not a stack this file feeds.
+func (w *WatcherService) stacksLinkingTo(changed string) []string {
+	if w.scanner == nil || w.scanner.db == nil {
+		return nil
+	}
+	stacks, err := w.scanner.db.ListStacks()
+	if err != nil {
+		slog.Warn("Failed to list stacks to find compose files linking to a changed file", "path", changed, "error", err)
+		return nil
+	}
+	changed = filepath.Clean(changed)
+	resolvedChanged, err := filepath.EvalSymlinks(changed)
+	if err != nil {
+		// A file gone since the event (a remove, a rename away) can still be
+		// a link's target: compare its spelled path.
+		resolvedChanged = changed
+	}
+	changedDir := filepath.Dir(changed)
+	seen := make(map[string]bool)
+	var dirs []string
+	for _, stack := range stacks {
+		dir := filepath.Clean(stack.Directory)
+		if dir == changedDir || seen[dir] {
+			continue
+		}
+		composePath := filepath.Join(dir, stack.ComposeFile)
+		fi, err := os.Lstat(composePath)
+		if err != nil || fi.Mode()&os.ModeSymlink == 0 { //geterrors:ignore a compose file that cannot be read is not a link this change reaches; the rescan of its own folder reports it
+			continue
+		}
+		target, err := filepath.EvalSymlinks(composePath)
+		if err != nil || target != resolvedChanged { //geterrors:ignore a dangling or looping link feeds no stack from changed
+			continue
+		}
+		seen[dir] = true
+		dirs = append(dirs, dir)
+	}
+	sort.Strings(dirs)
+	return dirs
+}
+
+// isSameOrBelow reports whether p is dir or one of its descendants, by walking
+// p's parents. It compares the watcher's own stored watch paths, not a
+// containment decision on user input: the renamed-away path no longer exists,
+// so a resolving check (pathutil.IsContained) cannot answer.
+func isSameOrBelow(p, dir string) bool {
+	for p = filepath.Clean(p); ; p = filepath.Dir(p) {
+		if p == dir {
+			return true
+		}
+		if filepath.Dir(p) == p {
+			return false
 		}
 	}
 }

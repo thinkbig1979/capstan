@@ -105,6 +105,11 @@ const (
 	// their files would go and their rows would stay (agent-os-0s68). 409: the
 	// request is fine, the folder's contents refuse it until those go first.
 	ErrStackDeleteNestedStacks = "STACK_DELETE_NESTED_STACKS"
+	// ErrStackDeleteContainersRemain refuses deleting a stack whose compose
+	// file is gone while its compose project still has containers: compose
+	// down cannot run without the file, and removing the row would hide them
+	// (agent-os-epc5). 409: the containers must go first.
+	ErrStackDeleteContainersRemain = "STACK_DELETE_CONTAINERS_REMAIN"
 
 	// The commit and push refusals (agent-os-k81p.2). Every one is a 4xx or a
 	// 502 and none is a 401: the frontend logs the user out on a 401 whose

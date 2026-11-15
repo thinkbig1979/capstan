@@ -322,3 +322,5 @@ func TestUpdateStack_SharedProjectNameRefuses(t *testing.T) {
 	router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/resources/stacks/s-web/update", nil))
 	assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 }
+
+func (*z91e38StackDocker) GetContainerList(string) ([]models.Container, error) { return nil, nil }
