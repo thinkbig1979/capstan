@@ -551,11 +551,12 @@ func StackSecretValues(stack models.Stack, globalPath string) []string {
 	// What the compose files write under a sensitive name, and the env files
 	// their services name, as the locked compose view hides them
 	// (agent-os-rbmi review F1). The env files join the per-file pass below.
-	inline, serviceEnvFiles := composeSecretSources(stack)
+	inline, serviceFiles := composeSecretSources(stack)
 	for _, v := range inline {
 		add(v)
 	}
-	for _, p := range serviceEnvFiles {
+	for _, f := range serviceFiles {
+		p := f.path
 		if read[p] {
 			continue
 		}
@@ -563,6 +564,12 @@ func StackSecretValues(stack models.Stack, globalPath string) []string {
 		data, ok := readServiceEnvFile(stack, p)
 		if !ok {
 			continue
+		}
+		if f.secret {
+			// A secrets: file: holds one raw value, no KEY=value lines; the
+			// container reads it trimmed of its final newline (round-2
+			// review F6).
+			add(strings.TrimSpace(string(data)))
 		}
 		files = append(files, p)
 		for _, v := range sensitiveEnvValues(string(data)) {
