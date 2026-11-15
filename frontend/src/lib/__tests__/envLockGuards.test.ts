@@ -48,6 +48,13 @@
  * key built inside a function. Check 4 does not see a key shown through
  * anything but a JSX value attribute. Check 6's placeholder rule keys on a
  * `type` attribute naming 'password' and a value read as `X.value`.
+ * Also not seen, each OBSERVED green with the violation present (review of
+ * run/envfe, rv-envfe F3): check 2, a queryKey reached through two consts
+ * (`heldBy` follows one hop) or passed in as a parameter; check 3, an env-row
+ * search written as a raw `.filter` with no useTextFilter; check 4, a key shown
+ * through a helper call (`value={keyText(entry)}`); check 5, a diff read through
+ * an alias of gitApi (`const api = gitApi; api.diff(...)`); check 6, reveal state
+ * read through an alias of `visible` (`const v = visible; v[index]`).
  */
 import { describe, it, expect } from 'vitest'
 import ts from 'typescript'
