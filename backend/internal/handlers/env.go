@@ -288,6 +288,10 @@ func hideMultilineBodies(entries []EnvEntry, raw string) {
 		if tailSensitive || looksBefore[end+1]-looksBefore[i+1] > 0 {
 			hide[i+1]++
 			hide[end+1]--
+			// The opener's own line is the value's first line, so it is
+			// hidden too (agent-os-1nqr round 2: TZ="a\npostgres://u:pw@db" X=1
+			// showed "a"). Marked sensitive, the masking below applies.
+			entries[i].Sensitive = true
 		}
 	}
 	for k, n := 0, 0; k < len(entries); k++ {
