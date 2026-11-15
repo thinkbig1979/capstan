@@ -3,6 +3,7 @@ package handlers
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -31,8 +32,9 @@ const composeFileMode os.FileMode = 0644
 // directory is not fsynced: that only decides whether the rename itself
 // survives, and either outcome is a whole file.
 //
-// The rename creates a new inode owned by the process user, and needs write
-// permission on the directory, not just on the file.
+// The rename creates a new inode owned by the process user (writeFileAtomic
+// does not chown it; the compose and env helpers below keep the old owner), and
+// needs write permission on the directory, not just on the file.
 //
 // A path that is a symlink is written through: the rename lands on the file
 // the link resolves to and the link stays a link (agent-os-dwmz). Renaming
@@ -163,8 +165,33 @@ func renameIntoPlace(path string, content []byte, mode os.FileMode) error {
 	return renameIntoPlaceOwned(path, content, mode, nil)
 }
 
-// fileOwner is the uid and gid a written file must keep.
-type fileOwner struct{ uid, gid int }
+// fileOwner is the uid and gid a written file must keep. bestEffort says what
+// a failed chown does: refuse the write (false, the symlinked env file,
+// agent-os-1ltz) or log it and save as the process owner (true, a plain compose
+// or env file, agent-os-9deh: Edwin's "best effort, needs root").
+type fileOwner struct {
+	uid, gid   int
+	bestEffort bool
+}
+
+// ownerToKeep is the owner a replaced file must keep: info's uid and gid when
+// they differ from the process's, nil when they match (no chown, so a
+// non-root install saving its own files never needs one) or info is nil (a new
+// file).
+func ownerToKeep(info os.FileInfo, bestEffort bool) *fileOwner {
+	if info == nil {
+		return nil
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return nil
+	}
+	uid, gid := processOwner()
+	if int(st.Uid) == uid && int(st.Gid) == gid {
+		return nil
+	}
+	return &fileOwner{uid: int(st.Uid), gid: int(st.Gid), bestEffort: bestEffort}
+}
 
 // processOwner and chownTempFile are seams for agent-os-1ltz's tests: an
 // unprivileged test cannot own a file as another user, so it makes a target
@@ -190,7 +217,10 @@ func renameIntoPlaceOwned(path string, content []byte, mode os.FileMode, owner *
 	defer os.Remove(tmpPath) // no-op once the rename below succeeds
 
 	if owner != nil {
-		if err := chownTempFile(tmp, owner.uid, owner.gid); err != nil {
+		if err := chownTempFile(tmp, owner.uid, owner.gid); err != nil && owner.bestEffort {
+			slog.Warn("Saved a file but could not keep its owner; it is now owned by the user Capstan runs as",
+				"file", path, "uid", owner.uid, "gid", owner.gid, "error", err)
+		} else if err != nil {
 			tmp.Close()
 			return &writeRefusal{msg: fmt.Sprintf("%s belongs to uid %d, gid %d, and Capstan cannot write it as that owner (%v); nothing written. Save it from the host, or give it to the user Capstan runs as",
 				base, owner.uid, owner.gid, errors.Unwrap(err))}
@@ -219,8 +249,10 @@ func renameIntoPlaceOwned(path string, content []byte, mode os.FileMode, owner *
 }
 
 // writeComposeFileAtomic writes a compose file atomically. An existing file
-// keeps its permission bits (a stack edited from the host may be 0664); a new
-// one gets composeFileMode. An existing file the process cannot open for
+// keeps its permission bits (a stack edited from the host may be 0664) and,
+// best effort, its owner and group (agent-os-9deh: a failed chown, as on a
+// non-root install saving another user's file, is logged and the file ends up
+// the process user's); a new one gets composeFileMode. An existing file the process cannot open for
 // writing is refused: a rename would replace it regardless of its own mode, and
 // the in-place write this helper replaced honoured a read-only compose file, so
 // the save still needs both file and directory write permission.
@@ -233,6 +265,7 @@ func writeComposeFileAtomic(path string, content []byte, roots []string) error {
 		return err
 	}
 	mode := composeFileMode
+	owner := ownerToKeep(info, true)
 	if info != nil {
 		mode = info.Mode().Perm()
 		//nolint:gosec // target is a compose path the caller validated against the stacks directories (validateStackPath, symlink-aware); opened write-only without O_TRUNC, closed at once, to test permission only
@@ -244,12 +277,13 @@ func writeComposeFileAtomic(path string, content []byte, roots []string) error {
 			return fmt.Errorf("close compose file after write check: %w", err)
 		}
 	}
-	return renameIntoPlace(target, content, mode)
+	return renameIntoPlaceOwned(target, content, mode, owner)
 }
 
 // writeEnvFileAtomic writes an env file atomically at exactly 0600, whatever
 // mode an existing file had: env files hold secrets, so a looser mode left by
-// older code is tightened rather than kept.
+// older code is tightened rather than kept. A plain file keeps its owner and
+// group best effort, as writeComposeFileAtomic does (agent-os-9deh).
 //
 // Through a symlink it keeps the target's mode and owner instead
 // (agent-os-1ltz, Edwin's ruling 2026-11-14): a link is how a stack shares an
@@ -264,15 +298,12 @@ func writeEnvFileAtomic(envPath, content string, roots []string) error {
 		return err
 	}
 	mode := os.FileMode(0600)
-	var owner *fileOwner
+	// A plain env file keeps its owner best effort (agent-os-9deh); through a
+	// link the owner must be kept or the save is refused (agent-os-1ltz).
+	owner := ownerToKeep(info, true)
 	if target != envPath && info != nil {
 		mode = info.Mode().Perm()
-		if st, ok := info.Sys().(*syscall.Stat_t); ok {
-			uid, gid := processOwner()
-			if int(st.Uid) != uid || int(st.Gid) != gid {
-				owner = &fileOwner{uid: int(st.Uid), gid: int(st.Gid)}
-			}
-		}
+		owner = ownerToKeep(info, false)
 	}
 	return renameIntoPlaceOwned(target, []byte(content), mode, owner)
 }
