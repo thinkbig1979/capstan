@@ -112,7 +112,8 @@ import { LOCKED_CREDENTIAL_TITLE, LOCKED_FOLDER_CREDENTIALS_NOTICE } from '@/lib
 function credentialSaveFault(error: unknown): string | null {
   if (!error || typeof error !== 'object') return null
   const body = error as { code?: string; message?: unknown }
-  if (body.code !== 'NOT_FOUND' && body.code !== 'ENCRYPTION_KEY_MISSING') return null
+  // ENV_LOCKED: a save sent unlocked that lands after a relock (agent-os-zp59).
+  if (body.code !== 'NOT_FOUND' && body.code !== 'ENCRYPTION_KEY_MISSING' && body.code !== 'ENV_LOCKED') return null
   // agent-os-06c1: narrowed, not asserted. This lands in sonner's
   // `description`, and `|| null` is preserved by messageOrNull.
   return messageOrNull(body.message)

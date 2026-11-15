@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { screen } from '@testing-library/react'
+import { fireEvent, screen, waitFor } from '@testing-library/react'
+import { toast } from 'sonner'
 import { renderWithProviders } from '../../../test/utils'
 import { useEnvUnlockStore } from '@/stores/envUnlockStore'
 import { useAuthStore } from '@/stores/authStore'
@@ -55,5 +56,24 @@ describe('GitSettingsSection while env values are locked', () => {
     expect(await screen.findByDisplayValue('owner')).toBeEnabled()
     expect(screen.getByRole('button', { name: 'Save Credentials' })).toBeEnabled()
     expect(screen.queryByText(/Env values are locked/)).toBeNull()
+  })
+})
+
+// agent-os-zp59: a save sent while unlocked can land after a relock; the
+// toast shows the server's env-locked sentence.
+describe('GitSettingsSection: a save that races a relock', () => {
+  it('shows the env-locked refusal from the server', async () => {
+    useAuthStore.setState({ authDisabled: false })
+    useEnvUnlockStore.getState().unlock('t')
+    mockList.mockResolvedValue([{ path: '/opt/stacks/app', name: 'app', isDefault: false, gitAuthType: 'https', gitHttpsUser: 'owner', hasHttpsToken: true }])
+    mockCredentialStatus.mockResolvedValue({ path: '/opt/stacks/app', status: 'ok' })
+    const sentence = 'Unlock env values to change the git credentials: pushes and pulls use them'
+    mockUpdateCredentials.mockRejectedValue({ error: 'Forbidden', code: 'ENV_LOCKED', message: sentence, status: 403 })
+    renderWithProviders(<GitSettingsSection directoryPath="/opt/stacks/app" open={true} onToggle={() => {}} />)
+    await screen.findByDisplayValue('owner')
+    fireEvent.click(screen.getByRole('button', { name: 'Save Credentials' }))
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Failed to save credentials', { description: sentence }),
+    )
   })
 })

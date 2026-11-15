@@ -51,9 +51,12 @@ const (
 	// lockedEchoReason: the reply passes the caller's own text through the
 	// secret masking (agent-os-ly6i).
 	lockedEchoReason = "while locked, the reply could show which text matches a secret"
-	// lockedBackupReason: the request changes where backups go, with what
-	// credential, or what they keep (agent-os-h71i).
-	lockedBackupReason = "this needs your password, because it changes where backups go or what they keep"
+	// The backup refusals (agent-os-h71i), one reason per action (zp59).
+	lockedBackupSettingsReason = "backups hold every stack's .env, so whoever picks the repository can read them"
+	lockedRestoreReason        = "a restore writes backed-up files, secrets included, into your stacks"
+	lockedDRRestoreReason      = "it writes backed-up files, secrets included, into your stacks"
+	lockedPruneReason          = "pruning deletes backups"
+	lockedRepoInitReason       = "the repository will hold every stack's .env"
 	// lockedBlankedReason: a locked session was handed the env values blanked,
 	// so a save from that state would write the blanks (agent-os-d1ue).
 	lockedBlankedReason = "while locked, the values you see are blanked, so saving would overwrite every secret with them"

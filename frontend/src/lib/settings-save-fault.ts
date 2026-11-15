@@ -70,7 +70,9 @@ import { messageOrNull } from './narrow'
 export function settingsSaveFault(error: unknown): string | null {
   if (!error || typeof error !== 'object') return null
   const body = error as { code?: string; message?: unknown }
-  if (body.code !== 'VALIDATION_ERROR' && body.code !== 'ENCRYPTION_KEY_MISSING') return null
+  // ENV_LOCKED: a save sent unlocked that lands after a relock is refused
+  // with the unlock sentence (agent-os-zp59).
+  if (body.code !== 'VALIDATION_ERROR' && body.code !== 'ENCRYPTION_KEY_MISSING' && body.code !== 'ENV_LOCKED') return null
   // Narrowed, not asserted (agent-os-06c1), and `|| null` preserved by
   // messageOrNull: an empty server sentence is not a usable description.
   return messageOrNull(body.message)

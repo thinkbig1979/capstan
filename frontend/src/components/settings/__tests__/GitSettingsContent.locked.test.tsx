@@ -6,6 +6,7 @@ import type { ReactNode } from 'react'
 import { GitSettingsContent } from '../GitSettingsContent'
 import { useEnvUnlockStore } from '@/stores/envUnlockStore'
 import { useAuthStore } from '@/stores/authStore'
+import { toast } from 'sonner'
 
 /**
  * agent-os-mu4z: while env values are locked the server refuses a change to
@@ -77,5 +78,22 @@ describe('GitSettingsContent while env values are locked', () => {
     expect(screen.getByLabelText('Username')).toBeEnabled()
     expect(screen.getByLabelText(/Personal Access Token/)).toBeEnabled()
     expect(screen.queryByText(/Env values are locked/)).toBeNull()
+  })
+})
+
+// agent-os-zp59: a credential save sent while unlocked can land after a
+// relock; the toast shows the server's env-locked sentence.
+describe('GitSettingsContent: a save that races a relock', () => {
+  it('shows the env-locked refusal from the server', async () => {
+    useEnvUnlockStore.getState().unlock('t')
+    const sentence = 'Unlock env values to change the git credentials: pushes and pulls use them'
+    mockUpdateGit.mockRejectedValue({ error: 'Forbidden', code: 'ENV_LOCKED', message: sentence, status: 403 })
+    const user = userEvent.setup()
+    renderPanel()
+    await user.type(await screen.findByLabelText(/Personal Access Token/), 'new-token')
+    await user.click(screen.getByRole('button', { name: 'Save Git Settings' }))
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Failed to save git settings', { description: sentence }),
+    )
   })
 })
