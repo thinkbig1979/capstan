@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -36,6 +37,31 @@ var corpusValuesMask2 = []string{
 	"user:SEKRITh8@host", `{"password":"SEKRITi9"}`, "nginx:1.25@sha256:abcd",
 	`"SEKRIT\"j10"`, "${REF}", "rest:rest:https://u:SEKRITk11@h", "x # c",
 	"y # https://u:SEKRITl12@h", "s3:KEY:SEKRITm13@minio/b",
+}
+
+// plantedSecretsMask2 is each secret the corpus values plant, as written.
+var plantedSecretsMask2 = func() []string {
+	var out []string
+	for _, v := range corpusValuesMask2 {
+		out = append(out, plantedSecretRe75hd.FindAllString(v, -1)...)
+	}
+	return out
+}()
+
+var plantedSecretRe75hd = regexp.MustCompile(`SEKRIT(?:\\")?[a-z]+[0-9]+`)
+
+// fragmentLeak75hd is the first 4-byte fragment of a planted secret that got
+// holds more often than base, or "" (agent-os-75hd item 4): counting the
+// whole "SEKRIT" prefix missed a leak of a secret's tail.
+func fragmentLeak75hd(base, got string) string {
+	for _, sec := range plantedSecretsMask2 {
+		for i := 0; i+4 <= len(sec); i++ {
+			if f := sec[i : i+4]; strings.Count(got, f) > strings.Count(base, f) {
+				return f
+			}
+		}
+	}
+	return ""
 }
 
 var corpusSepsMask2 = []string{"=", ": ", ":", " = "}
@@ -115,7 +141,7 @@ func TestMaskCorpus_mask2_SupersetOfBase(t *testing.T) {
 
 	rng := rand.New(rand.NewSource(0x3a52)) //nolint:gosec // G404: a fixed seed keeps the corpus reproducible; nothing here is a secret
 	const cases = 4000
-	compared, differed, violations, leaks := 0, map[string]int{}, map[string]int{}, map[string]int{}
+	compared, differed, violations, leaks, fragLeaks := 0, map[string]int{}, map[string]int{}, map[string]int{}, map[string]int{}
 	firstViolation := map[string]string{}
 	for c := 0; c < cases; c++ {
 		env := corpusEnvMask2(rng)
@@ -148,6 +174,12 @@ func TestMaskCorpus_mask2_SupersetOfBase(t *testing.T) {
 					firstViolation["LEAK "+name] = fmt.Sprintf("env=%q base=%q got=%q", env, old, got)
 				}
 			}
+			if f := fragmentLeak75hd(old, got); f != "" {
+				fragLeaks[name]++
+				if firstViolation["FRAGMENT "+name] == "" {
+					firstViolation["FRAGMENT "+name] = fmt.Sprintf("fragment %q: env=%q base=%q got=%q", f, env, old, got)
+				}
+			}
 			if seg, ok := showsWhatBaseHidMask2(old, got); !ok {
 				violations[name]++
 				if firstViolation[name] == "" {
@@ -156,7 +188,7 @@ func TestMaskCorpus_mask2_SupersetOfBase(t *testing.T) {
 			}
 		}
 	}
-	t.Logf("cases=%d compared=%d differed=%v violations=%v leaks=%v", cases, compared, differed, violations, leaks)
+	t.Logf("cases=%d compared=%d differed=%v violations=%v leaks=%v fragmentLeaks=%v", cases, compared, differed, violations, leaks, fragLeaks)
 	for name, v := range firstViolation {
 		t.Logf("first %s: %s", name, v)
 	}
@@ -166,6 +198,12 @@ func TestMaskCorpus_mask2_SupersetOfBase(t *testing.T) {
 	// credential left, so "sftp:" and "@h:/p" show, as they always did for an
 	// https:// URL (agent-os-vq3i). Those are logged; a secret shown fails.
 	require.Empty(t, leaks)
+	require.Empty(t, fragLeaks)
+}
+
+func TestPlantedSecretsMask2_75hd(t *testing.T) {
+	require.Len(t, plantedSecretsMask2, 13, "%q", plantedSecretsMask2)
+	require.Contains(t, plantedSecretsMask2, `SEKRIT\"j10`)
 }
 
 // showsWhatBaseHidMask2 reports the first piece of got, between its
