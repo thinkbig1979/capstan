@@ -73,6 +73,20 @@ var authorityPrefixRe = regexp.MustCompile(`^(?:[a-zA-Z][a-zA-Z0-9+.\-]*:)?//`)
 // judged safe, which is precisely the value-keyed reasoning that produced this
 // bug; the host and path still identify the remote.
 func RedactURLUserinfo(raw string) string {
+	return redactURLUserinfoDepth(raw, 0, maxRepoPrefixDepth)
+}
+
+// maxRepoPrefixDepth is how many nested "scheme:" prefixes RedactURLUserinfo
+// reads through ("rest:https://..." is one). Each level parses the rest of the
+// value again, so an unbounded walk made "rest:rest:...:https://u:p@h"
+// quadratic: about 1.6 s at 80 KB, in HasURLUserinfo on every env line
+// (agent-os-h4ts). No restic form nests more than one; past the bound the
+// rest is masked whole, with the marker so the save guard still refuses it.
+const maxRepoPrefixDepth = 8
+
+// redactURLUserinfoDepth is RedactURLUserinfo for a value found depth
+// prefixes in, reading at most limit of them.
+func redactURLUserinfoDepth(raw string, depth, limit int) string {
 	if raw == "" {
 		return raw
 	}
@@ -84,7 +98,7 @@ func RedactURLUserinfo(raw string) string {
 	// value still round-trips byte-for-byte.
 	trimmed := strings.TrimSpace(raw)
 	if trimmed != raw {
-		redacted := RedactURLUserinfo(trimmed)
+		redacted := redactURLUserinfoDepth(trimmed, depth, limit)
 		if redacted == trimmed {
 			return raw
 		}
@@ -121,7 +135,16 @@ func RedactURLUserinfo(raw string) string {
 	// changes no output across the whole corpus. Kept because it states the
 	// intent at the point of the recursion, not because it is load-bearing.
 	if u.User == nil && u.Opaque != "" && strings.Contains(u.Opaque, "://") {
-		inner := RedactURLUserinfo(u.Opaque)
+		if depth >= limit {
+			// Fail closed: every byte a deeper walk could star is in here.
+			// It stars only before an "@" or in an rclone "name=value", so
+			// a rest holding neither is left as it is.
+			if !strings.ContainsAny(u.Opaque, "@=") {
+				return raw
+			}
+			return u.Scheme + ":" + UserinfoRedactionMarker
+		}
+		inner := redactURLUserinfoDepth(u.Opaque, depth+1, limit)
 		if inner == u.Opaque {
 			return raw
 		}
