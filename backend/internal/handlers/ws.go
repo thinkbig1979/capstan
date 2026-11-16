@@ -654,6 +654,30 @@ func safePingLoop(ctx context.Context, c *Connection, interval time.Duration) {
 	}
 }
 
+// watchPeer is the reader for a handler whose client never sends data frames
+// (only pongs and a close). It reads until the first error, then calls cancel,
+// so the handler learns the client left without waiting for a write to fail:
+// a handler that only writes on an event kept its per-user slot until restart
+// on a quiet host (agent-os-afyl). Reading is also what runs the pong handler
+// upgradeConnection installed, so a live client keeps refreshing the 60s read
+// deadline and a half-open one ends at it.
+//
+// It must be the connection's ONLY reader: gorilla allows one concurrent
+// reader and one concurrent writer. The read limit is the one
+// upgradeConnection set; it is not changed here. The goroutine ends when the
+// handler's release closes the socket, which fails the pending read.
+func watchPeer(c *Connection, cancel context.CancelFunc) {
+	go func() {
+		defer cancel()
+		for {
+			if _, _, err := c.Conn.ReadMessage(); err != nil {
+				c.logReadErr(err)
+				return
+			}
+		}
+	}()
+}
+
 func writeCloseMessage(conn *websocket.Conn, closeCode int, reason string) {
 	// A failed deadline set surfaces immediately as a write error below,
 	// which is already handled.
