@@ -1055,12 +1055,37 @@ func (w *lineWalk) apply(m *lineMasker, i int) int {
 	return len(m.lines[i]) - len(line)
 }
 
+// lineValueBudget is how many bytes of values maskFlowTokens, and apart
+// from it maskInlineKV, may scan and judge on a line of n bytes. A value
+// with no stop runs to the line's end, so each key whose value had none
+// handed the rest of the line to IsSensitiveEnvVar again: ` {"foo":[`
+// (agent-os-ez5s) or `a=(` (agent-os-rtf7) repeated made a 1 MiB log line
+// cost hours. Values that stop do not overlap, but a value that holds the
+// next key does: in maskFlowTokens the bytes judged are at most
+// (depth+1) x n, depth being the brackets opened with no , } or ] between
+// them. Past the budget the WHOLE line, and the lines below it, are masked
+// instead of judged (maskFrom from 0), which hides more, never less.
+// Masking only from the cut left the text before it to judges that read a
+// value to the line's end, and the mask erased their evidence (reviews of
+// 011faee and 1e4aef0, F2 and F6). Such a line is hostile or absurdly
+// nested, so it shows as *** in full.
+func lineValueBudget(n int) int { return valueBudgetPerByte*n + valueBudgetBase }
+
+// valueBudgetPerByte and valueBudgetBase size lineValueBudget: it trips at
+// about 16 such opens on a long line (JSON logs nest less), and a line that
+// trips it has been judged about 16x its length.
+const (
+	valueBudgetPerByte = 16
+	valueBudgetBase    = 4096
+)
+
 // maskFlowTokens masks the values of sensitive KEY=value / KEY: value tokens
 // inside { } or [ ] on line i, in one pass along it.
 func (m *lineMasker) maskFlowTokens(i int) {
 	line := m.lines[i]
 	w := m.newLineWalk(line)
-	openAt := -1
+	openAt, overBudget := -1, false
+	spent, budget := 0, lineValueBudget(len(line))
 	forwardMatches(flowKeyRe, line, func(loc []int) (int, bool) {
 		if bareColonUnquoted(line, loc) {
 			return loc[1], false
@@ -1088,6 +1113,11 @@ func (m *lineMasker) maskFlowTokens(i int) {
 				}
 			}
 		}
+		// Over budget, fail closed: the whole line and the lines below it.
+		if spent += end - start; spent > budget {
+			overBudget = true
+			return 0, true
+		}
 		value := strings.TrimSpace(line[start:end])
 		v := strings.Trim(value, `"'`)
 		if !IsSensitiveEnvVar(key, v) || v == secretMask || v == "" || isSecretReference(v) {
@@ -1102,6 +1132,10 @@ func (m *lineMasker) maskFlowTokens(i int) {
 		}
 		return w.mask(start, end, repl), false
 	})
+	if overBudget {
+		m.maskFrom(i, 0)
+		return
+	}
 	// An open quote is masked to the line's end, after the masks before it.
 	// A mask widened to a needle can reach past it: the mask to the end then
 	// starts where that one did.
@@ -1126,6 +1160,7 @@ var inlineKVRe = regexp.MustCompile(`[\s"'\[\{,(?&;]-{0,2}([A-Za-z_][A-Za-z0-9_.
 func (m *lineMasker) maskInlineKV(i int) {
 	line := m.lines[i]
 	w := m.newLineWalk(line)
+	spent, budget, overBudget := 0, lineValueBudget(len(line)), false
 	forwardMatches(inlineKVRe, line, func(loc []int) (int, bool) {
 		key := line[loc[2]:loc[3]]
 		start, end, quoted := quotedSpan(line, loc[1])
@@ -1144,6 +1179,11 @@ func (m *lineMasker) maskInlineKV(i int) {
 				end++
 			}
 		}
+		// Over budget, fail closed as maskFlowTokens does.
+		if spent += end - start; spent > budget {
+			overBudget = true
+			return 0, true
+		}
 		v := line[start:end]
 		flag := loc[2] >= 2 && line[loc[2]-2:loc[2]] == "--"
 		if v == "" || v == secretMask || isSecretReference(v) || (!IsSensitiveEnvVar(key, v) && (!flag || !m.flagName(key))) {
@@ -1154,6 +1194,10 @@ func (m *lineMasker) maskInlineKV(i int) {
 		}
 		return w.mask(start, end, secretMask), false
 	})
+	if overBudget {
+		m.maskFrom(i, 0)
+		return
+	}
 	w.apply(m, i)
 }
 
