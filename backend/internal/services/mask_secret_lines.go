@@ -86,6 +86,7 @@ func maskSecrets(text, filePath string, secrets []string, flagRule func(string) 
 	}
 	m := &lineMasker{lines: strings.Split(text, "\n"), flagRule: flagRule}
 	m.masked = make([]bool, len(m.lines))
+	m.closeQ = make([]byte, len(m.lines))
 	orig := append([]string(nil), m.lines...)
 	m.orig = orig
 
@@ -121,6 +122,15 @@ func maskSecrets(text, filePath string, secrets []string, flagRule func(string) 
 	}
 	if !isYAML {
 		m.envQuotePass(orig)
+	}
+	for j, q := range m.closeQ {
+		switch q {
+		case 0:
+		case bodyLine:
+			m.lines[j], m.masked[j] = secretMask, true
+		default:
+			m.maskToQuote(j, q)
+		}
 	}
 	return strings.Join(m.lines, "\n"), m.count
 }
@@ -187,7 +197,18 @@ type lineMasker struct {
 	// anchorsMasked are the anchors an alias under a sensitive key has
 	// already masked.
 	anchorsMasked map[*yaml.Node]bool
+	// open are the quotes linePass's maskers found open on the line in
+	// hand; closeOpenQuotes masks them once every masker had its turn.
+	open []openQuote
+	// closeQ[j] is the quote a value above line j left open and line j
+	// closes, or bodyLine when line j lies wholly inside such a value;
+	// maskSecrets masks line j after every other pass.
+	closeQ []byte
 }
+
+// bodyLine marks, in closeQ, a line wholly inside a quoted value: it is
+// masked whole, and that wins over a quote it closes for another value.
+const bodyLine byte = 1
 
 // isSecretReference reports whether a value is only a variable reference
 // with no default: ${X}, $X, ${X?msg}, ${X:?msg}.
@@ -284,6 +305,146 @@ func (m *lineMasker) maskFrom(i, col int) {
 	m.masked[i] = true
 	m.maskDeeper(i, indentOf(l))
 	m.count++
+}
+
+// openQuote is a sensitive value's quote a masker found open on a line:
+// the line as that masker read it, and its bytes from the quote on.
+type openQuote struct {
+	line, tail string
+	q          byte
+}
+
+// markOpenQuote records that the value at col of line, as a linePass
+// masker read it, opens quote q and does not close it. Masking waits for
+// closeOpenQuotes, so the maskers after this one still read the text
+// before the quote: masking it at once marked the line done and a secret
+// before it showed (agent-os-c2dp).
+func (m *lineMasker) markOpenQuote(line string, col int, q byte) {
+	m.open = append(m.open, openQuote{line, line[col:], q})
+}
+
+// closeOpenQuotes masks line i from its earliest open quote to its end,
+// and the lines each quote holds below it (maskQuoteBody). A quote is found
+// in the line as it now stands by the bytes after it; a later masker that
+// changed those masks from the first byte it changed, or from the quote,
+// whichever comes first.
+func (m *lineMasker) closeOpenQuotes(i int) {
+	if len(m.open) == 0 {
+		return
+	}
+	cur, col := m.lines[i], len(m.lines[i])
+	for _, o := range m.open {
+		c := len(cur) - len(o.tail)
+		if !strings.HasSuffix(cur, o.tail) {
+			c = min(commonPrefixLen(cur, o.line), len(o.line)-len(o.tail))
+		}
+		col = min(col, c)
+	}
+	// Not marked done: the env statement passes after linePass still read
+	// the statements before the quote (`TLS_KEY:'x' TLS_KEY='open`). The
+	// mask starts at a quote, where a value starts, so it erases no
+	// evidence a value before it is judged by.
+	if !m.masked[i] {
+		l := m.lines[i]
+		m.splice(i, col, len(l), secretMask)
+		m.maskDeeper(i, indentOf(l))
+		m.count++
+	}
+	// Two maskers often find the same quote: one body per quote character.
+	var done [2]bool
+	for _, o := range m.open {
+		if k := strings.IndexByte(`"'`, o.q); k >= 0 && !done[k] {
+			done[k] = true
+			m.maskQuoteBody(i, o.q)
+		}
+	}
+	m.open = m.open[:0]
+}
+
+func commonPrefixLen(a, b string) int {
+	n := 0
+	for n < len(a) && n < len(b) && a[n] == b[n] {
+		n++
+	}
+	return n
+}
+
+// maskOpenQuote masks line i from col, where a sensitive value opens quote
+// q that does not close on the line, and the lines it holds below.
+func (m *lineMasker) maskOpenQuote(i, col int, q byte) {
+	m.maskFrom(i, col)
+	m.maskQuoteBody(i, q)
+}
+
+// maskQuoteBody masks the lines below line i that quote q, open at its end,
+// holds: each one whole, up to the line where q closes, masked up to its
+// quote; to the end of the text when q never closes (fail closed). maskFrom
+// masks only the lines indented deeper, and a quoted value's lines need
+// not be: the env views read them (envQuotePass), the YAML path and the
+// in-line maskers did not (agent-os-6wqp). Where q closes is read from the
+// text before any pass, by both quote rules, the later one winning; a line
+// a pass changed is masked whole.
+func (m *lineMasker) maskQuoteBody(i int, q byte) {
+	orig := m.orig
+	if orig == nil {
+		orig = m.lines
+	}
+	for j := i + 1; j < len(m.lines); j++ {
+		c1, c2 := closingQuote(orig[j], 0, q), envClosingQuote(orig[j], 0, q)
+		if c1 < 0 || c2 < 0 {
+			if strings.TrimSpace(orig[j]) != "" {
+				if m.closeQ == nil {
+					m.lines[j], m.masked[j] = secretMask, true
+				} else {
+					// Masked after every pass, like the closing line: a
+					// line's own maskers still read it (`x' KEY: "y` after
+					// the body's quote), and masked first it showed what
+					// they had hidden (PR #762 review, P1).
+					m.closeQ[j] = bodyLine
+				}
+			}
+			continue
+		}
+		if m.closeQ == nil {
+			m.maskToQuote(j, q)
+			return
+		}
+		// Every pass reads the line first: a key after the quote
+		// (`b" API_TOKEN=x`, `# OLD_SECRET:"x"`) is masked by its own
+		// masker, which no longer finds it once the line starts with a mask.
+		if m.closeQ[j] != bodyLine {
+			m.closeQ[j] = q
+		}
+		return
+	}
+}
+
+// maskToQuote masks line j up to where quote q, open from a line above,
+// closes, by the line as it stands; the whole line when a pass masked that
+// quote away.
+func (m *lineMasker) maskToQuote(j int, q byte) {
+	cur := m.lines[j]
+	c1, c2 := closingQuote(cur, 0, q), envClosingQuote(cur, 0, q)
+	if c1 < 0 || c2 < 0 {
+		m.lines[j], m.masked[j] = secretMask, true
+		return
+	}
+	if c := max(c1, c2); c > 0 {
+		m.splice(j, 0, c, secretMask)
+	}
+}
+
+// quoteLeftOpen reports whether an odd number of quotes q follow from: a
+// value whose own quote closed early, on a quote of the JSON inside it
+// (DB_PASSWORD="{"k":{"k":...), leaves the line's last one open.
+func quoteLeftOpen(line string, from int, q byte) bool {
+	for open := false; ; open = !open {
+		e := closingQuote(line, from, q)
+		if e < 0 {
+			return open
+		}
+		from = e + 1
+	}
 }
 
 // ── YAML pass ──────────────────────────────────────────────────────────────
@@ -461,7 +622,7 @@ func (m *lineMasker) maskScalar(n, k *yaml.Node) {
 		q := line[col]
 		end := closingQuote(line, col+1, q)
 		if end < 0 {
-			m.maskFrom(li, col)
+			m.maskOpenQuote(li, col, q)
 			return
 		}
 		m.splice(li, col+1, end, secretMask)
@@ -497,7 +658,7 @@ func (m *lineMasker) maskItemAfterEquals(n *yaml.Node) {
 		if e := closingQuote(line, col+1, line[col]); e >= 0 {
 			end = e
 		} else {
-			m.maskFrom(li, start)
+			m.maskOpenQuote(li, start, line[col])
 			return
 		}
 	default:
@@ -588,6 +749,7 @@ func (m *lineMasker) linePass() {
 		if !m.masked[i] {
 			m.maskAuthHeader(i)
 		}
+		m.closeOpenQuotes(i)
 	}
 }
 
@@ -615,9 +777,12 @@ func (m *lineMasker) maskAuthHeader(i int) {
 		json := named && start < len(line) && (line[start] == '"' || line[start] == '\'')
 		whole := strings.HasSuffix(strings.ToLower(line[loc[4]:loc[5]]), "cookie")
 		if json {
-			if e := closingQuote(line, start+1, line[start]); e >= 0 {
-				end = e
+			e := closingQuote(line, start+1, line[start])
+			if e < 0 {
+				m.markOpenQuote(line, start+1, line[start])
+				return 0, true
 			}
+			end = e
 			start++
 		} else if named && start < len(line) && (line[start] == '[' || line[start] == '{') {
 			// An array (Go's http.Header as JSON) or an object: all of it,
@@ -631,15 +796,22 @@ func (m *lineMasker) maskAuthHeader(i int) {
 				end = start + 1 + e
 			}
 			start, whole = start+1, true
+		} else if start < len(line) && (line[start] == '"' || line[start] == '\'') && closingQuote(line, start+1, line[start]) < 0 {
+			// A quoted value that does not close on the line; the quote stays.
+			m.markOpenQuote(line, start+1, line[start])
+			return 0, true
 		}
 		if sc := authSchemeRe.FindString(line[start:end]); !whole && sc != "" && strings.TrimSpace(line[start+len(sc):end]) != "" {
 			start += len(sc)
 		}
 		if loc[2] >= 0 && !named {
 			if q := line[loc[2]]; q == '"' || q == '\'' {
-				if e := strings.IndexByte(line[start:], q); e >= 0 {
-					end = start + e
+				e := strings.IndexByte(line[start:], q)
+				if e < 0 {
+					m.markOpenQuote(line, start, q)
+					return 0, true
 				}
+				end = start + e
 			}
 		}
 		// A header inside the value would have masked further than the
@@ -689,7 +861,7 @@ func (m *lineMasker) maskLeadKey(i int) {
 
 	// A quoted item "KEY=value": the value ends at the item's closing quote.
 	if openQ != "" && closeQ == "" {
-		if e := closingQuote(line, start, openQ[0]); e >= 0 {
+		if e := closingQuote(line, start, openQ[0]); e >= 0 && !quoteLeftOpen(line, e+1, openQ[0]) {
 			v := line[start:e]
 			if isSecretReference(v) || v == secretMask || !sensitive(v) {
 				return
@@ -698,7 +870,7 @@ func (m *lineMasker) maskLeadKey(i int) {
 			m.count++
 			return
 		}
-		m.maskFrom(i, start)
+		m.markOpenQuote(line, start, openQ[0])
 		return
 	}
 
@@ -716,8 +888,8 @@ func (m *lineMasker) maskLeadKey(i int) {
 	case trimmed[0] == '"' || trimmed[0] == '\'':
 		vs := start + strings.Index(rest, trimmed[:1])
 		e := closingQuote(line, vs+1, trimmed[0])
-		if e < 0 {
-			m.maskFrom(i, vs)
+		if e < 0 || quoteLeftOpen(line, e+1, trimmed[0]) {
+			m.markOpenQuote(line, vs, trimmed[0])
 			return
 		}
 		if v := line[vs+1 : e]; isSecretReference(v) || v == secretMask || !sensitive(v) {
@@ -768,6 +940,7 @@ func (m *lineMasker) maskStatements(i int, sts []envStatement) {
 	var b strings.Builder
 	runs := m.needleRuns(line)
 	last, masked, openAt := 0, 0, -1
+	var openQ byte
 	endsInMask := false
 	for _, st := range sts {
 		v := line[st.start:st.end]
@@ -785,7 +958,7 @@ func (m *lineMasker) maskStatements(i int, sts []envStatement) {
 		}
 		if st.open {
 			// Always the last statement on the line.
-			openAt, last = b.Len(), start
+			openAt, last, openQ = b.Len(), start, st.quote
 			break
 		}
 		if !endsInMask {
@@ -802,7 +975,7 @@ func (m *lineMasker) maskStatements(i int, sts []envStatement) {
 	m.lines[i] = b.String()
 	m.count += masked
 	if openAt != -1 {
-		m.maskFrom(i, openAt)
+		m.maskOpenQuote(i, openAt, openQ)
 	}
 }
 
@@ -1140,12 +1313,13 @@ func (m *lineMasker) maskFlowTokens(i int) {
 	// A mask widened to a needle can reach past it: the mask to the end then
 	// starts where that one did.
 	if openAt >= 0 {
+		q := line[openAt]
 		openAt = w.cutFrom(openAt)
+		w.apply(m, i)
+		m.markOpenQuote(line, openAt, q)
+		return
 	}
-	delta := w.apply(m, i)
-	if openAt >= 0 {
-		m.maskFrom(i, openAt+delta)
-	}
+	w.apply(m, i)
 }
 
 // inlineKVRe is a KEY=value token anywhere in free text, a command-line flag
@@ -1188,6 +1362,11 @@ func (m *lineMasker) maskInlineKV(i int) {
 		flag := loc[2] >= 2 && line[loc[2]-2:loc[2]] == "--"
 		if v == "" || v == secretMask || isSecretReference(v) || (!IsSensitiveEnvVar(key, v) && (!flag || !m.flagName(key))) {
 			return loc[1], false
+		}
+		if quoted && end == len(line) {
+			// Its quote does not close on the line; the quote stays.
+			m.markOpenQuote(line, start, line[start-1])
+			return 0, true
 		}
 		if quoted {
 			end = quotedMaskEnd(line, start, end)
@@ -1263,6 +1442,11 @@ func (m *lineMasker) maskFlagNextToken(i int) {
 		v := line[start:end]
 		if v == "" || v == secretMask || isSecretReference(v) || strings.HasPrefix(v, "-") {
 			return loc[1], false
+		}
+		if quoted && end == len(line) {
+			// Its quote does not close on the line; the quote stays.
+			m.markOpenQuote(line, start, line[start-1])
+			return 0, true
 		}
 		if quoted {
 			end = quotedMaskEnd(line, start, end)
