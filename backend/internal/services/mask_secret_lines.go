@@ -1055,23 +1055,24 @@ func (w *lineWalk) apply(m *lineMasker, i int) int {
 	return len(m.lines[i]) - len(line)
 }
 
-// flowValueBudget is how many bytes of flow values maskFlowTokens may judge
-// on a line of n bytes. A value with no closing , } or ] runs to the line's
-// end, so each unclosed bracket handed the rest of the line to
-// IsSensitiveEnvVar again: ` {"foo":[` repeated made a 1 MiB log line cost
-// hours (agent-os-ez5s). A value ends at the first , } or ] after it, so
-// sibling values do not overlap, but each value a bracket opens inside
-// another does: the bytes judged are at most (depth+1) x n, depth being
-// the opens with no , } or ] between them. Past the budget the rest of the
-// line is masked instead of judged, which hides more, never less.
-func flowValueBudget(n int) int { return flowBudgetPerByte*n + flowBudgetBase }
+// lineValueBudget is how many bytes of values maskFlowTokens, and apart
+// from it maskInlineKV, may scan and judge on a line of n bytes. A value
+// with no stop runs to the line's end, so each key whose value had none
+// handed the rest of the line to IsSensitiveEnvVar again: ` {"foo":[`
+// (agent-os-ez5s) or `a=(` (agent-os-rtf7) repeated made a 1 MiB log line
+// cost hours. Values that stop do not overlap, but a value that holds the
+// next key does: in maskFlowTokens the bytes judged are at most
+// (depth+1) x n, depth being the brackets opened with no , } or ] between
+// them. Past the budget the rest of the line is masked instead of judged,
+// which hides more, never less.
+func lineValueBudget(n int) int { return valueBudgetPerByte*n + valueBudgetBase }
 
-// flowBudgetPerByte and flowBudgetBase size flowValueBudget: it trips at
+// valueBudgetPerByte and valueBudgetBase size lineValueBudget: it trips at
 // about 16 such opens on a long line (JSON logs nest less), and a line that
 // trips it has been judged about 16x its length.
 const (
-	flowBudgetPerByte = 16
-	flowBudgetBase    = 4096
+	valueBudgetPerByte = 16
+	valueBudgetBase    = 4096
 )
 
 // maskFlowTokens masks the values of sensitive KEY=value / KEY: value tokens
@@ -1080,7 +1081,7 @@ func (m *lineMasker) maskFlowTokens(i int) {
 	line := m.lines[i]
 	w := m.newLineWalk(line)
 	openAt := -1
-	spent, budget := 0, flowValueBudget(len(line))
+	spent, budget := 0, lineValueBudget(len(line))
 	forwardMatches(flowKeyRe, line, func(loc []int) (int, bool) {
 		if bareColonUnquoted(line, loc) {
 			return loc[1], false
@@ -1108,9 +1109,11 @@ func (m *lineMasker) maskFlowTokens(i int) {
 				}
 			}
 		}
-		// Over budget, fail closed: mask from this value to the line's end.
+		// Over budget, fail closed as an open quote does: mask from this
+		// value to the line's end and the lines below it (maskFrom).
 		if spent += end - start; spent > budget {
-			return w.mask(start, len(line), secretMask), true
+			openAt = start
+			return 0, true
 		}
 		value := strings.TrimSpace(line[start:end])
 		v := strings.Trim(value, `"'`)
@@ -1150,6 +1153,7 @@ var inlineKVRe = regexp.MustCompile(`[\s"'\[\{,(?&;]-{0,2}([A-Za-z_][A-Za-z0-9_.
 func (m *lineMasker) maskInlineKV(i int) {
 	line := m.lines[i]
 	w := m.newLineWalk(line)
+	spent, budget, cutAt := 0, lineValueBudget(len(line)), -1
 	forwardMatches(inlineKVRe, line, func(loc []int) (int, bool) {
 		key := line[loc[2]:loc[3]]
 		start, end, quoted := quotedSpan(line, loc[1])
@@ -1168,6 +1172,11 @@ func (m *lineMasker) maskInlineKV(i int) {
 				end++
 			}
 		}
+		// Over budget, fail closed as maskFlowTokens does (maskFrom).
+		if spent += end - start; spent > budget {
+			cutAt = start
+			return 0, true
+		}
 		v := line[start:end]
 		flag := loc[2] >= 2 && line[loc[2]-2:loc[2]] == "--"
 		if v == "" || v == secretMask || isSecretReference(v) || (!IsSensitiveEnvVar(key, v) && (!flag || !m.flagName(key))) {
@@ -1178,7 +1187,13 @@ func (m *lineMasker) maskInlineKV(i int) {
 		}
 		return w.mask(start, end, secretMask), false
 	})
-	w.apply(m, i)
+	if cutAt >= 0 {
+		cutAt = w.cutFrom(cutAt)
+	}
+	delta := w.apply(m, i)
+	if cutAt >= 0 {
+		m.maskFrom(i, cutAt+delta)
+	}
 }
 
 // quotedSpan is the body of the quoted value that opens at line[start]: up

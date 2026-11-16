@@ -10,7 +10,7 @@ import (
 
 // agent-os-ez5s: a flow value with no closing , } or ] ran to the line's end,
 // so every unclosed bracket judged the rest of the line again. Past
-// flowValueBudget the rest of the line is masked instead of judged.
+// lineValueBudget the rest of the line is masked instead of judged.
 
 const ez5sUnit = ` {"foo":[`
 
@@ -90,4 +90,17 @@ func TestMaskSecrets_ez5s_NestedJSONPastBudgetMasksToEnd(t *testing.T) {
 	assert.True(t, strings.HasPrefix(kept, `{"level":"info","ctx":{"ka":`), "values within the budget are still judged: %q", kept)
 	assert.NotContains(t, out, "xxxx")
 	assert.Equal(t, 1, n)
+}
+
+// Review of 76505db (rv-dm-ez5s, HIGH): the budget stop masked its own line
+// only, so an open quoted secret continued on deeper lines showed there,
+// where before the budget the open-quote rule hid them (maskFrom).
+func TestMaskSecrets_ez5s_OverBudgetHidesContinuationLines(t *testing.T) {
+	in := "x: " + strings.Repeat("[a=", 150) + ` [PASSWORD="SEKpart1` + "\n    SEKpart2\n    SEKpart3\"]\ny: 1"
+	for _, fp := range []string{"", "x.yml", ".env"} {
+		out, _ := MaskSecrets(in, fp, nil)
+		for _, s := range []string{"SEKpart1", "SEKpart2", "SEKpart3"} {
+			assert.NotContains(t, out, s, "path %q", fp)
+		}
+	}
 }
