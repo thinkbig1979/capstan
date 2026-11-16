@@ -33,6 +33,15 @@ var wsNoReaderAllowed = map[string]bool{
 // TestEveryServeWSCallerStartsAReader: every function in this package that
 // calls serveWS also starts a reader (in its own body or a closure inside it).
 // A function means the innermost FuncLit or FuncDecl holding the serveWS call.
+//
+// Blind spots, where it passes SILENTLY although no reader runs: the check is
+// by name and by syntax, not by type or reachability. (1) A same-named method
+// on an unrelated type (any `.ReadMessage(` or `.watchPeer(` counts). (2) Dead
+// code, e.g. `if false { watchPeer(conn, cancel) }`. (3) A call to a package
+// func whose name is in wsReaderCalls but whose body reads nothing; and a
+// package func counts as a reader if ANY call in it is reader-named, read or
+// not. It fails LOUDLY (a false flag) on a reader two named calls deep or one
+// passed in as a func value.
 func TestEveryServeWSCallerStartsAReader(t *testing.T) {
 	// handlerSources is the package's go:embed of *.go, not a disk read, so
 	// a `go test -overlay` mutant of a handler file is what this parses.
