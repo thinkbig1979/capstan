@@ -1055,12 +1055,32 @@ func (w *lineWalk) apply(m *lineMasker, i int) int {
 	return len(m.lines[i]) - len(line)
 }
 
+// flowValueBudget is how many bytes of flow values maskFlowTokens may judge
+// on a line of n bytes. A value with no closing , } or ] runs to the line's
+// end, so each unclosed bracket handed the rest of the line to
+// IsSensitiveEnvVar again: ` {"foo":[` repeated made a 1 MiB log line cost
+// hours (agent-os-ez5s). A value ends at the first , } or ] after it, so
+// sibling values do not overlap, but each value a bracket opens inside
+// another does: the bytes judged are at most (depth+1) x n, depth being
+// the opens with no , } or ] between them. Past the budget the rest of the
+// line is masked instead of judged, which hides more, never less.
+func flowValueBudget(n int) int { return flowBudgetPerByte*n + flowBudgetBase }
+
+// flowBudgetPerByte and flowBudgetBase size flowValueBudget: it trips at
+// about 16 such opens on a long line (JSON logs nest less), and a line that
+// trips it has been judged about 16x its length.
+const (
+	flowBudgetPerByte = 16
+	flowBudgetBase    = 4096
+)
+
 // maskFlowTokens masks the values of sensitive KEY=value / KEY: value tokens
 // inside { } or [ ] on line i, in one pass along it.
 func (m *lineMasker) maskFlowTokens(i int) {
 	line := m.lines[i]
 	w := m.newLineWalk(line)
 	openAt := -1
+	spent, budget := 0, flowValueBudget(len(line))
 	forwardMatches(flowKeyRe, line, func(loc []int) (int, bool) {
 		if bareColonUnquoted(line, loc) {
 			return loc[1], false
@@ -1087,6 +1107,10 @@ func (m *lineMasker) maskFlowTokens(i int) {
 					end = start + e
 				}
 			}
+		}
+		// Over budget, fail closed: mask from this value to the line's end.
+		if spent += end - start; spent > budget {
+			return w.mask(start, len(line), secretMask), true
 		}
 		value := strings.TrimSpace(line[start:end])
 		v := strings.Trim(value, `"'`)

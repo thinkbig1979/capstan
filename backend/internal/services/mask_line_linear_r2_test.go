@@ -41,12 +41,17 @@ var growthUnitsR2 = map[string]string{
 // growthUnitsExtra are later shapes, kept out of growthUnitsR2 because that
 // map also builds the equality corpus (corpusR2), whose recordings would
 // then no longer match: JSON headers and cookies (agent-os-qmw2) and quoted
-// values (agent-os-bfqc).
+// values (agent-os-bfqc), unclosed flow values (agent-os-ez5s).
 var growthUnitsExtra = map[string]string{
 	"jsonCookie":    ` {"cookie":"a"}`,
 	"jsonAuthArray": ` {"Authorization":["Bearer x"]}`,
 	"quotedFlag":    ` --requirepass='x y'`,
 	"quotedPlain":   ` x='a b=c d'`,
+	// Unclosed flow values (agent-os-ez5s): each ran to the line's end.
+	"flowOpenArr": ` {"foo":[`,
+	"flowOpenObj": ` {"cookie":{`,
+	"flowOpenKey": ` {"a":`,
+	"flowOpenEq":  ` [a=`,
 }
 
 func growthNeedlesR2() []string {
