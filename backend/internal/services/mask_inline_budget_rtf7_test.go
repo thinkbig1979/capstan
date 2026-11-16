@@ -5,24 +5,18 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // agent-os-rtf7: an inline KEY=value runs to the next space, quote, comma or
 // closing bracket, and "(" is none of them (pw(abc) is one value), so
 // `a=(` repeated handed the rest of the line to IsSensitiveEnvVar once per
-// key. Past lineValueBudget the rest of the line is masked instead.
+// key. Past lineValueBudget the whole line is masked instead.
 
-// Over budget: masked from a value to the line's end, so the credential
-// after the unstopped values is hidden too.
-func TestMaskSecrets_rtf7_OverBudgetMasksToLineEnd(t *testing.T) {
-	line := strings.Repeat("a=(", 1000) + " SEKrtf7A"
-	out, n := MaskSecrets(line, "", nil)
-	assert.False(t, strings.Contains(out, "SEKrtf7A"), "the credential after the unstopped values shows: %q", out[max(0, len(out)-40):])
-	require.True(t, strings.HasSuffix(out, secretMask), "masked to the line's end")
-	kept := strings.TrimSuffix(out, secretMask)
-	assert.True(t, strings.HasPrefix(line, kept), "the text before the mask is the line's own")
-	assert.NotEmpty(t, kept, "values within the budget are still judged, not masked")
+// Over budget: the whole line is masked, so the credential after the
+// unstopped values is hidden too.
+func TestMaskSecrets_rtf7_OverBudgetMasksWholeLine(t *testing.T) {
+	out, n := MaskSecrets(strings.Repeat("a=(", 1000)+" SEKrtf7A", "", nil)
+	assert.Equal(t, secretMask, out)
 	assert.Equal(t, 1, n)
 }
 
@@ -47,11 +41,11 @@ func TestMaskSecrets_rtf7_OverBudgetHidesContinuationLines(t *testing.T) {
 	}
 }
 
-// The inline budget stop leaves the line to the flag and auth maskers after
-// it (review of 011faee, F2): the header before the cut stays hidden.
+// A header before the inline budget stop stays hidden (review of 011faee,
+// F2): the whole line is masked (F6 ruling).
 func TestMaskSecrets_rtf7_OverBudgetLaterMaskersStillRun(t *testing.T) {
 	in := `run Authorization: Bearer SEKr2d ` + strings.Repeat("a=(", 1000)
 	out, _ := MaskSecrets(in, "", nil)
 	assert.False(t, strings.Contains(out, "SEKr2d"), "a secret before the cut shows: %q", out[:min(len(out), 60)])
-	assert.True(t, strings.HasSuffix(out, secretMask), "masked to the line's end")
+	assert.Equal(t, secretMask, out)
 }

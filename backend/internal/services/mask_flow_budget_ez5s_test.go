@@ -10,30 +10,26 @@ import (
 
 // agent-os-ez5s: a flow value with no closing , } or ] ran to the line's end,
 // so every unclosed bracket judged the rest of the line again. Past
-// lineValueBudget the rest of the line is masked instead of judged.
+// lineValueBudget the whole line is masked instead of judged.
 
 const ez5sUnit = ` {"foo":[`
 
-// (a) Over budget: the line is masked from a value to its end, so a
-// credential the judging would have reached is hidden too.
-func TestMaskSecrets_ez5s_OverBudgetMasksToLineEnd(t *testing.T) {
+// (a) Over budget: the whole line is masked, so a credential the judging
+// would have reached is hidden too (review of 1e4aef0, F6: masking from
+// the cut erased the evidence later judges read).
+func TestMaskSecrets_ez5s_OverBudgetMasksWholeLine(t *testing.T) {
 	line := strings.Repeat(ez5sUnit, 300) + " SEKez5sA"
 	out, n := MaskSecrets(line, "", nil)
-	assert.False(t, strings.Contains(out, "SEKez5sA"), "the credential after the unclosed values shows: %q", out[max(0, len(out)-40):])
-	require.True(t, strings.HasSuffix(out, secretMask), "masked to the line's end: %q", out[max(0, len(out)-40):])
-	kept := strings.TrimSuffix(out, secretMask)
-	assert.True(t, strings.HasPrefix(line, kept), "the text before the mask is the line's own")
-	assert.NotEmpty(t, kept, "values within the budget are still judged, not masked")
+	assert.Equal(t, secretMask, out)
 	assert.Equal(t, 1, n)
 }
 
-// (b) A sensitive value before the budget runs out is masked exactly as
-// before: only its value, the rest of its line judged as usual.
-func TestMaskSecrets_ez5s_SensitiveKeyBeforeBudgetUnchanged(t *testing.T) {
-	head := ` {"password":"SEKez5sB"}`
-	out, _ := MaskSecrets(head+strings.Repeat(ez5sUnit, 300), "", nil)
-	assert.True(t, strings.HasPrefix(out, ` {"password":"***"}`+ez5sUnit), "got %q", out[:min(len(out), 60)])
-	assert.NotContains(t, out, "SEKez5sB")
+// (b) A line within the budget is masked exactly as before when a line
+// past it follows: only its own value.
+func TestMaskSecrets_ez5s_LineAboveOverBudgetUnchanged(t *testing.T) {
+	head := `{"password":"SEKez5sB", "user":"bob"}`
+	out, _ := MaskSecrets(head+"\n"+strings.Repeat(ez5sUnit, 300), "", nil)
+	assert.Equal(t, `{"password":"***", "user":"bob"}`+"\n"+secretMask, out)
 }
 
 // (c) The longest line of the shape still within budget is unchanged: the
@@ -80,15 +76,10 @@ func TestMaskSecrets_ez5s_NestedJSONWithinBudgetUnchanged(t *testing.T) {
 	}
 }
 
-// Past the budget a nested line is masked from a key's value to the end.
-func TestMaskSecrets_ez5s_NestedJSONPastBudgetMasksToEnd(t *testing.T) {
-	line := nestedJSONLog(20, 2000)
-	out, n := MaskSecrets(line, "", nil)
-	require.True(t, strings.HasSuffix(out, secretMask), "masked to the line's end")
-	kept := strings.TrimSuffix(out, secretMask)
-	assert.True(t, strings.HasPrefix(line, kept), "the text before the mask is the line's own")
-	assert.True(t, strings.HasPrefix(kept, `{"level":"info","ctx":{"ka":`), "values within the budget are still judged: %q", kept)
-	assert.NotContains(t, out, "xxxx")
+// Past the budget a nested line is masked whole.
+func TestMaskSecrets_ez5s_NestedJSONPastBudgetMasksWholeLine(t *testing.T) {
+	out, n := MaskSecrets(nestedJSONLog(20, 2000), "", nil)
+	assert.Equal(t, secretMask, out)
 	assert.Equal(t, 1, n)
 }
 
@@ -105,9 +96,9 @@ func TestMaskSecrets_ez5s_OverBudgetHidesContinuationLines(t *testing.T) {
 	}
 }
 
-// Review of 011faee (rv-dm-ez5s, F2 HIGH): the budget stop marked its line
-// done, so the inline, flag and auth maskers after it skipped the line and
-// the secrets before the cut showed. They still judge that part.
+// Review of 011faee (rv-dm-ez5s, F2 HIGH): masking from the cut and marking
+// the line done skipped the inline, flag and auth maskers, so the secrets
+// before the cut showed. The whole line is masked now (F6 ruling).
 func TestMaskSecrets_ez5s_OverBudgetLaterMaskersStillRun(t *testing.T) {
 	for _, in := range []string{
 		`run --password=SEKr2a ` + strings.Repeat(`{"ka":{`, 200),
@@ -115,6 +106,19 @@ func TestMaskSecrets_ez5s_OverBudgetLaterMaskersStillRun(t *testing.T) {
 	} {
 		out, _ := MaskSecrets(in, "", nil)
 		assert.False(t, strings.Contains(out, "SEKr2"), "a secret before the cut shows: %q", out[:min(len(out), 60)])
-		assert.True(t, strings.HasSuffix(out, secretMask), "masked to the line's end")
+		assert.Equal(t, secretMask, out)
+	}
+}
+
+// Review of 1e4aef0 (rv-dm-ez5s, F6 HIGH): a judge after the line pass
+// (maskStatements, reading a value to the line's end) lost its evidence to
+// the cut's mask, so CONFIG=user:SEK18130@host before the cut showed.
+// The reviewer's fuzz case, seed 2026 case 1362, verbatim.
+const ez5sCaseF6 = `     {"Authorization":"Bearer SEK18129"}[a={"ka":{{"ka":{[a= a=(?a=( {"foo":[{"ka":{a=( {"a":(a=( a=( [ x=y( [(a= {"foo":[{k: a=( a=({"ka":{ [a= [a= CONFIG=user:SEK18130@host(a= [ [ {"foo":[?a=(a=(a=({k: a=( {"a":(?a=( [ [ [a=a=((a=(a=((a=a=(a=( a=([a= {"foo":[ a=( [a=a=( [( {"foo":[ {"a":?a=(a=({"ka":{{"ka":{[a={k: a=( [a=(a=a=( {"foo":[(a=a=((a= a=((a=(a=(a=( [a= [a={"ka":{ [a=(?a=( {"a":{"ka":{ {"a": [a=a=({"ka":{(a={"ka":{([a= {"a": {"a":a=({k: {k:  a=( [ a=(a=( a=({"ka":{( [(a=[a= {"a": [a=a=(a=({"ka":{ {"foo":[ [{k: ?a=( a=(?a=(?a=([a=a=(a=(( {"foo":[[a=(a=( a=({"ka":{ [ [a={k:  [a=?a=(a=(([a=?a=( {"foo":[[a={k:  a=(( {"a": [a=a=(?a=( {"a":?a=(a=(?a=((?a=({"ka":{a=(a=((a= a=(a=(a=( [a=(a={k: (a=a=( CONFIG=user:SEK18131@host{k: [a={"ka":{ a=(?a=(( [a=(a= [a= {"a": {"foo":[( [{"ka":{a=( a=(?a=( a=( {"a":[a=a=( {"foo":[ {"foo":[a=( {"a":( x=y [( a=( [a={"ka":{ [TOKEN=SEK18132] [a=( [a=a=({"ka":{{k:  {"foo":[ [a=((?a=([a= [a=a=(a=(((a=[a=[a=a=(a=(a=((a=( {"a":a=(?a=( [TOKEN=SEK18133] a=( {"password":"SEK18134"}a=({"ka":{ [a=(a=a=( {"foo":[ [a= [a={"ka":{a=({"ka":{a=( {"foo":[a=(a=({"ka":{a=({k:  {"foo":[( [{"ka":{[a= {"a":{"ka":{a=([a= [{"ka":{( {secret: SEK18135}`
+
+func TestMaskSecrets_ez5s_OverBudgetLaterJudgeEvidence(t *testing.T) {
+	for _, fp := range []string{"", "x.yml", ".env"} {
+		out, _ := MaskSecrets(ez5sCaseF6, fp, nil)
+		assert.False(t, strings.Contains(out, "SEK18130"), "path %q: %q", fp, out[:min(len(out), 80)])
 	}
 }

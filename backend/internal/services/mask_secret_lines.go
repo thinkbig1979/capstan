@@ -274,20 +274,14 @@ func widenForMask(line string, runs [][2]int, a, b int) (int, int, bool) {
 }
 
 // maskFrom replaces line i from byte col to its end, then fails closed on the
-// lines below it. The line is done: no later masker reads it.
+// lines below it.
 func (m *lineMasker) maskFrom(i, col int) {
-	m.maskTail(i, col)
-	m.masked[i] = true
-}
-
-// maskTail is maskFrom that leaves line i to the maskers after this one. A
-// budget stop judged nothing before col, so they still must: marking the
-// line done showed a --password or Authorization value there (review of
-// 011faee, F2).
-func (m *lineMasker) maskTail(i, col int) {
 	l := m.lines[i]
-	col = min(col, len(l))
+	if col > len(l) {
+		col = len(l)
+	}
 	m.splice(i, col, len(l), secretMask)
+	m.masked[i] = true
 	m.maskDeeper(i, indentOf(l))
 	m.count++
 }
@@ -1069,8 +1063,12 @@ func (w *lineWalk) apply(m *lineMasker, i int) int {
 // cost hours. Values that stop do not overlap, but a value that holds the
 // next key does: in maskFlowTokens the bytes judged are at most
 // (depth+1) x n, depth being the brackets opened with no , } or ] between
-// them. Past the budget the rest of the line is masked instead of judged,
-// which hides more, never less.
+// them. Past the budget the WHOLE line, and the lines below it, are masked
+// instead of judged (maskFrom from 0), which hides more, never less.
+// Masking only from the cut left the text before it to judges that read a
+// value to the line's end, and the mask erased their evidence (reviews of
+// 011faee and 1e4aef0, F2 and F6). Such a line is hostile or absurdly
+// nested, so it shows as *** in full.
 func lineValueBudget(n int) int { return valueBudgetPerByte*n + valueBudgetBase }
 
 // valueBudgetPerByte and valueBudgetBase size lineValueBudget: it trips at
@@ -1115,10 +1113,9 @@ func (m *lineMasker) maskFlowTokens(i int) {
 				}
 			}
 		}
-		// Over budget, fail closed: mask from this value to the line's end
-		// and the lines below it (maskTail).
+		// Over budget, fail closed: the whole line and the lines below it.
 		if spent += end - start; spent > budget {
-			openAt, overBudget = start, true
+			overBudget = true
 			return 0, true
 		}
 		value := strings.TrimSpace(line[start:end])
@@ -1135,6 +1132,10 @@ func (m *lineMasker) maskFlowTokens(i int) {
 		}
 		return w.mask(start, end, repl), false
 	})
+	if overBudget {
+		m.maskFrom(i, 0)
+		return
+	}
 	// An open quote is masked to the line's end, after the masks before it.
 	// A mask widened to a needle can reach past it: the mask to the end then
 	// starts where that one did.
@@ -1142,10 +1143,7 @@ func (m *lineMasker) maskFlowTokens(i int) {
 		openAt = w.cutFrom(openAt)
 	}
 	delta := w.apply(m, i)
-	switch {
-	case overBudget:
-		m.maskTail(i, openAt+delta)
-	case openAt >= 0:
+	if openAt >= 0 {
 		m.maskFrom(i, openAt+delta)
 	}
 }
@@ -1162,7 +1160,7 @@ var inlineKVRe = regexp.MustCompile(`[\s"'\[\{,(?&;]-{0,2}([A-Za-z_][A-Za-z0-9_.
 func (m *lineMasker) maskInlineKV(i int) {
 	line := m.lines[i]
 	w := m.newLineWalk(line)
-	spent, budget, cutAt := 0, lineValueBudget(len(line)), -1
+	spent, budget, overBudget := 0, lineValueBudget(len(line)), false
 	forwardMatches(inlineKVRe, line, func(loc []int) (int, bool) {
 		key := line[loc[2]:loc[3]]
 		start, end, quoted := quotedSpan(line, loc[1])
@@ -1181,9 +1179,9 @@ func (m *lineMasker) maskInlineKV(i int) {
 				end++
 			}
 		}
-		// Over budget, fail closed as maskFlowTokens does (maskTail).
+		// Over budget, fail closed as maskFlowTokens does.
 		if spent += end - start; spent > budget {
-			cutAt = start
+			overBudget = true
 			return 0, true
 		}
 		v := line[start:end]
@@ -1196,13 +1194,11 @@ func (m *lineMasker) maskInlineKV(i int) {
 		}
 		return w.mask(start, end, secretMask), false
 	})
-	if cutAt >= 0 {
-		cutAt = w.cutFrom(cutAt)
+	if overBudget {
+		m.maskFrom(i, 0)
+		return
 	}
-	delta := w.apply(m, i)
-	if cutAt >= 0 {
-		m.maskTail(i, cutAt+delta)
-	}
+	w.apply(m, i)
 }
 
 // quotedSpan is the body of the quoted value that opens at line[start]: up
