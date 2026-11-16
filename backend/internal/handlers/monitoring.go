@@ -341,9 +341,9 @@ func (h *MonitoringHandler) handleEventsWebSocket(jwtSecret string, authDisabled
 			return
 		}
 		// gorilla's Upgrade hijacks the connection, so net/http never closes
-		// it. The only reachable exit below is the write-error case (client
-		// vanishes mid-stream) — ctx.Done() never fires (nothing external
-		// ever cancels ctx) and the eventChan-closed case never fires either
+		// it. The reachable exits below are ctx.Done() (watchPeer saw the
+		// client leave, agent-os-afyl) and the write-error case (client
+		// vanishes mid-stream); the eventChan-closed case never fires
 		// (only this function's own deferred Unsubscribe closes eventChan,
 		// and that runs after this loop has already exited) — but every
 		// exit left the socket and safePingLoop's goroutine open until this
@@ -356,6 +356,10 @@ func (h *MonitoringHandler) handleEventsWebSocket(jwtSecret string, authDisabled
 		defer cancel()
 
 		go safePingLoop(ctx, conn, DefaultPingInterval)
+		// The only reader on conn; it ends ctx when the client leaves, so a
+		// quiet stream with no event to write still frees its slot
+		// (agent-os-afyl). Writes stay on safeWriteJSON/safePingLoop.
+		watchPeer(conn, cancel)
 
 		eventChan := make(chan models.StackEvent, 50)
 

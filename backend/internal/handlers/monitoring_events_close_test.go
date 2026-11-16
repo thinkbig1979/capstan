@@ -52,15 +52,13 @@ func dialEvents(t *testing.T, srv *httptest.Server) (*websocket.Conn, *http.Resp
 // on any streaming exit path, leaking the fd and safePingLoop's goroutine
 // once a client vanished.
 //
-// Of the four exits in the handler's select loop, only one is reachable
-// today: ctx.Done() is dead code (nothing but the function's own deferred
-// cancel() ever cancels ctx, same as agent-os-14gr's metrics handlers), and
-// the eventChan-closed (`!ok`) branch is ALSO dead code here — eventChan is a
-// fresh per-connection channel that only this handler's own deferred
-// Unsubscribe ever closes, and that runs on function return, after the loop
-// has already exited. So the only exit a client can actually drive is a
-// failed write when it vanishes mid-stream, which this test exercises by
-// broadcasting an event after killing the raw TCP connection.
+// Since agent-os-afyl, watchPeer's read error also ends the handler through
+// ctx.Done(), and with no broadcast at all
+// (TestMonitoringEventsWS_ClientGoneFreesSlotWithoutEvents). This test keeps
+// broadcasting, so it passes through whichever exit fires first; it pins that
+// a vanished client's socket is closed and deregistered, not which exit did
+// it. The eventChan-closed (`!ok`) branch stays dead code: only this
+// handler's own deferred Unsubscribe closes eventChan, after the loop exits.
 func TestMonitoringEventsWS_ClientDisconnectClosesConnection(t *testing.T) {
 	cm := NewConnectionManager(10)
 	eb := NewEventBus()
@@ -71,20 +69,18 @@ func TestMonitoringEventsWS_ClientDisconnectClosesConnection(t *testing.T) {
 
 	serverConn := firstConnection(t, cm)
 
-	// Simulate the client vanishing: close the raw TCP connection without a
-	// WebSocket close handshake.
-	clientConn.Close()
-
-	// Hang guard, not a latency budget. Subscribe() runs five lines after the
-	// handler's own entry (monitoring.go:327) with nothing blocking in
-	// between, so a correct run satisfies this in microseconds and never
-	// consults the bound. The observable is durable for the whole window: the
-	// handler exits only on a failed write, and at this point nothing is
-	// writing — the broadcast goroutine below has not started, and
-	// safePingLoop's first tick is DefaultPingInterval (30s, ws.go:30) away.
+	// Hang guard, not a latency budget: Subscribe() runs a few lines after
+	// the handler's entry with nothing blocking in between. Waited for
+	// BEFORE the client vanishes: since agent-os-afyl, watchPeer ends the
+	// handler as soon as the client leaves, so a subscription checked after
+	// the close may already be gone again.
 	require.Eventually(t, func() bool { return eb.SubscriberCount() == 1 },
 		time.Until(hangGuardDeadline(t)), 10*time.Millisecond,
 		"handler never subscribed to the event bus")
+
+	// Simulate the client vanishing: close the raw TCP connection without a
+	// WebSocket close handshake.
+	clientConn.Close()
 
 	// The handler has no reader goroutine to notice the disconnect directly
 	// — a write is what discovers it. A single broadcast is not reliable:
