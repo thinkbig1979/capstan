@@ -95,10 +95,7 @@ func LoggingMiddleware() gin.HandlerFunc {
 
 		duration := time.Since(start)
 
-		authHeader := c.GetHeader("Authorization")
-		if strings.HasPrefix(authHeader, "Bearer ") {
-			authHeader = "Bearer ***"
-		}
+		authHeader := authorizationForLog(c.GetHeader("Authorization"))
 
 		// A 4xx is a warning only when it is a client ERROR. When the handler
 		// marked it as a routine negative answer, it is an ordinary outcome and
@@ -129,4 +126,24 @@ func LoggingMiddleware() gin.HandlerFunc {
 			"authorization", authHeader,
 		)
 	}
+}
+
+// knownAuthSchemes are the Authorization scheme words the request log keeps.
+var knownAuthSchemes = map[string]bool{
+	"basic": true, "bearer": true, "digest": true, "negotiate": true,
+	"ntlm": true, "token": true, "aws4-hmac-sha256": true,
+}
+
+// authorizationForLog is how the request log shows an Authorization header:
+// never its credential. A known scheme word stays ("Basic ***"); any other
+// value logs as "***", since its first word may be the credential itself
+// (agent-os-58bm: only "Bearer " was hidden, so Basic and the rest showed).
+func authorizationForLog(h string) string {
+	if h == "" {
+		return ""
+	}
+	if scheme, _, ok := strings.Cut(strings.TrimSpace(h), " "); ok && knownAuthSchemes[strings.ToLower(scheme)] {
+		return scheme + " ***"
+	}
+	return "***"
 }

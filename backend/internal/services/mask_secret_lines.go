@@ -591,9 +591,11 @@ func (m *lineMasker) linePass() {
 	}
 }
 
-// authHeaderRe is an Authorization or Proxy-Authorization header in free
-// text, up to where its value starts; group 1 is the quote before it, if any.
-var authHeaderRe = regexp.MustCompile(`(?i)([\s"'\[\{,(])(?:proxy-)?authorization\s*[:=]\s*`)
+// authHeaderRe is an Authorization, Proxy-Authorization, Cookie or
+// Set-Cookie header in free text or as a quoted JSON field, up to where its
+// value starts; group 1 is the quote before it, if any, group 2 the name and
+// group 3 the name's closing quote (the JSON form, agent-os-qmw2).
+var authHeaderRe = regexp.MustCompile(`(?i)([\s"'\[\{,(])((?:proxy-)?authorization|(?:set-)?cookie)(["']?)\s*[:=]\s*`)
 
 // authSchemeRe is the scheme word at the start of a header value.
 var authSchemeRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9\-]*\s+`)
@@ -601,22 +603,49 @@ var authSchemeRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9\-]*\s+`)
 // maskAuthHeader masks the credential of every Authorization header on line
 // i (agent-os-w4p2): what follows the scheme word (Bearer, Basic, ...), up to
 // the quote that opened the header, or to the line's end, since a Digest
-// value runs over several tokens. One pass along the line.
+// value runs over several tokens. A JSON field's value ends at its own
+// closing quote, an array or object value to its closing bracket; a cookie
+// has no scheme word. One pass along the line.
 func (m *lineMasker) maskAuthHeader(i int) {
 	line := m.lines[i]
 	w := m.newLineWalk(line)
 	forwardMatches(authHeaderRe, line, func(loc []int) (int, bool) {
-		start := loc[1]
-		if sc := authSchemeRe.FindString(line[start:]); sc != "" && strings.TrimSpace(line[start+len(sc):]) != "" {
+		start, end := loc[1], len(line)
+		named := loc[6] < loc[7]
+		json := named && start < len(line) && (line[start] == '"' || line[start] == '\'')
+		whole := strings.HasSuffix(strings.ToLower(line[loc[4]:loc[5]]), "cookie")
+		if json {
+			if e := closingQuote(line, start+1, line[start]); e >= 0 {
+				end = e
+			}
+			start++
+		} else if named && start < len(line) && (line[start] == '[' || line[start] == '{') {
+			// An array (Go's http.Header as JSON) or an object: all of it,
+			// to its closing bracket; one that never closes, or nests, runs
+			// to the line's end (qmw2 review F1, F3).
+			open, cls := line[start], byte(']')
+			if open == '{' {
+				cls = '}'
+			}
+			if e := strings.IndexByte(line[start+1:], cls); e >= 0 && strings.IndexByte(line[start+1:start+1+e], open) < 0 {
+				end = start + 1 + e
+			}
+			start, whole = start+1, true
+		}
+		if sc := authSchemeRe.FindString(line[start:end]); !whole && sc != "" && strings.TrimSpace(line[start+len(sc):end]) != "" {
 			start += len(sc)
 		}
-		end := len(line)
-		if loc[2] >= 0 {
+		if loc[2] >= 0 && !named {
 			if q := line[loc[2]]; q == '"' || q == '\'' {
 				if e := strings.IndexByte(line[start:], q); e >= 0 {
 					end = start + e
 				}
 			}
+		}
+		// A header inside the value would have masked further than the
+		// value's end: fail closed, to the line's end.
+		if end < len(line) && authHeaderRe.MatchString(line[start:end]) {
+			end = len(line)
 		}
 		for end > start && (line[end-1] == ' ' || line[end-1] == '\t') {
 			end--
@@ -1099,30 +1128,65 @@ func (m *lineMasker) maskInlineKV(i int) {
 	w := m.newLineWalk(line)
 	forwardMatches(inlineKVRe, line, func(loc []int) (int, bool) {
 		key := line[loc[2]:loc[3]]
-		start := loc[1]
-		end := start
-		if strings.HasPrefix(line[start:], "${") {
-			// A reference ends at its own brace, not at the first stop.
-			if e := strings.IndexByte(line[start:], '}'); e >= 0 {
-				end = start + e + 1
+		start, end, quoted := quotedSpan(line, loc[1])
+		if !quoted {
+			if strings.HasPrefix(line[start:], "${") {
+				// A reference ends at its own brace, not at the first stop.
+				if e := strings.IndexByte(line[start:], '}'); e >= 0 {
+					end = start + e + 1
+				}
 			}
-		}
-		stops := " \t\"',]})"
-		if loc[0] >= 0 && strings.ContainsRune("?&;", rune(line[loc[0]])) {
-			stops += "&;#"
-		}
-		for end < len(line) && !strings.ContainsRune(stops, rune(line[end])) {
-			end++
+			stops := " \t\"',]})"
+			if loc[0] >= 0 && strings.ContainsRune("?&;", rune(line[loc[0]])) {
+				stops += "&;#"
+			}
+			for end < len(line) && !strings.ContainsRune(stops, rune(line[end])) {
+				end++
+			}
 		}
 		v := line[start:end]
 		flag := loc[2] >= 2 && line[loc[2]-2:loc[2]] == "--"
 		if v == "" || v == secretMask || isSecretReference(v) || (!IsSensitiveEnvVar(key, v) && (!flag || !m.flagName(key))) {
 			return loc[1], false
 		}
+		if quoted {
+			end = quotedMaskEnd(line, start, end)
+		}
 		return w.mask(start, end, secretMask), false
 	})
 	w.apply(m, i)
 }
+
+// quotedSpan is the body of the quoted value that opens at line[start]: up
+// to its closing quote, or to the line's end when it does not close (fail
+// closed). Without one, it is the empty span at start and false. A quote is
+// not a value's stop: reading it as one masked nothing in --requirepass='pw'
+// and only the first word of --password "a b" (agent-os-bfqc).
+func quotedSpan(line string, start int) (int, int, bool) {
+	if start >= len(line) || (line[start] != '"' && line[start] != '\'') {
+		return start, start, false
+	}
+	if e := closingQuote(line, start+1, line[start]); e >= 0 {
+		return start + 1, e, true
+	}
+	return start + 1, len(line), true
+}
+
+// quotedMaskEnd is where the mask of a sensitive quoted body [a, b) ends: b,
+// or the line's end when the body holds another key or flag, whose quote the
+// body's own was paired with; the walk would skip that token. Only for a
+// value about to be masked, so a long line of ordinary quoted values is not
+// scanned again per token.
+func quotedMaskEnd(line string, a, b int) int {
+	if innerKeyRe.MatchString(line[a:b]) {
+		return len(line)
+	}
+	return b
+}
+
+// innerKeyRe is the start of a key (KEY=, KEY:, "key":) or a long flag
+// inside a value.
+var innerKeyRe = regexp.MustCompile(`[\s"'\[\{,(?&;]-{0,2}["']?[A-Za-z_][A-Za-z0-9_.\-]*["']?\s*[:=]|[\s"'\[,(]--[A-Za-z]`)
 
 // flagNextTokenRe is a long flag followed by its value as a separate token on
 // the same line: `--password x` in free text, or `"--password", "x"` in a
@@ -1141,22 +1205,23 @@ func (m *lineMasker) maskFlagNextToken(i int) {
 		if !m.flagName(line[loc[2]:loc[3]]) {
 			return loc[1], false
 		}
-		start := loc[1]
-		if start < len(line) && (line[start] == '"' || line[start] == '\'') {
-			start++
-		}
-		end := start
-		if strings.HasPrefix(line[start:], "${") {
-			if e := strings.IndexByte(line[start:], '}'); e >= 0 {
-				end = start + e + 1
+		start, end, quoted := quotedSpan(line, loc[1])
+		if !quoted {
+			if strings.HasPrefix(line[start:], "${") {
+				if e := strings.IndexByte(line[start:], '}'); e >= 0 {
+					end = start + e + 1
+				}
 			}
-		}
-		for end < len(line) && !strings.ContainsRune(" \t\"',]})#", rune(line[end])) {
-			end++
+			for end < len(line) && !strings.ContainsRune(" \t\"',]})#", rune(line[end])) {
+				end++
+			}
 		}
 		v := line[start:end]
 		if v == "" || v == secretMask || isSecretReference(v) || strings.HasPrefix(v, "-") {
 			return loc[1], false
+		}
+		if quoted {
+			end = quotedMaskEnd(line, start, end)
 		}
 		return w.mask(start, end, secretMask), false
 	})

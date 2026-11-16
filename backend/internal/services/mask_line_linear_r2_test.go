@@ -38,6 +38,17 @@ var growthUnitsR2 = map[string]string{
 	"baseJSON":     ` {"password": "x"}`,
 }
 
+// growthUnitsExtra are later shapes, kept out of growthUnitsR2 because that
+// map also builds the equality corpus (corpusR2), whose recordings would
+// then no longer match: JSON headers and cookies (agent-os-qmw2) and quoted
+// values (agent-os-bfqc).
+var growthUnitsExtra = map[string]string{
+	"jsonCookie":    ` {"cookie":"a"}`,
+	"jsonAuthArray": ` {"Authorization":["Bearer x"]}`,
+	"quotedFlag":    ` --requirepass='x y'`,
+	"quotedPlain":   ` x='a b=c d'`,
+}
+
 func growthNeedlesR2() []string {
 	var out []string
 	for i := 0; i < 40; i++ {
@@ -73,7 +84,13 @@ const growthBoundR2 = 16.0
 
 func TestMaskSecrets_r2_LinearInLineLength(t *testing.T) {
 	needles := growthNeedlesR2()
-	for name, u := range growthUnitsR2 {
+	units := map[string]string{}
+	for _, m := range []map[string]string{growthUnitsR2, growthUnitsExtra} {
+		for k, v := range m {
+			units[k] = v
+		}
+	}
+	for name, u := range units {
 		mk := func(n int) string { return strings.Repeat(u, n/len(u)+1)[:n] }
 		smallLine, largeLine := mk(4096), mk(32768)
 		small := allocBytes(func() { MaskSecrets(smallLine, "", needles) })
