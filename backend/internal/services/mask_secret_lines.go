@@ -274,14 +274,20 @@ func widenForMask(line string, runs [][2]int, a, b int) (int, int, bool) {
 }
 
 // maskFrom replaces line i from byte col to its end, then fails closed on the
-// lines below it.
+// lines below it. The line is done: no later masker reads it.
 func (m *lineMasker) maskFrom(i, col int) {
-	l := m.lines[i]
-	if col > len(l) {
-		col = len(l)
-	}
-	m.splice(i, col, len(l), secretMask)
+	m.maskTail(i, col)
 	m.masked[i] = true
+}
+
+// maskTail is maskFrom that leaves line i to the maskers after this one. A
+// budget stop judged nothing before col, so they still must: marking the
+// line done showed a --password or Authorization value there (review of
+// 011faee, F2).
+func (m *lineMasker) maskTail(i, col int) {
+	l := m.lines[i]
+	col = min(col, len(l))
+	m.splice(i, col, len(l), secretMask)
 	m.maskDeeper(i, indentOf(l))
 	m.count++
 }
@@ -1080,7 +1086,7 @@ const (
 func (m *lineMasker) maskFlowTokens(i int) {
 	line := m.lines[i]
 	w := m.newLineWalk(line)
-	openAt := -1
+	openAt, overBudget := -1, false
 	spent, budget := 0, lineValueBudget(len(line))
 	forwardMatches(flowKeyRe, line, func(loc []int) (int, bool) {
 		if bareColonUnquoted(line, loc) {
@@ -1109,10 +1115,10 @@ func (m *lineMasker) maskFlowTokens(i int) {
 				}
 			}
 		}
-		// Over budget, fail closed as an open quote does: mask from this
-		// value to the line's end and the lines below it (maskFrom).
+		// Over budget, fail closed: mask from this value to the line's end
+		// and the lines below it (maskTail).
 		if spent += end - start; spent > budget {
-			openAt = start
+			openAt, overBudget = start, true
 			return 0, true
 		}
 		value := strings.TrimSpace(line[start:end])
@@ -1136,7 +1142,10 @@ func (m *lineMasker) maskFlowTokens(i int) {
 		openAt = w.cutFrom(openAt)
 	}
 	delta := w.apply(m, i)
-	if openAt >= 0 {
+	switch {
+	case overBudget:
+		m.maskTail(i, openAt+delta)
+	case openAt >= 0:
 		m.maskFrom(i, openAt+delta)
 	}
 }
@@ -1172,7 +1181,7 @@ func (m *lineMasker) maskInlineKV(i int) {
 				end++
 			}
 		}
-		// Over budget, fail closed as maskFlowTokens does (maskFrom).
+		// Over budget, fail closed as maskFlowTokens does (maskTail).
 		if spent += end - start; spent > budget {
 			cutAt = start
 			return 0, true
@@ -1192,7 +1201,7 @@ func (m *lineMasker) maskInlineKV(i int) {
 	}
 	delta := w.apply(m, i)
 	if cutAt >= 0 {
-		m.maskFrom(i, cutAt+delta)
+		m.maskTail(i, cutAt+delta)
 	}
 }
 

@@ -104,3 +104,17 @@ func TestMaskSecrets_ez5s_OverBudgetHidesContinuationLines(t *testing.T) {
 		}
 	}
 }
+
+// Review of 011faee (rv-dm-ez5s, F2 HIGH): the budget stop marked its line
+// done, so the inline, flag and auth maskers after it skipped the line and
+// the secrets before the cut showed. They still judge that part.
+func TestMaskSecrets_ez5s_OverBudgetLaterMaskersStillRun(t *testing.T) {
+	for _, in := range []string{
+		`run --password=SEKr2a ` + strings.Repeat(`{"ka":{`, 200),
+		`run Authorization: Bearer SEKr2b ` + strings.Repeat(` {"foo":[`, 200),
+	} {
+		out, _ := MaskSecrets(in, "", nil)
+		assert.False(t, strings.Contains(out, "SEKr2"), "a secret before the cut shows: %q", out[:min(len(out), 60)])
+		assert.True(t, strings.HasSuffix(out, secretMask), "masked to the line's end")
+	}
+}

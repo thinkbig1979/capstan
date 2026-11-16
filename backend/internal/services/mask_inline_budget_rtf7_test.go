@@ -46,3 +46,12 @@ func TestMaskSecrets_rtf7_OverBudgetHidesContinuationLines(t *testing.T) {
 		}
 	}
 }
+
+// The inline budget stop leaves the line to the flag and auth maskers after
+// it (review of 011faee, F2): the header before the cut stays hidden.
+func TestMaskSecrets_rtf7_OverBudgetLaterMaskersStillRun(t *testing.T) {
+	in := `run Authorization: Bearer SEKr2d ` + strings.Repeat("a=(", 1000)
+	out, _ := MaskSecrets(in, "", nil)
+	assert.False(t, strings.Contains(out, "SEKr2d"), "a secret before the cut shows: %q", out[:min(len(out), 60)])
+	assert.True(t, strings.HasSuffix(out, secretMask), "masked to the line's end")
+}
