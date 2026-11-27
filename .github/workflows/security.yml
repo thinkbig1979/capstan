@@ -134,25 +134,25 @@ jobs:
       #   never call" as a build failure is how a gate loses its audience.
       #
       # ACCEPTED EXCEPTIONS (symbol-tier findings that do not fail this job):
-      #   Both are docker/docker, both found in v28.5.2+incompatible, both
-      #   with "Fixed in: N/A" — no upstream release carries a fix, so there is
-      #   no version to move to. The reachability assessment recorded in
-      #   agent-os-vkr is that neither is exploitable through capstan: both
-      #   are daemon-side, and capstan links only the API client
-      #   (github.com/docker/docker/api/** and .../client).
-      #
-      #     GO-2026-4887  AuthZ plugin bypass on oversized request bodies.
-      #                   Daemon-side; capstan runs no authz plugins.
-      #     GO-2026-4883  off-by-one in plugin privilege validation. Daemon-side;
-      #                   capstan has no PluginInstall / PluginUpgrade call sites.
+      #   None at present; the list below is empty. An entry needs the
+      #   standard of written reachability evidence the entries in the next
+      #   block once had (agent-os-vkr).
       #
       # DELIBERATELY *NOT* IN THE LIST:
-      #   Three further docker/docker advisories land on the same
-      #   v28.5.2+incompatible, all reported at module tier only —
-      #   their sole finding carries neither `package` nor `function`, so the
-      #   symbol-tier gate below never sees them and an allowlist entry would
-      #   protect nothing and trip the stale-exception notice on every run.
+      #   Five docker/docker advisories land on v28.5.2+incompatible, all
+      #   reported at module tier only: their sole finding carries neither
+      #   `package` nor `function`, so the symbol-tier gate below never sees
+      #   them and an allowlist entry would protect nothing and trip the
+      #   stale-exception notice on every run.
       #
+      #     GO-2026-4887  AuthZ plugin bypass on oversized request bodies.
+      #                   Daemon-side; capstan runs no authz plugins. Was an
+      #                   accepted exception until 2026-11-27, when CI had been
+      #                   reporting it as stale (module tier only, measured with
+      #                   govulncheck v1.10.0).
+      #     GO-2026-4883  off-by-one in plugin privilege validation. Daemon-side;
+      #                   capstan has no PluginInstall / PluginUpgrade call sites.
+      #                   Removed from the list 2026-11-27, as GO-2026-4887.
       #     GO-2026-5746  CVE-2026-41567 / GHSA-x86f-5xw2-fm2r. `PUT
       #                   /containers/{id}/archive` executes container binaries.
       #                   Daemon-side; capstan has no CopyToContainer call sites.
@@ -167,26 +167,27 @@ jobs:
       #                   the same class as GO-2026-5668 above.
       #
       #   They are written down here rather than left out silently because
-      #   Dependabot raises all three as runtime-scope alerts, and the answer
-      #   to "why is this one not allowlisted like the other two?" needs to be
-      #   "it does not need to be", not "nobody looked". Verified 2026-08-01;
-      #   tiers re-confirmed 2026-08-20.
+      #   Dependabot raises them as runtime-scope alerts, and the answer to
+      #   "why is this one not allowlisted?" needs to be "it does not need to
+      #   be", not "nobody looked". All five have "Fixed in: N/A" and are
+      #   daemon-side; capstan links only the API client
+      #   (github.com/docker/docker/api/** and .../client). Verified
+      #   2026-08-01; tiers re-confirmed 2026-08-20 and, for 4883/4887,
+      #   2026-11-27.
       #
       #   This assessment is tied to what capstan imports *today* and expires:
-      #   agent-os-96h re-checks all five on 2026-10-30, including re-running
+      #   agent-os-96h re-checks all five, including re-running
       #   `go list -deps ./... | grep '^github.com/docker/docker'` to confirm
       #   only api/** and client are still linked, and re-checking whether
-      #   GO-2026-5746 / GO-2026-5617 / GO-2026-5668 have risen to the symbol
-      #   tier. Delete entries from this list when a fix ships; do not extend
-      #   the list without the same standard of written reachability evidence.
+      #   any of them has risen to the symbol tier. Delete entries from the
+      #   list when a fix ships or they go stale; do not extend the list
+      #   without the same standard of written reachability evidence.
       - name: Evaluate findings against accepted exceptions
         run: |
           set -euo pipefail
           REPORT="${RUNNER_TEMP}/govulncheck.json"
 
           cat > "${RUNNER_TEMP}/allowed.txt" <<'ALLOWED'
-          GO-2026-4883
-          GO-2026-4887
           ALLOWED
           sort -u -o "${RUNNER_TEMP}/allowed.txt" "${RUNNER_TEMP}/allowed.txt"
 

@@ -307,7 +307,8 @@ func TestConnectionManager_AuthDisabled_GuardsAreNoopOnly(t *testing.T) {
 // SAME gorilla connection (exactly terminal.go's PTY writer racing a
 // revocation from an HTTP request goroutine) is a genuine concurrent write.
 // gorilla panics on a concurrent WriteMessage — best-effort, unsynchronized
-// c.isWriting bool (gorilla/websocket@v1.5.3 conn.go:610-624) — on whichever
+// c.isWriting bool (gorilla/websocket@v1.5.4-0.20240701034025-d67f41855da4
+// conn.go:616-630) — on whichever
 // goroutine loses the race, and nothing recovers a panic in a bare `go`
 // goroutine like writeToWebSocket's.
 //
