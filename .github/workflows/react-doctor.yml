@@ -126,7 +126,7 @@ jobs:
           # behind, and do NOT add minimumReleaseAgeExclude entries to catch up:
           # excluding a release's ~4 brand-new packages to install it sooner
           # removes the guard exactly where it is doing work.
-          version: "0.9.18"
+          version: "0.9.23"
         #   blocking: error          # Gate level: "none" (advisory, the default) | "warning" | "error"
         #   scope: full              # On PRs, scan the whole project instead of just changed files
         #   comment: false           # Disable the sticky PR summary comment
