@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -221,6 +222,10 @@ func (h *ResourcesHandler) updaterSeam() updateDocker {
 	return h.docker
 }
 
+// staleUpdateContainerMessage answers an update for a container that no longer
+// exists, usually one recreated since the last scan.
+const staleUpdateContainerMessage = "This container no longer exists. Re-scan for updates to see its replacement."
+
 func (h *ResourcesHandler) updateContainer(c *gin.Context) {
 	id := c.Param("id")
 	// Audit who initiated the update.
@@ -234,6 +239,19 @@ func (h *ResourcesHandler) updateContainer(c *gin.Context) {
 	}
 
 	inspect, err := h.updaterSeam().InspectContainer(c.Request.Context(), id)
+	if err != nil && cerrdefs.IsNotFound(err) {
+		// The Updates list is served from the scan cache, so a container
+		// recreated since the scan (a backup's stop/start, a redeploy) is
+		// posted here under its old ID. That is a stale view, not a server
+		// fault: evict the row, as the scheduler does for a vanished target,
+		// and tell the client to re-scan (agent-os-fdjq).
+		if evictErr := h.db.DeleteCachedUpdate(id); evictErr != nil {
+			slog.Warn("Failed to evict cached update entry", "containerID", id, "error", evictErr)
+		}
+		BroadcastEvent(models.StackEvent{Type: "updates_changed", ContainerID: id, Timestamp: time.Now()})
+		handleError(c, models.NewAppErrorWithCause(http.StatusNotFound, models.ErrNotFound, staleUpdateContainerMessage, err))
+		return
+	}
 	if err != nil {
 		slog.Error("Failed to inspect container before update", "id", id, "error", err)
 		respondDockerErr(c, err, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to inspect container")
