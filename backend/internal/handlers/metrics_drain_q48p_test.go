@@ -133,8 +133,11 @@ func TestMetricsWS_HalfOpenPeerFreesSlot(t *testing.T) {
 }
 
 // TestMetricsWS_ClientGoneFreesSlot pins the abrupt and clean exits through
-// the new reader. They were already noticed before agent-os-q48p, by the next
-// failed write; the logged time shows the reader now notices first.
+// the new reader. Before agent-os-q48p they were noticed by the next failed
+// write, 2s (streaming) or 4s (empty-host) later. The 1s bound proves watchPeer
+// frees the slot, not the next failed write: a loop that ignores ctx.Done()
+// still frees it at the next write, inside any hang guard, and only this bound
+// tells the two apart.
 func TestMetricsWS_ClientGoneFreesSlot(t *testing.T) {
 	leaves := []struct {
 		name  string
@@ -157,7 +160,11 @@ func TestMetricsWS_ClientGoneFreesSlot(t *testing.T) {
 				ok := waitSlotFreed(t, cm, hangGuardDeadline(t))
 				t.Logf("%s/%s: slot freed=%v after %s", r.name, l.name, ok, time.Since(start).Round(time.Millisecond))
 				if !ok {
-					t.Errorf("slot never freed after the client left: cm.Count()=%d", cm.Count())
+					t.Fatalf("slot never freed after the client left: cm.Count()=%d", cm.Count())
+				}
+				// wall-clock ok: the bound IS the assertion; watchPeer frees the slot in ms, a failed write takes 2s+
+				if took := time.Since(start); took > time.Second {
+					t.Errorf("slot freed after %s, want under 1s: the next failed write freed it, not watchPeer", took.Round(time.Millisecond))
 				}
 			})
 		}
