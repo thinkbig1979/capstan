@@ -25,7 +25,7 @@ func stubRestic_pl2g(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
 	script := "#!/bin/sh\necho 'one line of restic output'\nexit 0\n"
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "restic"), []byte(script), 0o700)) //nolint:forbidigo // test fixture, not a stack file
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "restic"), []byte(script), 0o700))
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
@@ -78,4 +78,41 @@ func TestResticNilOut_UnreadOutCtxCancelled_pl2g(t *testing.T) {
 	within_pl2g(t, "Run with an unread out after ctx ended", func() error {
 		return (&execRunner{}).Run(ctx, "sh", []string{"-c", "echo first; echo second; sleep 30"}, nil, out)
 	})
+}
+
+// The child exits 0 with lines still in the scanners' buffers (cmd.Wait
+// returns once they have been read from the pipe, not sent). When ctx ends
+// in that window the rest are not delivered, and Run must not report that as
+// a complete run: callers count and parse these lines (Verify's entry count,
+// Backup's summary).
+func TestResticNilOut_CtxEndAfterCleanExitIsNotSuccess_pl2g(t *testing.T) {
+	const total = 500
+	out := make(chan StreamLine) // unbuffered: the reader paces the scanners
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	received := make(chan int, 1)
+	go func() {
+		n := 0
+		for range out {
+			n++
+			if n == 1 {
+				// Long enough for the child to exit and Wait to return.
+				time.Sleep(300 * time.Millisecond)
+				cancel()
+			}
+		}
+		received <- n
+	}()
+	var err error
+	within_pl2g(t, "Run with ctx ended after a clean exit", func() error {
+		err = (&execRunner{}).Run(ctx, "sh", []string{"-c", "i=0; while [ $i -lt 500 ]; do echo line$i; i=$((i+1)); done"}, nil, out)
+		return err
+	})
+	close(out)
+	n := <-received
+	if err == nil {
+		require.Equal(t, total, n, "Run returned nil but delivered %d of %d lines", n, total)
+	} else {
+		require.ErrorIs(t, err, context.Canceled)
+	}
 }
