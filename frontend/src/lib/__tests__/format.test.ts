@@ -6,6 +6,7 @@ import {
   formatDateFull,
   formatDateTimeLocal,
   formatRelativeTime,
+  formatTimeUntil,
   formatUptime,
 } from '../format'
 
@@ -161,5 +162,30 @@ describe('formatUptime', () => {
   it('formats days and hours', () => {
     const start = new Date(Date.now() - (2 * 24 + 5) * 60 * 60_000).toISOString()
     expect(formatUptime(start)).toBe('2d 5h')
+  })
+})
+
+// agent-os-zvfo: the future-instant formatter. formatRelativeTime read a next
+// run 12h ahead as "-43200s ago".
+describe('formatTimeUntil', () => {
+  const ahead = (ms: number) => new Date(Date.now() + ms).toISOString()
+
+  it('reads a future instant as "in ..."', () => {
+    expect(formatTimeUntil(ahead(12 * 3600_000))).toBe('in 12h')
+    expect(formatTimeUntil(ahead(5 * 60_000 + 10_000))).toBe('in 5m')
+    expect(formatTimeUntil(ahead(72 * 3600_000))).toBe('in 3d')
+  })
+
+  it('reads now as "in under a minute"', () => {
+    expect(formatTimeUntil(ahead(0))).toBe('in under a minute')
+  })
+
+  // Pinned: a past instant clamps to zero and never goes negative.
+  it('reads a past instant as "in under a minute", never negative or "ago"', () => {
+    expect(formatTimeUntil(ahead(-12 * 3600_000))).toBe('in under a minute')
+  })
+
+  it('returns an unparseable input unchanged', () => {
+    expect(formatTimeUntil('not-a-date')).toBe('not-a-date')
   })
 })

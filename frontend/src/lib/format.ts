@@ -62,6 +62,20 @@ export function formatUptime(startedAt: string): string {
   return `${diffDays}d ${diffHours % 24}h`
 }
 
+/** "in 5h" for an instant ahead. formatRelativeTime only reads the past: a
+ *  future instant there prints negative seconds (agent-os-zvfo). A past or
+ *  current instant reads "in under a minute". */
+export function formatTimeUntil(iso: string): string {
+  const ms = new Date(iso).getTime() - Date.now()
+  if (!Number.isFinite(ms)) return iso
+  const minutes = Math.max(0, Math.round(ms / 60_000))
+  if (minutes < 1) return 'in under a minute'
+  if (minutes < 60) return `in ${minutes}m`
+  const hours = Math.round(minutes / 60)
+  if (hours < 48) return `in ${hours}h`
+  return `in ${Math.round(hours / 24)}d`
+}
+
 export function formatRelativeTime(dateString: string | null | undefined, fallback = '-'): string {
   if (!dateString) return fallback
   try {
