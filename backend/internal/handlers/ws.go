@@ -616,8 +616,8 @@ func safeWriteJSON(c *Connection, v interface{}) error {
 // and logs.go's log-line/ping writer both go through this instead of calling
 // conn.Conn.WriteMessage directly: gorilla's Conn panics on a concurrent
 // write (best-effort, unsynchronized c.isWriting bool — gorilla/websocket@
-// v1.5.3 conn.go:610-624), and nothing recovers a panic in a bare `go`
-// goroutine like writeToWebSocket's. Note this protects data writers against
+// v1.5.4-0.20240701034025-d67f41855da4 conn.go:616-630), and nothing
+// recovers a panic in a bare `go` goroutine like writeToWebSocket's. Note this protects data writers against
 // EACH OTHER (logs.go's ping vs. log-line writer, or any future second
 // writer) — the close path (safeWriteCloseMessage) does not need or take this
 // mutex at all; it uses WriteControl, which gorilla documents safe to call
