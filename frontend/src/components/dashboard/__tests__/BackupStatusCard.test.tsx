@@ -418,3 +418,22 @@ describe('BackupStatusCard — the live log follows new lines without moving the
     scrollIntoView.mockRestore()
   })
 })
+
+// agent-os-zvfo: the next run is in the future. Rendered through the past-only
+// formatter, 12h ahead read "-43200s ago".
+describe('BackupStatusCard — the "Next run" readout', () => {
+  it('reads a next run 12h ahead as "in 12h", never "ago"', () => {
+    ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: makeStatus(null, {
+        schedulerRunning: true,
+        nextRunAt: new Date(Date.now() + 12 * 3600_000).toISOString(),
+      }),
+      isPending: false,
+    })
+    renderCard()
+
+    const cell = screen.getByText('Next run').parentElement as HTMLElement
+    expect(cell).toHaveTextContent('in 12h')
+    expect(cell.textContent).not.toMatch(/ago/)
+  })
+})

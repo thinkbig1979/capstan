@@ -20,7 +20,7 @@ import {
   useScheduledCleanupPreview,
 } from '@/hooks/useResources'
 import { presentError, presentFault } from '@/lib/error-handler'
-import { formatBytes, formatDateFull, formatRelativeTime } from '@/lib/format'
+import { formatBytes, formatDateFull, formatRelativeTime, formatTimeUntil } from '@/lib/format'
 import type { DockerCleanupRun } from '@/types'
 import { CleanupPolicyForm } from './cleanup/CleanupPolicyForm'
 import { CleanupPreviewList } from './cleanup/CleanupPreviewList'
@@ -49,18 +49,6 @@ function scrollerOf(el: HTMLElement): Element {
     }
   }
   return document.scrollingElement ?? document.documentElement
-}
-
-/** "in 5h" for an instant ahead. formatRelativeTime only reads the past. */
-function formatTimeUntil(iso: string): string {
-  const ms = new Date(iso).getTime() - Date.now()
-  if (!Number.isFinite(ms)) return iso
-  const minutes = Math.max(0, Math.round(ms / 60_000))
-  if (minutes < 1) return 'in under a minute'
-  if (minutes < 60) return `in ${minutes}m`
-  const hours = Math.round(minutes / 60)
-  if (hours < 48) return `in ${hours}h`
-  return `in ${Math.round(hours / 24)}d`
 }
 
 /** The newest history row, in one line. */

@@ -19,7 +19,7 @@ import { presentError } from '@/lib/error-handler'
 import { useBackupStatus, useRunBackup, useRunVerify, useBackupStreaming } from '@/hooks/useBackup'
 import { queryKeys } from '@/lib/query-keys'
 import { useQueryClient } from '@tanstack/react-query'
-import { formatRelativeTime, formatBytes } from '@/lib/format'
+import { formatRelativeTime, formatTimeUntil, formatBytes } from '@/lib/format'
 
 function EngineUnavailableBanner({
   resticAvailable,
@@ -388,7 +388,7 @@ export function BackupStatusCard() {
                 <p className="text-xs text-muted-foreground">Next run</p>
                 <div className="flex items-center gap-1">
                   <Clock className="h-3 w-3 text-muted-foreground" />
-                  <span className="text-xs">{formatRelativeTime(statusData.nextRunAt)}</span>
+                  <span className="text-xs">{formatTimeUntil(statusData.nextRunAt)}</span>
                 </div>
               </div>
             )}
