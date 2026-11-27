@@ -530,7 +530,8 @@ Direct Docker resource management, independent of any stack.
   list can only be longer. Same error rules as the volume route
 - `GET /api/v1/resources/updates` — check for available image updates
 - `POST /api/v1/resources/containers/:id/update` — update a single container
-  to its latest image
+  to its latest image. 404 `NOT_FOUND` when the container no longer exists
+  (recreated since the last scan); its cached update row is dropped, so re-scan
 - `POST /api/v1/resources/stacks/:id/update` — update every container in a
   stack to its latest image
 - `GET /api/v1/resources/updates/jobs` — list running/recent update jobs
