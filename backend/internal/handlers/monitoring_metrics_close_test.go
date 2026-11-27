@@ -305,11 +305,10 @@ func dialMetrics(t *testing.T, srv *httptest.Server) (*websocket.Conn, *http.Res
 // failing sends the client a close FRAME (safeWriteCloseMessage) but, before
 // the fix, never closes the server-side socket.
 //
-// Contrary to the original bead brief, the handler's `case <-ctx.Done():
-// return` is NOT reachable here — nothing in the current code ever calls
-// cancel() except the function's own deferred call on return, so it cannot be
-// exercised as a distinct "normal" exit. This test and the two below cover
-// the exit paths that genuinely are reachable today.
+// Since agent-os-q48p the handler's `case <-ctx.Done(): return` is reachable
+// too: watchPeer cancels ctx when the client leaves. That exit is pinned by
+// TestMetricsWS_ClientGoneFreesSlot and TestMetricsWS_HalfOpenPeerFreesSlot
+// (metrics_drain_q48p_test.go); this test covers the setup-error exit.
 func TestMonitoringMetricsWS_SetupErrorClosesConnection(t *testing.T) {
 	// Held, not plain: the handler registers its connection and then fails the
 	// container list on the next statement, so an unheld server leaves the
@@ -338,10 +337,9 @@ func TestMonitoringMetricsWS_SetupErrorClosesConnection(t *testing.T) {
 
 // TestMonitoringMetricsWS_ClientDisconnectClosesConnection is the regression
 // test for the realistic case the leak actually matters for: a client vanishes
-// mid-stream. The handler has no reader goroutine to notice this directly —
-// StreamStats' 1s ticker driving the next scheduled write is what discovers
-// it (the write fails), which is also the second, distinct exit path
-// (write-error, not setup-error) required for a "two-sided" instrument.
+// mid-stream. Since agent-os-q48p watchPeer usually notices first and ends
+// the handler through ctx.Done(); the next failed write is the other
+// detector. Either exit must close the server-side socket.
 func TestMonitoringMetricsWS_ClientDisconnectClosesConnection(t *testing.T) {
 	srv := newFakeDockerMetricsServer(t, http.StatusOK, `[{"Id":"c1"}]`, streamingStatsHandler())
 	monitor := newFakeMonitorService(t, srv)

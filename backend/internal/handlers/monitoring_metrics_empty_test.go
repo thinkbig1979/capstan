@@ -130,21 +130,19 @@ func TestMonitoringMetricsWS_PopulatedListStillStreams(t *testing.T) {
 	}
 }
 
-// TestMonitoringMetricsWS_EmptyListClientDisconnectClosesConnection pins the
-// invariant the 2s-ticker comment in monitoring.go argues for but nothing
-// previously enforced (agent-os-74rl): on the empty-list path a failed write
-// is the ONLY client-disconnect detector, so the `return` in that loop's
-// safeWriteJSON error branch is load-bearing. Turn it into a `continue` and
-// the handler goroutine and its ConnectionManager slot survive the client
-// forever — a leak, and exactly the failure the comment warns about.
+// TestMonitoringMetricsWS_EmptyListClientDisconnectClosesConnection pins that
+// a client leaving the empty-list path frees the handler and its
+// ConnectionManager slot (agent-os-74rl). When written, a failed write was
+// the ONLY detector there, so the `return` in that loop's safeWriteJSON error
+// branch was load-bearing. Since agent-os-q48p watchPeer also ends the loop
+// through ctx.Done(), so this test no longer pins that `return` on its own.
 //
 // The populated path has had this coverage all along via
 // TestMonitoringMetricsWS_ClientDisconnectClosesConnection in
-// monitoring_metrics_close_test.go; the empty path had none, so the whole
-// argument was aspirational. Mutation-checked rather than assumed: run under
-// `go test -overlay` with that `return` swapped for `continue` and this test
-// fails at waitForServerSideClose's "handler never returned" fatal, which is
-// what proves it can fire at all.
+// monitoring_metrics_close_test.go; the empty path had none. Before
+// agent-os-q48p it was mutation-checked: under `go test -overlay` with that
+// `return` swapped for `continue` it failed at waitForServerSideClose's
+// "handler never returned" fatal.
 //
 // It also closes the loop on agent-os-14gr for a path that did not exist when
 // 14gr was written: every exit from these handlers must close the server-side
