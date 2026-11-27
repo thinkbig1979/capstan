@@ -58,6 +58,11 @@ func TestUpdateContainer_StaleCachedIDIsNotAServerFault(t *testing.T) {
 		ProjectName: "web", ServiceName: "app", StackID: "s-web", IsCompose: true,
 	}}))
 
+	// The broadcast is what refreshes the list: the client's mutation
+	// invalidates the updates query only on success.
+	events, settle, stop := captureBroadcasts(t)
+	defer stop()
+
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/resources/containers/gone/update", nil))
 
@@ -70,4 +75,14 @@ func TestUpdateContainer_StaleCachedIDIsNotAServerFault(t *testing.T) {
 	cached, err := h.db.GetCachedUpdates()
 	require.NoError(t, err)
 	assert.Empty(t, cached, "the stale row must be evicted so the list stops offering it")
+
+	settle(t)
+	var changed []models.StackEvent
+	for _, e := range events() {
+		if e.Type == "updates_changed" {
+			changed = append(changed, e)
+		}
+	}
+	require.Len(t, changed, 1, "exactly one updates_changed must tell open lists to drop the row; got %+v", events())
+	assert.Equal(t, "gone", changed[0].ContainerID)
 }
