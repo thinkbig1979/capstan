@@ -56,8 +56,12 @@ func metricsDrainRoutes() []metricsDrainRoute {
 	}
 }
 
-// dialMetricsDrain opens one socket and waits until its slot is counted and
-// the handler has written a first frame, so the handler is in its loop.
+// dialMetricsDrain opens one socket, waits until its slot is counted, then
+// reads one frame. A frame is written only from the streaming or empty-host
+// loop, so after it the handler is in its loop; a client leaving before that
+// exits through the first container lookup instead, which never tests a
+// loop's exit. Reading one frame answers no ping (the first is 30s away), so
+// the half-open client still never sends a pong.
 func dialMetricsDrain(t *testing.T, url string, cm *ConnectionManager) *websocket.Conn {
 	t.Helper()
 	c, resp, err := websocket.DefaultDialer.Dial(url, nil)
@@ -65,6 +69,9 @@ func dialMetricsDrain(t *testing.T, url string, cm *ConnectionManager) *websocke
 	resp.Body.Close()
 	require.Eventually(t, func() bool { return cm.Count() == 1 },
 		time.Until(hangGuardDeadline(t)), 5*time.Millisecond, "the socket never registered")
+	require.NoError(t, c.SetReadDeadline(hangGuardDeadline(t)))
+	_, _, err = c.ReadMessage()
+	require.NoError(t, err, "no first frame: the handler never reached its loop")
 	return c
 }
 

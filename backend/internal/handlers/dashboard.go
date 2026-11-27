@@ -170,6 +170,11 @@ func (h *DashboardHandler) handleDashboardMetricsWebSocket(jwtSecret string, aut
 
 		containerIDs, err := h.docker.GetRunningContainerIDs(ctx)
 		if err != nil {
+			if ctx.Err() != nil {
+				// The client left during the lookup (watchPeer cancelled
+				// ctx): normal, not a fault, and nobody to send a close to.
+				return
+			}
 			slog.Error("Failed to get running container IDs for dashboard metrics", "error", err)
 			// safePingLoop is already running on this connection (started
 			// above); the raw writeCloseMessage races its WriteMutex-guarded

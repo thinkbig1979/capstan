@@ -126,6 +126,11 @@ func (h *MonitoringHandler) handleMetricsWebSocket(jwtSecret string, authDisable
 
 		containerIDs, err := h.containersForStack(ctx, stack.ProjectName)
 		if err != nil {
+			if ctx.Err() != nil {
+				// The client left during the lookup (watchPeer cancelled
+				// ctx): normal, not a fault, and nobody to send a close to.
+				return
+			}
 			slog.Error("Failed to get containers for stack", "stackId", stackID, "error", err)
 			// safePingLoop is already running on this connection (started
 			// above); the raw writeCloseMessage races its WriteMutex-guarded
@@ -192,9 +197,8 @@ func (h *MonitoringHandler) handleMetricsWebSocket(jwtSecret string, authDisable
 
 			// 2s is the frame cadence on an empty host. Client departure is
 			// noticed by watchPeer (ctx.Done() below) or by a failed write,
-			// whichever comes first; the `return` on write failure below stays,
-			// pinned by
-			// TestMonitoringMetricsWS_EmptyListClientDisconnectClosesConnection.
+			// whichever comes first. The `return` on write failure below is a
+			// backstop to watchPeer, and no test pins it on its own.
 			ticker := time.NewTicker(2 * time.Second)
 			defer ticker.Stop()
 		emptyHostLoop:
