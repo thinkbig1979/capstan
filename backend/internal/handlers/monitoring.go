@@ -108,20 +108,29 @@ func (h *MonitoringHandler) handleMetricsWebSocket(jwtSecret string, authDisable
 			return
 		}
 		// gorilla's Upgrade hijacks the connection, so net/http never closes it.
-		// Every return below (stream-error, write-error — ctx-done never
-		// actually fires today, since nothing external ever cancels ctx) left
-		// the socket and its goroutines open until this defer (agent-os-14gr),
-		// same shape as every other serveWS call site (operations.go,
-		// logs.go, dashboard.go, handleEventsWebSocket below, update_jobs_ws.go).
+		// Every return below (ctx-done when watchPeer sees the client leave,
+		// stream-error, write-error) left the socket and its goroutines open
+		// until this defer (agent-os-14gr), same shape as every other serveWS
+		// call site (operations.go, logs.go, dashboard.go,
+		// handleEventsWebSocket below, update_jobs_ws.go).
 		defer release()
 
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
 		go safePingLoop(ctx, conn, DefaultPingInterval)
+		// The only reader on conn; it ends ctx when the client leaves. A
+		// failed write used to be the only detector, so a half-open peer kept
+		// its slot until TCP gave up (agent-os-q48p).
+		watchPeer(conn, cancel)
 
 		containerIDs, err := h.containersForStack(ctx, stack.ProjectName)
 		if err != nil {
+			if ctx.Err() != nil {
+				// The client left during the lookup (watchPeer cancelled
+				// ctx): normal, not a fault, and nobody to send a close to.
+				return
+			}
 			slog.Error("Failed to get containers for stack", "stackId", stackID, "error", err)
 			// safePingLoop is already running on this connection (started
 			// above); the raw writeCloseMessage races its WriteMutex-guarded
@@ -186,17 +195,10 @@ func (h *MonitoringHandler) handleMetricsWebSocket(jwtSecret string, authDisable
 			slog.Info("metrics stream has no containers; holding socket open",
 				"stackId", stackID, "projectName", stack.ProjectName)
 
-			// 2s is a deliberate ceiling, not a tuning knob. This handler has
-			// no reader goroutine and ctx.Done() never fires, so a failed
-			// write is the ONLY client-disconnect detector — the ticker
-			// interval IS the detection latency. safePingLoop is not a
-			// backstop: on error it returns its own goroutine, not this
-			// handler. An interval past the 30s ping would leave no detector
-			// at all and leak the ConnectionManager slot for good. The
-			// `return` on write failure below is what makes that true, and is
-			// enforced by
-			// TestMonitoringMetricsWS_EmptyListClientDisconnectClosesConnection
-			// — turning it into a `continue` parks the goroutine forever.
+			// 2s is the frame cadence on an empty host. Client departure is
+			// noticed by watchPeer (ctx.Done() below) or by a failed write,
+			// whichever comes first. The `return` on write failure below is a
+			// backstop to watchPeer, and no test pins it on its own.
 			ticker := time.NewTicker(2 * time.Second)
 			defer ticker.Stop()
 		emptyHostLoop:

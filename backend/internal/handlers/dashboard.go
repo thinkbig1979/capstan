@@ -152,20 +152,29 @@ func (h *DashboardHandler) handleDashboardMetricsWebSocket(jwtSecret string, aut
 			return
 		}
 		// gorilla's Upgrade hijacks the connection, so net/http never closes it.
-		// Every return below (stream-error, write-error — ctx-done never
-		// actually fires today, since nothing external ever cancels ctx) left
-		// the socket and its goroutines open until this defer (agent-os-14gr),
-		// same shape as every other serveWS call site (operations.go,
-		// logs.go, monitoring.go, terminal.go, update_jobs_ws.go).
+		// Every return below (ctx-done when watchPeer sees the client leave,
+		// stream-error, write-error) left the socket and its goroutines open
+		// until this defer (agent-os-14gr), same shape as every other serveWS
+		// call site (operations.go, logs.go, monitoring.go, terminal.go,
+		// update_jobs_ws.go).
 		defer release()
 
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
 		go safePingLoop(ctx, conn, DefaultPingInterval)
+		// The only reader on conn; it ends ctx when the client leaves. A
+		// failed write used to be the only detector, so a half-open peer kept
+		// its slot until TCP gave up (agent-os-q48p).
+		watchPeer(conn, cancel)
 
 		containerIDs, err := h.docker.GetRunningContainerIDs(ctx)
 		if err != nil {
+			if ctx.Err() != nil {
+				// The client left during the lookup (watchPeer cancelled
+				// ctx): normal, not a fault, and nobody to send a close to.
+				return
+			}
 			slog.Error("Failed to get running container IDs for dashboard metrics", "error", err)
 			// safePingLoop is already running on this connection (started
 			// above); the raw writeCloseMessage races its WriteMutex-guarded

@@ -20,16 +20,6 @@ var wsReaderCalls = map[string]bool{
 	"watchPeer":   true,
 }
 
-// wsNoReaderAllowed lists the serveWS callers allowed to run without a
-// reader, keyed "file:enclosing func". Each writes on a timer, so an abrupt or
-// clean close is seen by a failed write; only a half-open peer lingers. The
-// list may only shrink: an entry that gains a reader, or no longer calls
-// serveWS, fails the test.
-var wsNoReaderAllowed = map[string]bool{
-	"monitoring.go:handleMetricsWebSocket":         true, // agent-os-q48p
-	"dashboard.go:handleDashboardMetricsWebSocket": true, // agent-os-q48p
-}
-
 // TestEveryServeWSCallerStartsAReader: every function in this package that
 // calls serveWS also starts a reader (in its own body or a closure inside it).
 // A function means the innermost FuncLit or FuncDecl holding the serveWS call.
@@ -102,28 +92,21 @@ func TestEveryServeWSCallerStartsAReader(t *testing.T) {
 		t.Fatalf("found %d serveWS callers, want at least 8: %v", len(callers), callers)
 	}
 
-	var missing, stale []string
+	// No exceptions. A handler that writes on a timer still needs a reader:
+	// a failed write notices an abrupt or clean close, but a half-open peer
+	// makes no write fail until TCP gives up, so its slot stays counted that
+	// long (agent-os-q48p removed the last two exceptions).
+	var missing []string
 	for key, hasReader := range callers {
-		switch {
-		case !hasReader && !wsNoReaderAllowed[key]:
+		if !hasReader {
 			missing = append(missing, key)
-		case hasReader && wsNoReaderAllowed[key]:
-			stale = append(stale, key+" (now has a reader)")
-		}
-	}
-	for key := range wsNoReaderAllowed {
-		if _, ok := callers[key]; !ok {
-			stale = append(stale, key+" (no longer calls serveWS)")
 		}
 	}
 	sort.Strings(missing)
-	sort.Strings(stale)
 	for _, key := range missing {
 		t.Errorf("%s calls serveWS but starts no reader (ReadMessage, readJSON, NextReader or watchPeer): "+
-			"a client that leaves without the handler writing keeps its per-user slot until restart", key)
-	}
-	for _, key := range stale {
-		t.Errorf("remove %s from wsNoReaderAllowed", key)
+			"a client that leaves without the handler writing keeps its per-user slot until restart, "+
+			"and a half-open one until TCP gives up", key)
 	}
 }
 
