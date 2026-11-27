@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -92,12 +93,24 @@ func (r *execRunner) Run(ctx context.Context, name string, args []string, env []
 	}
 
 	scanDone := make(chan error, 2)
+	// Set when ctx ended before a line was delivered. The child may have
+	// exited 0 with lines still in a scanner's buffer, and the callers count
+	// and parse these lines, so that run is not a success.
+	var dropped atomic.Bool
 	scan := func(r io.Reader) {
 		sc := lineio.NewScanner(r)
 		for sc.Scan() {
 			line := sc.Text()
-			if line != "" {
-				out <- StreamLine{Type: "data", Line: line}
+			// A nil out means nobody is listening, and once ctx ends a caller
+			// may have stopped reading: a bare send parked this scanner, and
+			// Run waits for it after cmd.Wait (agent-os-pl2g). Scanning goes
+			// on either way, so the pipe stays drained.
+			if line != "" && out != nil {
+				select {
+				case out <- StreamLine{Type: "data", Line: line}:
+				case <-ctx.Done():
+					dropped.Store(true)
+				}
 			}
 		}
 		// Keep draining after a scan error (a line over the scanner's limit):
@@ -117,6 +130,9 @@ func (r *execRunner) Run(ctx context.Context, name string, args []string, env []
 
 	if waitErr != nil {
 		return fmt.Errorf("%s exited: %w", name, waitErr)
+	}
+	if dropped.Load() {
+		return fmt.Errorf("%s: output lines were not delivered because the context ended: %w", name, context.Cause(ctx))
 	}
 	// Fail closed (agent-os-0h4p): the callers count and parse these lines
 	// (verify's entry count, the backup summary), so a dropped one would be

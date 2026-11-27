@@ -62,7 +62,6 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 ALLOWLIST='
 backend/internal/handlers/backup.go|previewSnapshotViaRestic|done|buffered-1 done channel: one send, read once after the out range loop ends (OBSERVED handlers/backup.go previewSnapshotViaRestic)
 backend/internal/services/backup_restic.go|Backup|out|forwards the translated restic lines into the caller-supplied out; every caller passes the run registry drainLoop channel, which ranges until finish() closes it (OBSERVED backup_runner.go drainLoop; callers backup.go RunBackupWithRunID and the database backup). LATENT: a caller that stops reading parks the translate goroutine
-backend/internal/services/backup_restic.go|Run|out|scan closure launched per pipe: sends restic output into the caller-supplied out. Callers read: runDrained (drains), drainLoop (ranges to close), Backup raw (ranged by the translate goroutine); other callers pass their own out through (INFERRED, not each traced). LATENT: a caller that stops reading parks the scanner
 backend/internal/services/backup_restic.go|Run|scanDone|done channel with capacity 2 for the two scanners, each sends once, both received after cmd.Wait
 backend/internal/services/docker_lifecycle.go|RunStreaming|out|buffered-100 stream returned to the caller; both callers range it to close (OBSERVED handlers/operations.go for-range RunStreaming at the down and the subcommand call). LATENT: a future consumer that stops early parks the producer
 backend/internal/services/docker_lifecycle.go|RunStreaming|scanDone|done channel with capacity 2 for the two scanners, each sends once, both received after Wait
@@ -271,7 +270,10 @@ func (r *execRunner) Run(ctx context.Context, name string, out chan<- StreamLine
 	scan := func(rd io.Reader) {
 		sc := bufio.NewScanner(rd)
 		for sc.Scan() {
-			out <- StreamLine{Type: "data", Line: sc.Text()}
+			select {
+			case out <- StreamLine{Type: "data", Line: sc.Text()}:
+			case <-ctx.Done():
+			}
 		}
 		scanDone <- struct{}{}
 	}
@@ -393,7 +395,7 @@ selftest() {
 
   # GREEN: allowlisted sends, select cases, receives, text, a send after the
   # literal closed, a closure never launched with go, a _test.go file.
-  d=$(fresh); selftest_case "clean base tree" 0 "8 allowlisted bare send\(s\), 0 violations" "$d"
+  d=$(fresh); selftest_case "clean base tree" 0 "7 allowlisted bare send\(s\), 0 violations" "$d"
 
   # RED: the bead's reproducer, a planted bare send in a go literal.
   d=$(fresh); plant "$d" "	go func() {
